@@ -1,0 +1,30 @@
+# Rust
+/target/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.dll
+/.venv/
+/.pytest_cache/
+/.ruff_cache/
+
+# Distribution artifacts
+/dist/
+/wheels/
+*.egg-info/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+
+experiments/
+
+# Local configuration and benchmark caches
+.env
+.env.*
+.envrc
+/benchmarks/.cache/

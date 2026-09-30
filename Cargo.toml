@@ -1,0 +1,45 @@
+[package]
+name = "cpo3"
+version = "0.0.1"
+authors = ["Matteo Santamaria", "Michael Cummins", "Brendan O'Donoghue"]
+edition = "2024"
+rust-version = "1.89"
+description = "An interior-point solver for convex quadratic and linear programs, implemented in Rust with a Python interface"
+readme = "README.md"
+license = "MIT"
+documentation = "https://docs.rs/cpo3"
+keywords = ["python", "pyo3"]
+categories = ["api-bindings"]
+exclude = [
+    "/benchmarks/data/**",
+    "/dist/**",
+    "/python/**/__pycache__/**",
+    "/python/**/*.so",
+    "/tests/**/__pycache__/**",
+]
+
+[lib]
+name = "cpo3"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+mps = ["dep:mps"]
+python = [
+    "dep:numpy",
+    "dep:pyo3",
+    "pyo3/abi3-py310",
+    "pyo3/extension-module",
+]
+
+[dependencies]
+presolve = { git = "https://github.com/matteosantama/presolve.git", rev = "22f8b675f96c0d4a057d95445e80b4be2bb77c27" }
+faer = { version = "0.24.4", default-features = false, features = ["linalg", "rayon", "std"] }
+feral = "0.17.0"
+mps = { version = "1.0.1", optional = true }
+numpy = { version = "0.29.0", optional = true }
+pyo3 = { version = "0.29.2", optional = true }
+thiserror = "2"
+
+[profile.release]
+codegen-units = 1
