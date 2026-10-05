@@ -255,6 +255,11 @@ impl PySolutionInfo {
     }
 
     #[getter]
+    fn iteration_stats(&self) -> Vec<crate::IterationStats> {
+        self.inner.iteration_stats.clone()
+    }
+
+    #[getter]
     fn kkt_solves(&self) -> usize {
         self.inner.linear_algebra.kkt_solves
     }
@@ -403,6 +408,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyProblem>()?;
     module.add_class::<PySolution>()?;
     module.add_class::<PySolutionInfo>()?;
+    module.add_class::<crate::IterationStats>()?;
     module.add_function(wrap_pyfunction!(solve_py, module)?)?;
     #[cfg(feature = "mps")]
     module.add_function(wrap_pyfunction!(read_mps_py, module)?)?;

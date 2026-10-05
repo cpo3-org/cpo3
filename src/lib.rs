@@ -31,7 +31,9 @@ pub use linear_system::LinearAlgebraStats;
 pub use matrix::{CscMatrix, MatrixError};
 pub use problem::{Problem, ProblemError};
 pub use settings::Settings;
-pub use solution::{Solution, SolutionInfo, SolveError, SolverStatus, solve, solve_from};
+pub use solution::{
+    IterationStats, Solution, SolutionInfo, SolveError, SolverStatus, solve, solve_from,
+};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;

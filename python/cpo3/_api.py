@@ -281,6 +281,9 @@ class Problem:
         return self._native.constraint_count
 
 
+IterationStats = _core._IterationStats
+
+
 class SolutionInfo:
     """Summary information for a completed solve."""
 
@@ -367,6 +370,16 @@ class SolutionInfo:
     @property
     def presolve_parallel_comparisons(self) -> int | None:
         return self._native.presolve_parallel_comparisons
+
+    @property
+    def iteration_stats(self) -> list[IterationStats]:
+        """Counts for initialization (iteration 0) and each completed outer iteration.
+
+        Counts include retries and sum to the solve totals. Empty when
+        presolve returns without entering the core solver. Numerical failures
+        raise an exception and do not return a solution or its history.
+        """
+        return self._native.iteration_stats
 
     @property
     def kkt_solves(self) -> int:

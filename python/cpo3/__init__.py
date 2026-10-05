@@ -3,6 +3,7 @@
 from ._api import (
     Cone,
     Equilibration,
+    IterationStats,
     LinearSolver,
     NonnegativeCone,
     PositiveSemidefiniteCone,
@@ -21,6 +22,7 @@ from ._api import (
 __all__ = [
     "Cone",
     "Equilibration",
+    "IterationStats",
     "LinearSolver",
     "NonnegativeCone",
     "PSDCone",

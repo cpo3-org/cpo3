@@ -43,6 +43,27 @@ impl SolverStatus {
     }
 }
 
+/// Linear-solve work for one outer iteration, including any retries.
+/// Iteration zero records initialization separately.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "python",
+    pyo3::pyclass(
+        name = "_IterationStats",
+        module = "cpo3._core",
+        get_all,
+        frozen,
+        skip_from_py_object
+    )
+)]
+pub struct IterationStats {
+    pub iteration: usize,
+    /// KKT right-hand-side solves requested, excluding refinement corrections.
+    pub kkt_solves: usize,
+    /// Correction back-solves performed by iterative refinement.
+    pub refinement_passes: usize,
+}
+
 /// Summary information for a completed solve.
 #[derive(Clone, Debug)]
 pub struct SolutionInfo {
@@ -82,6 +103,10 @@ pub struct SolutionInfo {
     pub presolve_parallel_comparisons: Option<usize>,
     /// Linear-algebra counters over the solve.
     pub linear_algebra: LinearAlgebraStats,
+    /// KKT solve and refinement counts for initialization and each outer iteration.
+    /// Entry zero is initialization; subsequent entries are outer iterations 1..=iters.
+    /// Empty when presolve returns without a core solve.
+    pub iteration_stats: Vec<IterationStats>,
 }
 
 impl SolutionInfo {
@@ -124,6 +149,7 @@ impl SolutionInfo {
             presolve_time: Duration::ZERO,
             presolve_parallel_comparisons: None,
             linear_algebra: LinearAlgebraStats::default(),
+            iteration_stats: Vec::new(),
         }
     }
 }
@@ -652,6 +678,12 @@ fn solve_core(
         &kkt,
         &mut cache,
     )?;
+    let mut previous_stats = cache.stats();
+    let mut iteration_stats = vec![IterationStats {
+        iteration: 0,
+        kkt_solves: previous_stats.kkt_solves,
+        refinement_passes: previous_stats.refinement_passes,
+    }];
     let mut diagnostics = StepDiagnostics::initial(&embedding, &state);
     let mut recovery = RecoveryWorkspace::new(problem, original);
     let mut recovered = RecoveredSolution::empty();
@@ -684,6 +716,7 @@ fn solve_core(
             settings,
             init_report,
             cache.stats(),
+            iteration_stats,
             governor.recenter_steps(),
         ));
     }
@@ -721,6 +754,7 @@ fn solve_core(
                 settings,
                 init_report,
                 cache.stats(),
+                iteration_stats,
                 governor.recenter_steps(),
             ));
         }
@@ -755,6 +789,13 @@ fn solve_core(
                 return Err(error);
             }
         };
+        let stats = cache.stats();
+        iteration_stats.push(IterationStats {
+            iteration,
+            kkt_solves: stats.kkt_solves - previous_stats.kkt_solves,
+            refinement_passes: stats.refinement_passes - previous_stats.refinement_passes,
+        });
+        previous_stats = stats;
         let raw_mu_before_step = next_diagnostics.mu_before;
         state = next;
         diagnostics = next_diagnostics;
@@ -814,6 +855,7 @@ fn solve_core(
                 settings,
                 init_report,
                 cache.stats(),
+                iteration_stats,
                 governor.recenter_steps(),
             ));
         }
@@ -839,6 +881,7 @@ fn solve_core(
                 settings,
                 init_report,
                 cache.stats(),
+                iteration_stats,
                 governor.recenter_steps(),
             ));
         }
@@ -890,6 +933,7 @@ fn solve_core(
         settings,
         init_report,
         cache.stats(),
+        iteration_stats,
         governor.recenter_steps(),
     ))
 }
@@ -1211,6 +1255,7 @@ fn build_solution(
     settings: &Settings,
     init_report: init::InitReport,
     stats: LinearAlgebraStats,
+    iteration_stats: Vec<IterationStats>,
     recenter_steps: usize,
 ) -> Solution {
     Solution {
@@ -1222,6 +1267,7 @@ fn build_solution(
             solve_time,
             iters,
             linear_algebra: stats,
+            iteration_stats,
             recenter_steps,
             ..SolutionInfo::new(
                 recovered.measures,
@@ -1244,6 +1290,7 @@ fn build_certificate(
     settings: &Settings,
     init_report: init::InitReport,
     stats: LinearAlgebraStats,
+    iteration_stats: Vec<IterationStats>,
     recenter_steps: usize,
 ) -> Solution {
     let nan = |len: usize| vec![f64::NAN; len];
@@ -1267,6 +1314,7 @@ fn build_certificate(
             solve_time,
             iters,
             linear_algebra: stats,
+            iteration_stats,
             recenter_steps,
             ..SolutionInfo::new(Measures::nan(), linear_solver, settings, Some(init_report))
         },
