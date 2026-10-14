@@ -55,7 +55,7 @@ def test_settings_use_short_names() -> None:
     assert settings.kkt_bound_elimination is True
     assert settings.initial_shift_floor == 1e-10
     assert settings.min_static_regularization == 0.0
-    assert settings.governor is True
+    assert settings.governor is False
     assert not hasattr(settings, "shift_floor")
     assert not hasattr(settings, "initial_scale")
     assert settings.tol_infeas_abs == 1e-8
@@ -539,9 +539,8 @@ def test_untriggered_governor_preserves_iterates_and_work_counts() -> None:
     np.testing.assert_array_equal(solutions[0].s, solutions[1].s)
 
 
-def test_adaptive_floor_relaxes_without_changing_user_settings() -> None:
-    # A large initial shift slows progress; the adaptive floor must relax
-    # without mutating the user's requested initial setting.
+def test_barrier_problem_uses_complementarity_instead_of_initial_floor() -> None:
+    # A requested barrier-free floor must not change a positive-barrier solve.
     settings = cpo3.Settings(
         presolve=False,
         initial_shift_floor=100.0,
@@ -557,6 +556,11 @@ def test_adaptive_floor_relaxes_without_changing_user_settings() -> None:
         == 3 * solution.info.iters - solution.info.recenter_steps
     )
     assert settings.initial_shift_floor == 100.0
+    baseline = cpo3.solve(
+        sparse_problem(), settings=cpo3.Settings(presolve=False, max_centrality_correctors=0)
+    )
+    assert solution.info.iters == baseline.info.iters
+    np.testing.assert_array_equal(solution.x, baseline.x)
 
 
 @pytest.mark.parametrize("limit", ["iterations", "time"])

@@ -201,7 +201,7 @@ fn step_attempt(
                 let trial = geometry
                     .step_to_boundary_toward(state.s(), &s_centered)?
                     .min(geometry.step_to_boundary_toward(state.y(), centered.y())?);
-                if trial <= boundary + 0.1 * (aspiration - boundary) {
+                if trial <= boundary {
                     break;
                 }
                 accepts += 1;
@@ -318,7 +318,7 @@ pub(crate) fn predictor(
     rhs.extend(state.x().iter().map(|x| rho * x));
     rhs.extend(state.y().iter().zip(state.s()).map(|(y, s)| -(rho * y + s)));
     let r_tau = rho * state.tau();
-    let affine = resolvent.solve_rhs(&rhs, r_tau, 0.0, Some((state.x(), state.y())))?;
+    let affine = resolvent.solve_rhs(&rhs, r_tau, 0.0)?;
 
     let dy = difference(affine.y(), state.y());
     let mut ds = dy
@@ -478,8 +478,7 @@ fn centered_solve(
             + correction.map_or(0.0, |values| values[index]))
     }));
     let r_tau = residual_weight * anchor_tau;
-    let initial = (anchor_x, anchor_y);
-    let centered = resolvent.solve_rhs(&rhs, r_tau, mu_centered, Some(initial))?;
+    let centered = resolvent.solve_rhs(&rhs, r_tau, mu_centered)?;
     let s_centered: Vec<f64> = (0..m)
         .map(|index| {
             mu_centered * scaling.y_inverse[index]

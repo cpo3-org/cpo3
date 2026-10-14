@@ -43,7 +43,7 @@ pub struct Settings {
     pub data_equilibration: Equilibration,
     /// Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
     pub max_equilibration_passes: usize,
-    /// Nonnegative tolerance on scaled augmented row infinity norms relative to one.
+    /// Nonnegative tolerance on scaled P/A row infinity norms relative to one.
     pub equilibration_tolerance: f64,
 
     // KKT solves.
@@ -60,8 +60,9 @@ pub struct Settings {
     pub refinement_tolerance: f64,
 
     // Outer iterations.
-    /// Initial requested floor on the true KKT shift. Numerical failures raise
-    /// the shift; accurate steps and stalled outer progress relax its floor.
+    /// Initial requested KKT shift floor for problems with no barrier. Numerical failures raise
+    /// the shift; accurate steps relax the numerical-retry floor. Stalled outer
+    /// progress can also relax the requested floor for barrier-free problems.
     /// Centering targets always use the actual complementarity.
     pub initial_shift_floor: f64,
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
@@ -72,7 +73,7 @@ pub struct Settings {
     /// Skip extra centrality correctors when the undamped boundary step reaches
     /// this threshold in [0, 1]. Zero skips all extra correctors.
     pub corrector_gate: f64,
-    /// Recenter and pace complementarity reduction when progress stalls.
+    /// Recenter and pace complementarity reduction when progress stalls; off by default.
     pub governor: bool,
     /// Maximum governor-triggered recentering steps; zero disables the governor.
     pub max_recenters: usize,
@@ -111,7 +112,7 @@ impl Default for Settings {
             step_fraction: 0.999,
             max_centrality_correctors: 1,
             corrector_gate: 0.9,
-            governor: true,
+            governor: false,
             max_recenters: 8,
             recenter_sigma_floor: 1.0 / 30.0,
         }

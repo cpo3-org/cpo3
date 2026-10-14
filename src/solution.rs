@@ -688,9 +688,14 @@ fn solve_core(
         ));
     }
 
-    // The requested floor may relax when it limits outer convergence. The
-    // cached safety floor decays separately, only after accurate KKT solves.
-    let mut requested_floor = settings.initial_shift_floor;
+    // Positive-barrier problems use complementarity directly as the shift,
+    // with only the numerical-retry floor retained. Barrier-free problems
+    // require a positive shift and may relax its requested floor.
+    let mut requested_floor = if embedding.nu() > 0 {
+        0.0
+    } else {
+        settings.initial_shift_floor
+    };
     let minimum_floor = if embedding.nu() > 0 {
         0.0
     } else {
@@ -771,7 +776,8 @@ fn solve_core(
             .mu_step
             .expect("an accepted step has a KKT shift")
             > raw_mu_before_step;
-        if floor_active
+        if embedding.nu() == 0
+            && floor_active
             && recovered.ktratio < 1.0
             && progress.is_finite()
             && progress > 1.0
@@ -783,9 +789,6 @@ fn solve_core(
         }
         if stalled_progress >= 5 && requested_floor > minimum_floor {
             requested_floor = (requested_floor * 0.1).max(minimum_floor);
-            if embedding.nu() > 0 {
-                requested_floor = requested_floor.min(0.1 * raw_mu_before_step);
-            }
             stalled_progress = 0;
         }
         previous_progress = progress;

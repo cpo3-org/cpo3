@@ -1,4 +1,4 @@
-//! One-time equilibration of the homogeneous problem data.
+//! One-time equilibration of the quadratic and constraint matrices.
 
 use std::borrow::Cow;
 
@@ -16,12 +16,11 @@ pub(crate) enum DataEquilibrationError {
     InvalidNumericalResult,
 }
 
-/// A problem in equilibrated homogeneous coordinates and its inverse mapping.
+/// A problem in equilibrated coordinates and its inverse mapping.
 pub(crate) struct EquilibratedProblem<'a> {
     problem: Cow<'a, Problem>,
     x: Vec<f64>,
     y: Vec<f64>,
-    tau: f64,
 }
 
 impl<'a> EquilibratedProblem<'a> {
@@ -40,7 +39,6 @@ impl<'a> EquilibratedProblem<'a> {
             problem: Cow::Borrowed(problem),
             x: vec![1.0; problem.variable_count()],
             y: vec![1.0; problem.constraint_count()],
-            tau: 1.0,
         }
     }
 
@@ -52,7 +50,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.x)
-            .map(|(value, scale)| value * self.tau / scale)
+            .map(|(value, scale)| value / scale)
             .collect()
     }
 
@@ -60,7 +58,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.y)
-            .map(|(value, scale)| value * self.tau / scale)
+            .map(|(value, scale)| value / scale)
             .collect()
     }
 
@@ -68,7 +66,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.y)
-            .map(|(value, scale)| value * self.tau * scale)
+            .map(|(value, scale)| value * scale)
             .collect()
     }
 
@@ -76,7 +74,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.x)
-            .map(|(value, scale)| scale * value / self.tau)
+            .map(|(value, scale)| scale * value)
             .collect()
     }
 
@@ -84,7 +82,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.y)
-            .map(|(value, scale)| scale * value / self.tau)
+            .map(|(value, scale)| scale * value)
             .collect()
     }
 
@@ -95,7 +93,7 @@ impl<'a> EquilibratedProblem<'a> {
             values
                 .iter()
                 .zip(&self.x)
-                .map(|(value, scale)| scale * (value * factor) / self.tau),
+                .map(|(value, scale)| scale * (value * factor)),
         );
     }
 
@@ -105,7 +103,7 @@ impl<'a> EquilibratedProblem<'a> {
             values
                 .iter()
                 .zip(&self.y)
-                .map(|(value, scale)| scale * (value * factor) / self.tau),
+                .map(|(value, scale)| scale * (value * factor)),
         );
     }
 
@@ -121,14 +119,14 @@ impl<'a> EquilibratedProblem<'a> {
             values
                 .iter()
                 .zip(&self.y)
-                .map(|(value, scale)| (value * factor) / (self.tau * scale)),
+                .map(|(value, scale)| (value * factor) / scale),
         );
     }
 
     /// Map original recovered products back to operating homogeneous coordinates.
     /// `tau` is the same guarded divisor used in solution recovery.
     pub(crate) fn scale_products(&self, ax: &mut [f64], px: &mut [f64], aty: &mut [f64], tau: f64) {
-        let factor = self.tau * tau;
+        let factor = tau;
         crate::matrix::update(ax, &self.y, |value, scale| value * (factor * scale));
         faer::zip!(
             faer::ColMut::from_slice_mut(px),
@@ -148,12 +146,14 @@ impl<'a> EquilibratedProblem<'a> {
         }
         let n = problem.variable_count();
         let m = problem.constraint_count();
-        let mut scaling = vec![1.0; n + m + 1];
+        // Balance the KKT matrix blocks P and A. The right-hand-side data
+        // b and c do not determine the scale of these matrix blocks.
+        let mut scaling = vec![1.0; n + m];
 
         let mut norms = vec![0.0_f64; scaling.len()];
         for _ in 0..settings.max_equilibration_passes {
             norms.fill(0.0);
-            accumulate_augmented_norms(problem, &scaling, &mut norms);
+            accumulate_matrix_norms(problem, &scaling, &mut norms);
             cone_compatible_norms(problem.cones(), &mut norms[n..n + m]);
             let deviation = norms
                 .iter()
@@ -180,7 +180,6 @@ impl<'a> EquilibratedProblem<'a> {
 
         let x = scaling[..n].to_vec();
         let y = scaling[n..n + m].to_vec();
-        let tau = scaling[n + m];
         let p = problem
             .p()
             .map(|matrix| scale_matrix(matrix, &x, &x))
@@ -190,27 +189,25 @@ impl<'a> EquilibratedProblem<'a> {
             .c()
             .iter()
             .zip(&x)
-            .map(|(value, scale)| tau * scale * value)
+            .map(|(value, scale)| scale * value)
             .collect();
         let b = problem
             .b()
             .iter()
             .zip(&y)
-            .map(|(value, scale)| tau * scale * value)
+            .map(|(value, scale)| scale * value)
             .collect();
         let scaled = Problem::from_upper_triangle(p, c, a, b, problem.cones().to_vec())?;
         Ok(Self {
             problem: Cow::Owned(scaled),
             x,
             y,
-            tau,
         })
     }
 }
 
-fn accumulate_augmented_norms(problem: &Problem, scaling: &[f64], norms: &mut [f64]) {
+fn accumulate_matrix_norms(problem: &Problem, scaling: &[f64], norms: &mut [f64]) {
     let n = problem.variable_count();
-    let m = problem.constraint_count();
     if let Some(p) = problem.p() {
         crate::matrix::visit_entries(p, |row, column, value| {
             accumulate_edge(row, column, value, scaling, norms);
@@ -219,13 +216,6 @@ fn accumulate_augmented_norms(problem: &Problem, scaling: &[f64], norms: &mut [f
     crate::matrix::visit_entries(problem.a(), |row, column, value| {
         accumulate_edge(column, n + row, value, scaling, norms);
     });
-    let tau = n + m;
-    for (column, value) in problem.c().iter().enumerate() {
-        accumulate_edge(column, tau, *value, scaling, norms);
-    }
-    for (row, value) in problem.b().iter().enumerate() {
-        accumulate_edge(n + row, tau, *value, scaling, norms);
-    }
 }
 
 fn accumulate_edge(left: usize, right: usize, value: f64, scaling: &[f64], norms: &mut [f64]) {
@@ -336,9 +326,9 @@ mod tests {
                 crate::matrix::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap();
             let problem = Problem::new(
                 Some(matrix.clone()),
-                vec![0.0, 0.0],
+                vec![1e6, -1e8],
                 matrix,
-                vec![0.0, 0.0],
+                vec![1e10, -1e4],
                 vec![Cone::Zero(2)],
             )
             .unwrap();
@@ -357,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn homogeneous_ruiz_preserves_the_qp_under_coordinate_mapping() {
+    fn matrix_ruiz_preserves_the_qp_under_coordinate_mapping() {
         {
             let original = problem();
             let equilibrated = EquilibratedProblem::new(
@@ -380,21 +370,15 @@ mod tests {
             let original_px = original.p_mul(&x);
             let scaled_objective = 0.5 * dot(&scaled_x, &scaled_px) + dot(scaled.c(), &scaled_x);
             let original_objective = 0.5 * dot(&x, &original_px) + dot(original.c(), &x);
-            assert_close(
-                scaled_objective,
-                equilibrated.tau.powi(2) * original_objective,
-            );
-            assert_close(
-                dot(&scaled_y, &scaled_s),
-                equilibrated.tau.powi(2) * dot(&y, &s),
-            );
+            assert_close(scaled_objective, original_objective);
+            assert_close(dot(&scaled_y, &scaled_s), dot(&y, &s));
 
             let scaled_ax = matrix_vector(scaled.a(), &scaled_x);
             let original_ax = matrix_vector(original.a(), &x);
             for row in 0..original.constraint_count() {
                 assert_close(
                     scaled_ax[row] - scaled.b()[row],
-                    equilibrated.tau * equilibrated.y[row] * (original_ax[row] - original.b()[row]),
+                    equilibrated.y[row] * (original_ax[row] - original.b()[row]),
                 );
             }
 
@@ -403,8 +387,7 @@ mod tests {
             for column in 0..original.variable_count() {
                 assert_close(
                     scaled_px[column] + scaled_aty[column] + scaled.c()[column],
-                    equilibrated.tau
-                        * equilibrated.x[column]
+                    equilibrated.x[column]
                         * (original_px[column] + original_aty[column] + original.c()[column]),
                 );
             }
@@ -412,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn homogeneous_ruiz_balances_the_augmented_data() {
+    fn matrix_ruiz_balances_the_quadratic_and_constraint_matrices() {
         let original = problem();
         let equilibrated = EquilibratedProblem::new(
             &original,
@@ -423,9 +406,9 @@ mod tests {
         )
         .unwrap();
         let scaled = equilibrated.problem();
-        let mut norms = vec![0.0; scaled.variable_count() + scaled.constraint_count() + 1];
+        let mut norms = vec![0.0; scaled.variable_count() + scaled.constraint_count()];
 
-        accumulate_augmented_norms(scaled, &vec![1.0; norms.len()], &mut norms);
+        accumulate_matrix_norms(scaled, &vec![1.0; norms.len()], &mut norms);
 
         for norm in norms {
             assert!(

@@ -303,17 +303,17 @@ impl<'a> Resolvent<'a> {
         let mut rhs = Vec::with_capacity(n + m);
         rhs.extend_from_slice(r_x);
         rhs.extend(r_y.iter().map(|value| -value));
-        self.solve_rhs(&rhs, r_tau, mu, None)
+        self.solve_rhs(&rhs, r_tau, mu)
     }
 
     /// `solve` with the stacked right-hand side `(r_x, -r_y)` prebuilt.
-    /// The optional `(x, y)` initializes the linear solve before tau recovery.
+    /// Solve this changing right-hand side directly; only the constant data
+    /// direction is carried between factorizations.
     pub(crate) fn solve_rhs(
         &mut self,
         rhs: &[f64],
         r_tau: f64,
         mu: f64,
-        initial: Option<(&[f64], &[f64])>,
     ) -> Result<ResolventSolution, JosephyError> {
         let n = self.problem.variable_count();
         let m = self.problem.constraint_count();
@@ -329,7 +329,7 @@ impl<'a> Resolvent<'a> {
             &self.d_diagonal,
             self.d_factor.as_deref().unwrap_or(&self.d_diagonal),
             rhs,
-            initial,
+            None,
         )?;
         let q_constant = q_dot(self.problem, &constant);
         let (tau, used_tau_fallback) = match self.solve_tau(&constant, q_constant, r_tau, mu) {

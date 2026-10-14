@@ -137,7 +137,7 @@ class Settings:
     data_equilibration: Equilibration = _SETTINGS_DEFAULTS["data_equilibration"]
     # Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
     max_equilibration_passes: int = _SETTINGS_DEFAULTS["max_equilibration_passes"]
-    # Nonnegative tolerance on scaled augmented row infinity norms relative to one.
+    # Nonnegative tolerance on scaled P/A row infinity norms relative to one.
     equilibration_tolerance: float = _SETTINGS_DEFAULTS["equilibration_tolerance"]
 
     # KKT solves.
@@ -152,7 +152,7 @@ class Settings:
     refinement_tolerance: float = _SETTINGS_DEFAULTS["refinement_tolerance"]
 
     # Outer iterations.
-    # Initial true-KKT-shift floor; adapts independently of complementarity.
+    # Initial KKT shift floor for problems with no barrier; ignored when nu > 0.
     initial_shift_floor: float = _SETTINGS_DEFAULTS["initial_shift_floor"]
     # Fraction of the cone-boundary step to take, strictly between zero and one.
     step_fraction: float = _SETTINGS_DEFAULTS["step_fraction"]

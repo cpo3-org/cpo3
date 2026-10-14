@@ -251,15 +251,19 @@ fn sphere_factor(embedding: &Embedding<'_>, x: &[f64], y: &[f64]) -> f64 {
     (embedding.nu() as f64 + 1.0).sqrt() / norm
 }
 
-/// The canonical point `(0, e, e, 1)`.
+/// A centered point on the embedding sphere with complementarity 1e-4.
 fn canonical_state(embedding: &Embedding<'_>) -> Result<State, EmbeddingError> {
     let mut point = vec![0.0; embedding.problem().constraint_count()];
     embedding.geometry().canonical_identity(&mut point)?;
+    for value in &mut point {
+        *value *= 1e-2;
+    }
+    let tau = (1.0 + embedding.nu() as f64 * (1.0 - 1e-4)).sqrt();
     State::new(
         vec![0.0; embedding.problem().variable_count()],
         point.clone(),
         point,
-        1.0,
+        tau,
     )
 }
 
@@ -519,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn cold_start_preserves_the_projective_unit_point_after_data_scaling() {
+    fn cold_start_is_centered_on_the_sphere_after_data_scaling() {
         let problem = Problem::new(
             None,
             vec![1000.0],
@@ -548,9 +552,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state.x(), [0.0]);
-        assert_eq!(state.y(), [0.0, 1.0]);
-        assert_eq!(state.s(), [0.0, 1.0]);
-        assert_eq!(state.tau(), 1.0);
+        assert_eq!(state.y(), [0.0, 1e-2]);
+        assert_eq!(state.s(), [0.0, 1e-2]);
+        assert_close(state.tau(), (2.0_f64 - 1e-4).sqrt(), 1e-12);
         assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
         assert_eq!(report.cvxopt_init_used, Some(false));
         assert_ne!(scaled.unscale_s_by(state.s(), 1.0), state.s());
