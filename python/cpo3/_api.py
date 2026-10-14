@@ -134,8 +134,6 @@ class Settings:
     force_warm_start: bool = _SETTINGS_DEFAULTS["force_warm_start"]
     # Start from cpo3's CVXOPT-style KKT solve instead of the canonical point.
     cvxopt_init: bool = _SETTINGS_DEFAULTS["cvxopt_init"]
-    # Cold-point scale on the embedding sphere; equality-only problems use 1.
-    initial_scale: float = _SETTINGS_DEFAULTS["initial_scale"]
     data_equilibration: Equilibration = _SETTINGS_DEFAULTS["data_equilibration"]
     # Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
     max_equilibration_passes: int = _SETTINGS_DEFAULTS["max_equilibration_passes"]

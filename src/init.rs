@@ -238,22 +238,11 @@ fn local_score(
     }
 }
 
-/// Homogeneous scale of cold starts: enter at a small path level without
-/// changing the recovered point. Equality-only problems have no
-/// complementarity to scale down.
-fn cold_scale(embedding: &Embedding<'_>, settings: &Settings) -> f64 {
-    if embedding.nu() > 0 {
-        settings.initial_scale
-    } else {
-        1.0
-    }
-}
-
 /// Factor placing `(x, s, y, 1)` on the embedding sphere
 /// `||(x, y, tau)|| = sqrt(nu + 1)`, as `State::normalize_sphere` does for
 /// warm starts; one for equality-only problems. The canonical point already
 /// lies on the sphere, so cold starts of either strategy enter the loop at
-/// the same radius before the cold scale is applied.
+/// the same radius.
 fn sphere_factor(embedding: &Embedding<'_>, x: &[f64], y: &[f64]) -> f64 {
     if embedding.nu() == 0 {
         return 1.0;
@@ -262,22 +251,15 @@ fn sphere_factor(embedding: &Embedding<'_>, x: &[f64], y: &[f64]) -> f64 {
     (embedding.nu() as f64 + 1.0).sqrt() / norm
 }
 
-/// The canonical point `(0, e, e, 1)` at the cold scale.
-fn canonical_state(
-    embedding: &Embedding<'_>,
-    settings: &Settings,
-) -> Result<State, EmbeddingError> {
-    let scale = cold_scale(embedding, settings);
+/// The canonical point `(0, e, e, 1)`.
+fn canonical_state(embedding: &Embedding<'_>) -> Result<State, EmbeddingError> {
     let mut point = vec![0.0; embedding.problem().constraint_count()];
     embedding.geometry().canonical_identity(&mut point)?;
-    for value in &mut point {
-        *value *= scale;
-    }
     State::new(
         vec![0.0; embedding.problem().variable_count()],
         point.clone(),
         point,
-        scale,
+        1.0,
     )
 }
 
@@ -293,13 +275,11 @@ fn canonical_state(
 ///
 /// The shifted duals can be orders of magnitude larger than the sphere
 /// radius `sqrt(nu + 1)` (the CONT family reaches `||y|| ~ 1e5` against a
-/// radius of a few hundred), and a fixed cold scale then starts the loop far
-/// from the path. Projecting onto the embedding sphere first, as warm starts
-/// are, makes the cold scale mean the same thing for both cold strategies.
+/// radius of a few hundred). Project onto the embedding sphere, as for warm
+/// starts, so both cold strategies begin at the same radius.
 fn cvxopt_state(
     embedding: &Embedding<'_>,
     cone_rows: &[bool],
-    settings: &Settings,
     kkt: &KktSettings,
     cache: &mut KktCache,
 ) -> Result<State, String> {
@@ -339,7 +319,7 @@ fn cvxopt_state(
     }
     shift_into_interior(&mut s, cone_rows);
     shift_into_interior(&mut y, cone_rows);
-    let scale = cold_scale(embedding, settings) * sphere_factor(embedding, &x, &y);
+    let scale = sphere_factor(embedding, &x, &y);
     crate::matrix::scale(&mut x, scale);
     crate::matrix::scale(&mut s, scale);
     crate::matrix::scale(&mut y, scale);
@@ -423,7 +403,7 @@ fn cold_state(
     cache: &mut KktCache,
 ) -> Result<(State, bool), EmbeddingError> {
     if settings.cvxopt_init {
-        match cvxopt_state(embedding, cone_rows, settings, kkt, cache) {
+        match cvxopt_state(embedding, cone_rows, kkt, cache) {
             Ok(state) => return Ok((state, true)),
             Err(reason) => {
                 eprintln!(
@@ -432,7 +412,7 @@ fn cold_state(
             }
         }
     }
-    Ok((canonical_state(embedding, settings)?, false))
+    Ok((canonical_state(embedding)?, false))
 }
 
 /// Choose and prepare the starting point according to the settings.
@@ -568,10 +548,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(state.x(), [0.0]);
-        assert_eq!(state.y(), [0.0, 0.01]);
-        assert_eq!(state.s(), [0.0, 0.01]);
-        assert_eq!(state.tau(), 0.01);
-        assert_close(sphere_radius(&state), 0.01 * 2.0_f64.sqrt(), 1e-12);
+        assert_eq!(state.y(), [0.0, 1.0]);
+        assert_eq!(state.s(), [0.0, 1.0]);
+        assert_eq!(state.tau(), 1.0);
+        assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
         assert_eq!(report.cvxopt_init_used, Some(false));
         assert_ne!(scaled.unscale_s_by(state.s(), 1.0), state.s());
     }
@@ -594,8 +574,8 @@ mod tests {
         // The unscaled point (3, 4 | 1, 2 | 1) has norm sqrt(31); the sphere
         // of the two-dimensional orthant has radius sqrt(3).
         let tau = state.tau();
-        assert_close(tau, 0.01 * (3.0_f64 / 31.0).sqrt(), 1e-6);
-        assert_close(sphere_radius(&state), 0.01 * 3.0_f64.sqrt(), 1e-12);
+        assert_close(tau, (3.0_f64 / 31.0).sqrt(), 1e-6);
+        assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
         for (actual, expected) in state.x().iter().zip([3.0, 4.0]) {
             assert_close(actual / tau, expected, 1e-6);
         }
@@ -622,8 +602,8 @@ mod tests {
         let (state, report) = cvxopt_start(&problem, &cone_rows);
         assert_eq!(report.cvxopt_init_used, Some(true));
         let tau = state.tau();
-        assert!(tau > 0.0 && tau < 0.01);
-        assert_close(sphere_radius(&state), 0.01 * 3.0_f64.sqrt(), 1e-12);
+        assert!(tau > 0.0 && tau < 1.0);
+        assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
         let x = state.x().iter().map(|v| v / tau).collect::<Vec<_>>();
         let s = state.s().iter().map(|v| v / tau).collect::<Vec<_>>();
         let y = state.y().iter().map(|v| v / tau).collect::<Vec<_>>();
@@ -774,7 +754,7 @@ mod tests {
         .unwrap();
         assert_eq!(report.warm_start_used, Some(false));
         assert_eq!(report.cvxopt_init_used, Some(false));
-        assert_eq!(state, canonical_state(&embedding, &settings).unwrap());
+        assert_eq!(state, canonical_state(&embedding).unwrap());
     }
 
     #[test]

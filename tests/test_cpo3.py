@@ -57,7 +57,7 @@ def test_settings_use_short_names() -> None:
     assert settings.min_static_regularization == 0.0
     assert settings.governor is True
     assert not hasattr(settings, "shift_floor")
-    assert settings.initial_scale == 0.01
+    assert not hasattr(settings, "initial_scale")
     assert settings.tol_infeas_abs == 1e-8
     assert settings.tol_infeas_rel == 1e-8
     assert settings.certificate_ktratio == 1e9

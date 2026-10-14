@@ -725,12 +725,9 @@ fn solve_core(
             ));
         }
 
-        // Keep the small homogeneous scale while complementarity sets the
-        // shift. Once its safety floor is active, restore the sphere so radial
-        // drift cannot stall the tau update.
-        if diagnostics.mu < cache.shift_floor.unwrap_or(requested_floor) {
-            state.normalize_sphere(embedding.nu())?;
-        }
+        // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
+        // complementarity, scaling s by the same factor.
+        state.normalize_sphere(embedding.nu())?;
         let (next, next_diagnostics) = match predictor_corrector_step(
             &embedding,
             &state,

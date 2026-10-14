@@ -40,13 +40,6 @@ pub struct Settings {
     /// `y` shifted so that their minimum is at least one. A failed solve
     /// falls back to the canonical point.
     pub cvxopt_init: bool,
-    /// Positive finite homogeneous scale of cold starts in transformed
-    /// coordinates: the canonical point `(0, e, e, 1)`, or the CVXOPT-style
-    /// point `(x, s, y, 1)` after projection onto the embedding sphere
-    /// `||(x, y, tau)|| = sqrt(nu + 1)` on which the canonical point lies.
-    /// Equality-only problems retain unit scale; accepted warm starts are
-    /// not rescaled by this setting.
-    pub initial_scale: f64,
     pub data_equilibration: Equilibration,
     /// Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
     pub max_equilibration_passes: usize,
@@ -104,7 +97,6 @@ impl Default for Settings {
 
             force_warm_start: false,
             cvxopt_init: false,
-            initial_scale: 0.01,
             data_equilibration: Equilibration::Ruiz,
             max_equilibration_passes: 20,
             equilibration_tolerance: 1e-2,
@@ -129,11 +121,6 @@ impl Default for Settings {
 impl Settings {
     /// Check numerical ranges before solving. Defaults satisfy these invariants.
     pub fn validate(&self) -> Result<(), SolveError> {
-        if !self.initial_scale.is_finite() || self.initial_scale <= 0.0 {
-            return Err(SolveError::InvalidSetting(
-                "initial_scale must be finite and positive",
-            ));
-        }
         if !self.refinement_tolerance.is_finite() || self.refinement_tolerance <= 0.0 {
             return Err(SolveError::InvalidSetting(
                 "refinement_tolerance must be finite and positive",

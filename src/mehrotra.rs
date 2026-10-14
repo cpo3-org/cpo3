@@ -334,7 +334,7 @@ pub(crate) fn predictor(
     let alpha_affine = geometry
         .step_to_boundary_from_interior(state.s(), &ds)?
         .min(geometry.step_to_boundary_from_interior(state.y(), &dy)?);
-    let mu_affine = affine_trial_mu(state, &ds, &dy, alpha_affine, embedding.nu());
+    let mu_affine = affine_trial_mu(state, &affine, &ds, &dy, alpha_affine, embedding.nu())?;
     let raw_mu = scaling.mu;
     let sigma = if raw_mu > 0.0 {
         (mu_affine / raw_mu).powi(3).clamp(0.0, 1.0)
@@ -365,22 +365,45 @@ pub(crate) fn predictor(
     })
 }
 
-/// Measure the reachable affine trial in the current iterate's scale.
-/// Normalizing only the trial would inflate sigma when the iterate has a small
-/// homogeneous radius, undoing the benefit of the small initial path level.
-fn affine_trial_mu(state: &State, ds: &[f64], dy: &[f64], alpha: f64, nu: usize) -> f64 {
+/// Complementarity of the boundary-limited predictor probe after projection
+/// onto ||(x, y, tau)|| = sqrt(nu + 1). Leave the full predictor unchanged.
+fn affine_trial_mu(
+    state: &State,
+    affine: &ResolventSolution,
+    ds: &[f64],
+    dy: &[f64],
+    alpha: f64,
+    nu: usize,
+) -> Result<f64, EmbeddingError> {
     if nu == 0 {
-        return 0.0;
+        return Ok(0.0);
     }
-    state
+    let x = state
+        .x()
+        .iter()
+        .zip(affine.x())
+        .map(|(x, target)| x + alpha * (target - x));
+    let y = state.y().iter().zip(dy).map(|(y, dy)| y + alpha * dy);
+    let tau = state.tau() + alpha * (affine.tau - state.tau());
+    let norm = crate::matrix::stable_norm(x.chain(y).chain(std::iter::once(tau)));
+    if !norm.is_finite() || norm <= 0.0 {
+        return Err(EmbeddingError::NonFiniteResult);
+    }
+    // Divide before multiplying to avoid overflow/underflow in the raw
+    // complementarity and squared norm of a homogeneously scaled probe.
+    let mu = state
         .s()
         .iter()
         .zip(ds)
         .zip(state.y())
         .zip(dy)
-        .map(|(((s, ds), y), dy)| (s + alpha * ds) * (y + alpha * dy))
+        .map(|(((s, ds), y), dy)| ((s + alpha * ds) / norm) * ((y + alpha * dy) / norm))
         .sum::<f64>()
-        / nu as f64
+        * ((nu as f64 + 1.0) / nu as f64);
+    if !mu.is_finite() {
+        return Err(EmbeddingError::NonFiniteResult);
+    }
+    Ok(mu)
 }
 
 /// The centered iterate and its slack, both at target `mu_c = sigma mu_k`.
@@ -556,14 +579,23 @@ mod tests {
 
     #[test]
     fn affine_complementarity_matches_a_fixed_reference_and_handles_no_barrier() {
-        // Reachable s = y = 1/2 gives mu_affine = 1/4 in the current scale.
-        let state = State::new(vec![0.0], vec![1.0], vec![1.0], 1.0).unwrap();
-        let mu = affine_trial_mu(&state, &[-2.0], &[-2.0], 0.25, 1);
-        assert_close(mu, 0.25);
-        assert_close(mu.powi(3), 1.0 / 64.0);
-        assert_eq!(affine_trial_mu(&state, &[-2.0], &[-2.0], 0.25, 0), 0.0);
-        let tiny = State::new(vec![0.0], vec![1e-20], vec![1e-20], 1e-20).unwrap();
-        assert_close(affine_trial_mu(&tiny, &[0.0], &[0.0], 0.0, 1), 1e-40);
+        // At alpha = 1/4, (x, y, tau) = (1, 1/2, 3/2) and s = 1/2.
+        // Thus mu_affine = 2 * (1/4) / (7/2) = 1/7 at every common scale.
+        for scale in [1e-200, 1.0, 1e200] {
+            let state = State::new(vec![0.0], vec![scale], vec![scale], scale).unwrap();
+            let affine = ResolventSolution {
+                xy: vec![4.0 * scale, -scale],
+                primal_len: 1,
+                tau: 3.0 * scale,
+                used_tau_fallback: false,
+            };
+            let ds = [-2.0 * scale];
+            let dy = [-2.0 * scale];
+            let mu = affine_trial_mu(&state, &affine, &ds, &dy, 0.25, 1).unwrap();
+            assert_close(mu, 1.0 / 7.0);
+            assert_close(mu.powi(3), 1.0 / 343.0);
+            assert_eq!(affine_trial_mu(&state, &affine, &ds, &dy, 0.25, 0), Ok(0.0));
+        }
     }
 
     #[test]
@@ -807,6 +839,27 @@ mod tests {
             assert!(result.alpha_affine > 0.0 && result.alpha_affine <= 1.0);
             assert!((0.0..=1.0).contains(&result.sigma));
             assert!(result.mu_affine >= 0.0);
+            let probe = |base: &[f64], target: &[f64]| {
+                base.iter()
+                    .zip(target)
+                    .map(|(base, target)| base + result.alpha_affine * (target - base))
+                    .collect::<Vec<_>>()
+            };
+            let x = probe(state.x(), result.affine.x());
+            let y = probe(state.y(), result.affine.y());
+            let s = probe(state.s(), &result.s_affine);
+            let tau = state.tau() + result.alpha_affine * (result.affine.tau - state.tau());
+            let norm_sq = dot(&x, &x) + dot(&y, &y) + tau * tau;
+            let embedding = Embedding::new(&problem).unwrap();
+            let nu = embedding.nu() as f64;
+            let expected_mu = (nu + 1.0) * dot(&s, &y) / (nu * norm_sq);
+            assert_close(result.mu_affine, expected_mu);
+            assert_close(
+                result.sigma,
+                (expected_mu / embedding.duality_measure(&state))
+                    .powi(3)
+                    .clamp(0.0, 1.0),
+            );
         }
     }
 
@@ -817,9 +870,12 @@ mod tests {
         assert_eq!(result.s_affine[0], 0.0);
         if result.alpha_affine == 1.0 {
             let nu = problem.constraint_count() as f64 - 1.0;
+            let norm_sq = dot(result.affine.x(), result.affine.x())
+                + dot(result.affine.y(), result.affine.y())
+                + result.affine.tau.powi(2);
             assert_close(
                 result.mu_affine,
-                dot(&result.s_affine, result.affine.y()) / nu,
+                (nu + 1.0) * dot(&result.s_affine, result.affine.y()) / (nu * norm_sq),
             );
         }
         assert!(result.mu_affine < mu, "the affine step must reduce mu");
