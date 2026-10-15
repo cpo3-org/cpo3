@@ -41,11 +41,10 @@ pub struct Settings {
     /// falls back to the canonical point.
     pub cvxopt_init: bool,
     pub data_equilibration: Equilibration,
-    /// Maximum equilibration sweeps: primal columns, then constraint rows.
-    /// The linear data is normalized once after the matrix sweeps.
+    /// Maximum Ruiz sweeps on the augmented problem data (P, A, b, c).
     /// Zero leaves all problem data unscaled.
     pub max_equilibration_passes: usize,
-    /// Nonnegative tolerance on scaled P/A row infinity norms relative to one.
+    /// Nonnegative tolerance on augmented row infinity norms relative to one.
     pub equilibration_tolerance: f64,
 
     // KKT solves.
@@ -102,7 +101,7 @@ impl Default for Settings {
             force_warm_start: false,
             cvxopt_init: false,
             data_equilibration: Equilibration::Ruiz,
-            max_equilibration_passes: 1,
+            max_equilibration_passes: 2,
             equilibration_tolerance: 1e-2,
 
             linear_solver: LinearSolver::Faer,

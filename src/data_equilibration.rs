@@ -148,12 +148,12 @@ impl<'a> EquilibratedProblem<'a> {
         }
         let n = problem.variable_count();
         let m = problem.constraint_count();
-        let mut scaling = vec![1.0; n + m];
+        let mut scaling = vec![1.0; n + m + 1];
 
         let mut norms = vec![0.0_f64; scaling.len()];
         for _ in 0..settings.max_equilibration_passes {
             norms.fill(0.0);
-            accumulate_matrix_norms(problem, &scaling, &mut norms);
+            accumulate_augmented_norms(problem, &scaling, &mut norms);
             cone_compatible_norms(problem.cones(), &mut norms[n..n + m]);
             let deviation = norms
                 .iter()
@@ -163,50 +163,24 @@ impl<'a> EquilibratedProblem<'a> {
             if deviation <= settings.equilibration_tolerance {
                 break;
             }
-            for (scale, norm) in scaling[..n].iter_mut().zip(&norms[..n]) {
+            for (scale, norm) in scaling.iter_mut().zip(&norms) {
                 if *norm > 0.0 {
                     *scale /= norm.sqrt();
                 }
-            }
-            // With primal scaling fixed, each constraint row scales linearly.
-            norms[n..].fill(0.0);
-            crate::matrix::visit_entries(problem.a(), |row, column, value| {
-                norms[n + row] =
-                    norms[n + row].max(value.abs() * scaling[column] * scaling[n + row]);
-            });
-            cone_compatible_norms(problem.cones(), &mut norms[n..]);
-            for (scale, norm) in scaling[n..].iter_mut().zip(&norms[n..]) {
-                if *norm > 0.0 {
-                    *scale /= norm;
+                if !scale.is_finite() || *scale <= 0.0 {
+                    return Err(DataEquilibrationError::InvalidNumericalResult);
                 }
-            }
-            if scaling
-                .iter()
-                .any(|scale| !scale.is_finite() || *scale <= 0.0)
-            {
-                return Err(DataEquilibrationError::InvalidNumericalResult);
             }
         }
 
-        // Balance the linear-data column once after the matrices.
-        let linear_norm = problem
-            .c()
-            .iter()
-            .zip(&scaling[..n])
-            .chain(problem.b().iter().zip(&scaling[n..]))
-            .map(|(value, scale)| (value * scale).abs())
-            .fold(0.0_f64, f64::max);
-        let tau = 1.0 / linear_norm.max(1.0);
-        if !tau.is_finite() || tau <= 0.0 {
-            return Err(DataEquilibrationError::InvalidNumericalResult);
-        }
         // Unit scaling needs neither a matrix copy nor repeated validation.
-        if tau == 1.0 && scaling.iter().all(|&scale| scale == 1.0) {
+        if scaling.iter().all(|&scale| scale == 1.0) {
             return Ok(Self::unscaled(problem));
         }
 
         let x = scaling[..n].to_vec();
         let y = scaling[n..n + m].to_vec();
+        let tau = scaling[n + m];
         let p = problem
             .p()
             .map(|matrix| scale_matrix(matrix, &x, &x))
@@ -234,8 +208,9 @@ impl<'a> EquilibratedProblem<'a> {
     }
 }
 
-fn accumulate_matrix_norms(problem: &Problem, scaling: &[f64], norms: &mut [f64]) {
+fn accumulate_augmented_norms(problem: &Problem, scaling: &[f64], norms: &mut [f64]) {
     let n = problem.variable_count();
+    let m = problem.constraint_count();
     if let Some(p) = problem.p() {
         crate::matrix::visit_entries(p, |row, column, value| {
             accumulate_edge(row, column, value, scaling, norms);
@@ -244,6 +219,13 @@ fn accumulate_matrix_norms(problem: &Problem, scaling: &[f64], norms: &mut [f64]
     crate::matrix::visit_entries(problem.a(), |row, column, value| {
         accumulate_edge(column, n + row, value, scaling, norms);
     });
+    let tau = n + m;
+    for (column, value) in problem.c().iter().enumerate() {
+        accumulate_edge(column, tau, *value, scaling, norms);
+    }
+    for (row, value) in problem.b().iter().enumerate() {
+        accumulate_edge(n + row, tau, *value, scaling, norms);
+    }
 }
 
 fn accumulate_edge(left: usize, right: usize, value: f64, scaling: &[f64], norms: &mut [f64]) {
@@ -430,34 +412,27 @@ mod tests {
     }
 
     #[test]
-    fn one_matrix_pass_and_linear_column_normalization_bound_all_data() {
+    fn homogeneous_ruiz_balances_the_augmented_data() {
         let original = problem();
         let equilibrated = EquilibratedProblem::new(
             &original,
             &crate::Settings {
                 data_equilibration: Equilibration::Ruiz,
+                max_equilibration_passes: 20,
                 ..crate::Settings::default()
             },
         )
         .unwrap();
         let scaled = equilibrated.problem();
-        assert_close(equilibrated.x[0], 0.5);
-        assert_close(equilibrated.x[1], 1.0 / 3.0);
-        assert_close(equilibrated.y[0], 1.0);
-        assert_close(equilibrated.y[1], 3.0 / 7.0);
-        assert_close(equilibrated.tau, 0.2);
-        let mut norms = vec![0.0; scaled.variable_count() + scaled.constraint_count()];
-        accumulate_matrix_norms(scaled, &vec![1.0; norms.len()], &mut norms);
-        assert!(norms.iter().all(|norm| *norm <= 1.0 + 1e-12));
-        for norm in &norms[scaled.variable_count()..] {
-            assert_close(*norm, 1.0);
+        let mut norms = vec![0.0; scaled.variable_count() + scaled.constraint_count() + 1];
+
+        accumulate_augmented_norms(scaled, &vec![1.0; norms.len()], &mut norms);
+
+        for norm in norms {
+            assert!(
+                (norm - 1.0).abs() <= Settings::default().equilibration_tolerance,
+                "row norm is {norm}"
+            );
         }
-        let linear_norm = scaled
-            .c()
-            .iter()
-            .chain(scaled.b())
-            .map(|value| value.abs())
-            .fold(0.0_f64, f64::max);
-        assert_close(linear_norm, 1.0);
     }
 }
