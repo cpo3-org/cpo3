@@ -1,4 +1,4 @@
-//! One-time equilibration of the quadratic and constraint matrices.
+//! One-time equilibration of the homogeneous problem data.
 
 use std::borrow::Cow;
 
@@ -16,11 +16,12 @@ pub(crate) enum DataEquilibrationError {
     InvalidNumericalResult,
 }
 
-/// A problem in equilibrated coordinates and its inverse mapping.
+/// A problem in equilibrated homogeneous coordinates and its inverse mapping.
 pub(crate) struct EquilibratedProblem<'a> {
     problem: Cow<'a, Problem>,
     x: Vec<f64>,
     y: Vec<f64>,
+    tau: f64,
 }
 
 impl<'a> EquilibratedProblem<'a> {
@@ -39,6 +40,7 @@ impl<'a> EquilibratedProblem<'a> {
             problem: Cow::Borrowed(problem),
             x: vec![1.0; problem.variable_count()],
             y: vec![1.0; problem.constraint_count()],
+            tau: 1.0,
         }
     }
 
@@ -50,7 +52,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.x)
-            .map(|(value, scale)| value / scale)
+            .map(|(value, scale)| value * self.tau / scale)
             .collect()
     }
 
@@ -58,7 +60,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.y)
-            .map(|(value, scale)| value / scale)
+            .map(|(value, scale)| value * self.tau / scale)
             .collect()
     }
 
@@ -66,7 +68,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.y)
-            .map(|(value, scale)| value * scale)
+            .map(|(value, scale)| value * self.tau * scale)
             .collect()
     }
 
@@ -74,7 +76,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.x)
-            .map(|(value, scale)| scale * value)
+            .map(|(value, scale)| scale * value / self.tau)
             .collect()
     }
 
@@ -82,7 +84,7 @@ impl<'a> EquilibratedProblem<'a> {
         values
             .iter()
             .zip(&self.y)
-            .map(|(value, scale)| scale * value)
+            .map(|(value, scale)| scale * value / self.tau)
             .collect()
     }
 
@@ -93,7 +95,7 @@ impl<'a> EquilibratedProblem<'a> {
             values
                 .iter()
                 .zip(&self.x)
-                .map(|(value, scale)| scale * (value * factor)),
+                .map(|(value, scale)| scale * (value * factor) / self.tau),
         );
     }
 
@@ -103,7 +105,7 @@ impl<'a> EquilibratedProblem<'a> {
             values
                 .iter()
                 .zip(&self.y)
-                .map(|(value, scale)| scale * (value * factor)),
+                .map(|(value, scale)| scale * (value * factor) / self.tau),
         );
     }
 
@@ -119,14 +121,14 @@ impl<'a> EquilibratedProblem<'a> {
             values
                 .iter()
                 .zip(&self.y)
-                .map(|(value, scale)| (value * factor) / scale),
+                .map(|(value, scale)| (value * factor) / (self.tau * scale)),
         );
     }
 
     /// Map original recovered products back to operating homogeneous coordinates.
     /// `tau` is the same guarded divisor used in solution recovery.
     pub(crate) fn scale_products(&self, ax: &mut [f64], px: &mut [f64], aty: &mut [f64], tau: f64) {
-        let factor = tau;
+        let factor = self.tau * tau;
         crate::matrix::update(ax, &self.y, |value, scale| value * (factor * scale));
         faer::zip!(
             faer::ColMut::from_slice_mut(px),
@@ -146,8 +148,6 @@ impl<'a> EquilibratedProblem<'a> {
         }
         let n = problem.variable_count();
         let m = problem.constraint_count();
-        // Balance the KKT matrix blocks P and A. The right-hand-side data
-        // b and c do not determine the scale of these matrix blocks.
         let mut scaling = vec![1.0; n + m];
 
         let mut norms = vec![0.0_f64; scaling.len()];
@@ -163,18 +163,45 @@ impl<'a> EquilibratedProblem<'a> {
             if deviation <= settings.equilibration_tolerance {
                 break;
             }
-            for (scale, norm) in scaling.iter_mut().zip(&norms) {
+            for (scale, norm) in scaling[..n].iter_mut().zip(&norms[..n]) {
                 if *norm > 0.0 {
                     *scale /= norm.sqrt();
                 }
-                if !scale.is_finite() || *scale <= 0.0 {
-                    return Err(DataEquilibrationError::InvalidNumericalResult);
+            }
+            // With primal scaling fixed, each constraint row scales linearly.
+            norms[n..].fill(0.0);
+            crate::matrix::visit_entries(problem.a(), |row, column, value| {
+                norms[n + row] =
+                    norms[n + row].max(value.abs() * scaling[column] * scaling[n + row]);
+            });
+            cone_compatible_norms(problem.cones(), &mut norms[n..]);
+            for (scale, norm) in scaling[n..].iter_mut().zip(&norms[n..]) {
+                if *norm > 0.0 {
+                    *scale /= norm;
                 }
+            }
+            if scaling
+                .iter()
+                .any(|scale| !scale.is_finite() || *scale <= 0.0)
+            {
+                return Err(DataEquilibrationError::InvalidNumericalResult);
             }
         }
 
+        // Balance the linear-data column once after the matrices.
+        let linear_norm = problem
+            .c()
+            .iter()
+            .zip(&scaling[..n])
+            .chain(problem.b().iter().zip(&scaling[n..]))
+            .map(|(value, scale)| (value * scale).abs())
+            .fold(0.0_f64, f64::max);
+        let tau = 1.0 / linear_norm.max(1.0);
+        if !tau.is_finite() || tau <= 0.0 {
+            return Err(DataEquilibrationError::InvalidNumericalResult);
+        }
         // Unit scaling needs neither a matrix copy nor repeated validation.
-        if scaling.iter().all(|&scale| scale == 1.0) {
+        if tau == 1.0 && scaling.iter().all(|&scale| scale == 1.0) {
             return Ok(Self::unscaled(problem));
         }
 
@@ -189,19 +216,20 @@ impl<'a> EquilibratedProblem<'a> {
             .c()
             .iter()
             .zip(&x)
-            .map(|(value, scale)| scale * value)
+            .map(|(value, scale)| tau * scale * value)
             .collect();
         let b = problem
             .b()
             .iter()
             .zip(&y)
-            .map(|(value, scale)| scale * value)
+            .map(|(value, scale)| tau * scale * value)
             .collect();
         let scaled = Problem::from_upper_triangle(p, c, a, b, problem.cones().to_vec())?;
         Ok(Self {
             problem: Cow::Owned(scaled),
             x,
             y,
+            tau,
         })
     }
 }
@@ -326,9 +354,9 @@ mod tests {
                 crate::matrix::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap();
             let problem = Problem::new(
                 Some(matrix.clone()),
-                vec![1e6, -1e8],
+                vec![0.0, 0.0],
                 matrix,
-                vec![1e10, -1e4],
+                vec![0.0, 0.0],
                 vec![Cone::Zero(2)],
             )
             .unwrap();
@@ -347,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn matrix_ruiz_preserves_the_qp_under_coordinate_mapping() {
+    fn homogeneous_ruiz_preserves_the_qp_under_coordinate_mapping() {
         {
             let original = problem();
             let equilibrated = EquilibratedProblem::new(
@@ -370,15 +398,21 @@ mod tests {
             let original_px = original.p_mul(&x);
             let scaled_objective = 0.5 * dot(&scaled_x, &scaled_px) + dot(scaled.c(), &scaled_x);
             let original_objective = 0.5 * dot(&x, &original_px) + dot(original.c(), &x);
-            assert_close(scaled_objective, original_objective);
-            assert_close(dot(&scaled_y, &scaled_s), dot(&y, &s));
+            assert_close(
+                scaled_objective,
+                equilibrated.tau.powi(2) * original_objective,
+            );
+            assert_close(
+                dot(&scaled_y, &scaled_s),
+                equilibrated.tau.powi(2) * dot(&y, &s),
+            );
 
             let scaled_ax = matrix_vector(scaled.a(), &scaled_x);
             let original_ax = matrix_vector(original.a(), &x);
             for row in 0..original.constraint_count() {
                 assert_close(
                     scaled_ax[row] - scaled.b()[row],
-                    equilibrated.y[row] * (original_ax[row] - original.b()[row]),
+                    equilibrated.tau * equilibrated.y[row] * (original_ax[row] - original.b()[row]),
                 );
             }
 
@@ -387,7 +421,8 @@ mod tests {
             for column in 0..original.variable_count() {
                 assert_close(
                     scaled_px[column] + scaled_aty[column] + scaled.c()[column],
-                    equilibrated.x[column]
+                    equilibrated.tau
+                        * equilibrated.x[column]
                         * (original_px[column] + original_aty[column] + original.c()[column]),
                 );
             }
@@ -395,7 +430,7 @@ mod tests {
     }
 
     #[test]
-    fn matrix_ruiz_balances_the_quadratic_and_constraint_matrices() {
+    fn one_matrix_pass_and_linear_column_normalization_bound_all_data() {
         let original = problem();
         let equilibrated = EquilibratedProblem::new(
             &original,
@@ -406,15 +441,23 @@ mod tests {
         )
         .unwrap();
         let scaled = equilibrated.problem();
+        assert_close(equilibrated.x[0], 0.5);
+        assert_close(equilibrated.x[1], 1.0 / 3.0);
+        assert_close(equilibrated.y[0], 1.0);
+        assert_close(equilibrated.y[1], 3.0 / 7.0);
+        assert_close(equilibrated.tau, 0.2);
         let mut norms = vec![0.0; scaled.variable_count() + scaled.constraint_count()];
-
         accumulate_matrix_norms(scaled, &vec![1.0; norms.len()], &mut norms);
-
-        for norm in norms {
-            assert!(
-                (norm - 1.0).abs() <= Settings::default().equilibration_tolerance,
-                "row norm is {norm}"
-            );
+        assert!(norms.iter().all(|norm| *norm <= 1.0 + 1e-12));
+        for norm in &norms[scaled.variable_count()..] {
+            assert_close(*norm, 1.0);
         }
+        let linear_norm = scaled
+            .c()
+            .iter()
+            .chain(scaled.b())
+            .map(|value| value.abs())
+            .fold(0.0_f64, f64::max);
+        assert_close(linear_norm, 1.0);
     }
 }

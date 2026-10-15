@@ -198,6 +198,15 @@ pub(crate) struct Resolvent<'a> {
     /// `(x2, y2)`, the solution of the `(-c, b)` column.
     direction: &'a [f64],
     alpha: f64,
+    /// Anchor contribution tau_a (-c, b) - K z_a, shared by every RHS.
+    #[cfg(test)]
+    rhs_offset: Vec<f64>,
+    /// P x_a + A' y_a + c tau_a, without any resolvent shift.
+    dual_residual: Vec<f64>,
+    /// b tau_a - A x_a, without forming and then subtracting the slack.
+    primal_rhs: Vec<f64>,
+    /// d_x' P d_x, shared by every increment polynomial.
+    direction_quadratic: f64,
     /// Current iterate, not the corrector surrogate, for the tau fallback.
     state: &'a State,
     /// Computed only if a root fails; shared by subsequent RHS solves.
@@ -271,6 +280,42 @@ impl<'a> Resolvent<'a> {
         let (x2, y2) = direction.split_at(n);
         // Positive identity from the KKT equations, with d = H + shift I.
         let alpha = tau_leading_coefficient(shift, x2, y2, &d_diagonal);
+        let direction_quadratic = problem
+            .p_mul_opt(x2)
+            .as_ref()
+            .map_or(0.0, |px2| dot(x2, px2));
+        let mut dual_residual = problem.p_mul(state.x());
+        for (out, c) in dual_residual.iter_mut().zip(problem.c()) {
+            *out += state.tau() * c;
+        }
+        let mut primal_rhs: Vec<f64> = problem.b().iter().map(|b| -state.tau() * b).collect();
+        crate::matrix::constraint_accumulate(
+            problem.a(),
+            state.x(),
+            state.y(),
+            [&mut dual_residual[..]],
+            [&mut primal_rhs[..]],
+            |product| [product],
+        );
+        crate::matrix::scale(&mut primal_rhs, -1.0);
+        #[cfg(test)]
+        let rhs_offset = {
+            let mut rhs = Vec::with_capacity(n + problem.constraint_count());
+            rhs.extend(
+                dual_residual
+                    .iter()
+                    .zip(state.x())
+                    .map(|(rd, x)| -rd - shift * x),
+            );
+            rhs.extend(
+                primal_rhs
+                    .iter()
+                    .zip(&d_diagonal)
+                    .zip(state.y())
+                    .map(|((primal, d), y)| primal + d * y),
+            );
+            rhs
+        };
 
         Ok(Self {
             problem,
@@ -281,6 +326,11 @@ impl<'a> Resolvent<'a> {
             d_factor,
             direction,
             alpha,
+            #[cfg(test)]
+            rhs_offset,
+            dual_residual,
+            primal_rhs,
+            direction_quadratic,
             state,
             fallback: OnceCell::new(),
         })
@@ -288,7 +338,7 @@ impl<'a> Resolvent<'a> {
 
     /// Solve the shifted system with right-hand side `(r_x, r_y, r_tau)` at
     /// target `mu`, accepting zero tau candidates without a boundary marker.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn solve(
         &mut self,
         r_x: &[f64],
@@ -309,6 +359,7 @@ impl<'a> Resolvent<'a> {
     /// `solve` with the stacked right-hand side `(r_x, -r_y)` prebuilt.
     /// Solve this changing right-hand side directly; only the constant data
     /// direction is carried between factorizations.
+    #[cfg(test)]
     pub(crate) fn solve_rhs(
         &mut self,
         rhs: &[f64],
@@ -322,33 +373,110 @@ impl<'a> Resolvent<'a> {
             return Err(JosephyError::InvalidTauPolynomial);
         }
 
-        let mut constant = self.pattern.solve(
+        let mut residual = rhs.to_vec();
+        crate::matrix::add_assign(&mut residual, &self.rhs_offset);
+        self.solve_increment_rhs(&residual, r_tau, mu)
+    }
+
+    pub(crate) fn dual_residual(&self) -> &[f64] {
+        &self.dual_residual
+    }
+
+    pub(crate) fn primal_rhs(&self) -> &[f64] {
+        &self.primal_rhs
+    }
+
+    /// Solve K u = residual about the current iterate and recover
+    /// z = z_a + u + (tau - tau_a) d. Callers can form residual directly,
+    /// avoiding cancellation of H y with s and shifted anchor terms.
+    pub(crate) fn solve_increment_rhs(
+        &mut self,
+        residual: &[f64],
+        r_tau: f64,
+        mu: f64,
+    ) -> Result<ResolventSolution, JosephyError> {
+        let n = self.problem.variable_count();
+        ensure_rhs_length(
+            "increment rhs",
+            n + self.problem.constraint_count(),
+            residual,
+        )?;
+        if !r_tau.is_finite() || !mu.is_finite() || mu < 0.0 {
+            return Err(JosephyError::InvalidTauPolynomial);
+        }
+        let anchor_tau = self.state.tau();
+        let mut increment = self.pattern.solve(
             self.problem,
             self.factorization,
             self.shift,
             &self.d_diagonal,
             self.d_factor.as_deref().unwrap_or(&self.d_diagonal),
-            rhs,
+            residual,
             None,
         )?;
-        let q_constant = q_dot(self.problem, &constant);
-        let (tau, used_tau_fallback) = match self.solve_tau(&constant, q_constant, r_tau, mu) {
-            Some(tau) => (tau, false),
-            None => (self.linearized_tau(&constant, q_constant, r_tau, mu), true),
+        let mut base = increment.clone();
+        let (base_x, base_y) = base.split_at_mut(n);
+        crate::matrix::add_assign(base_x, self.state.x());
+        crate::matrix::add_assign(base_y, self.state.y());
+        let (delta_tau, tau, used_tau_fallback) = match self.solve_tau_increment(&base, r_tau, mu) {
+            Some((delta_tau, tau)) => (delta_tau, tau, false),
+            None => {
+                // The fallback expects the point-coordinate particular solution.
+                crate::matrix::update(&mut base, self.direction, |base, direction| {
+                    (-anchor_tau).mul_add(direction, base)
+                });
+                let q_constant = q_dot(self.problem, &base);
+                let tau = self.linearized_tau(&base, q_constant, r_tau, mu);
+                (tau - anchor_tau, tau, true)
+            }
         };
-        crate::matrix::update(&mut constant, self.direction, |constant, direction| {
-            tau.mul_add(direction, constant)
+        crate::matrix::update(&mut increment, self.direction, |increment, direction| {
+            delta_tau.mul_add(direction, increment)
         });
+        let (x, y) = increment.split_at_mut(n);
+        crate::matrix::add_assign(x, self.state.x());
+        crate::matrix::add_assign(y, self.state.y());
         Ok(ResolventSolution {
-            xy: constant,
+            xy: increment,
             primal_len: n,
             tau,
             used_tau_fallback,
         })
     }
 
-    // Preserve the acceptance thresholds and fallback
-    // policy, with a positive KKT identity and scaled root arithmetic.
+    /// Substitute z = base + delta_tau * direction and
+    /// tau = anchor_tau + delta_tau into the same scalar resolvent equation.
+    /// Both LP and QP use the existing scaled quadratic-root routine.
+    fn solve_tau_increment(&self, base: &[f64], r_tau: f64, mu: f64) -> Option<(f64, f64)> {
+        let n = self.problem.variable_count();
+        let anchor_tau = self.state.tau();
+        let q_base = q_dot(self.problem, base);
+        let g = self.shift * anchor_tau - r_tau - q_base;
+        // h(d) = rho - alpha - d_x' P d_x from the KKT equations.
+        // Use the same positive identity as the leading coefficient, rather
+        // than separately summing the data column's potentially large terms.
+        let mut b = self.alpha * anchor_tau + g + anchor_tau * self.direction_quadratic;
+        let mut c = anchor_tau * g - mu;
+        if let Some(p_base) = self.problem.p_mul_opt(&base[..n]) {
+            b -= 2.0 * dot(&self.direction[..n], &p_base);
+            c -= dot(&base[..n], &p_base);
+        }
+        let delta_tau = quadratic_root(self.alpha, b, c, 1e-9)?;
+        let tau = anchor_tau + delta_tau;
+        if !tau.is_finite() || tau < -1e-10 {
+            return None;
+        }
+        // Preserve the existing acceptance tolerance and zero clamp, while
+        // retaining the computed increment when no clamp was needed.
+        if tau < 0.0 {
+            Some((-anchor_tau, 0.0))
+        } else {
+            Some((delta_tau, tau))
+        }
+    }
+
+    // Point-coordinate reference retained only for algebra-equivalence tests.
+    #[cfg(test)]
     fn solve_tau(&self, constant: &[f64], q_constant: f64, r_tau: f64, mu: f64) -> Option<f64> {
         let n = self.problem.variable_count();
         let x1 = &constant[..n];
@@ -925,6 +1053,7 @@ fn full_residual_and_denominator(
 }
 
 /// CPO3's admissible root; `None` requests the bounded fallback.
+#[cfg(test)]
 fn tau_root(a: f64, b: f64, c: f64) -> Option<f64> {
     let tau = quadratic_root(a, b, c, 1e-9)?;
     (tau >= -1e-10).then(|| tau.max(0.0))
@@ -1013,6 +1142,100 @@ mod tests {
             (actual - expected).abs() <= TOLERANCE * (1.0 + actual.abs().max(expected.abs())),
             "expected {expected}, got {actual}"
         );
+    }
+
+    #[test]
+    fn increment_resolvent_matches_point_equations_for_lp_and_qp() {
+        for quadratic in [false, true] {
+            let original = problem();
+            let problem = Problem::from_upper_triangle(
+                if quadratic {
+                    original.p().cloned()
+                } else {
+                    None
+                },
+                original.c().to_vec(),
+                original.a().clone(),
+                original.b().to_vec(),
+                original.cones().to_vec(),
+            )
+            .unwrap();
+            let state = State::new(vec![0.3, -0.2], vec![0.0, 1.4], vec![0.1, 1.2], 0.9).unwrap();
+            let mut cache = KktCache::new();
+            let mut resolvent = Resolvent::new(
+                &problem,
+                &state,
+                &[0.0, 1.4 / 1.2],
+                0.3,
+                &KktSettings::new(LinearSolver::Faer),
+                &mut cache,
+            )
+            .unwrap();
+            for (rhs, r_tau, mu) in [
+                ([1.0, -2.0, 0.4, -0.7], 0.7, 0.3),
+                ([-0.2, 0.6, -0.3, 0.9], -0.2, 0.0),
+            ] {
+                let mut expected = resolvent
+                    .pattern
+                    .solve(
+                        &problem,
+                        resolvent.factorization,
+                        resolvent.shift,
+                        &resolvent.d_diagonal,
+                        &resolvent.d_diagonal,
+                        &rhs,
+                        None,
+                    )
+                    .unwrap();
+                let expected_tau = resolvent
+                    .solve_tau(&expected, q_dot(&problem, &expected), r_tau, mu)
+                    .unwrap();
+                crate::matrix::update(&mut expected, resolvent.direction, |value, direction| {
+                    expected_tau.mul_add(direction, value)
+                });
+                let actual = resolvent.solve_rhs(&rhs, r_tau, mu).unwrap();
+                assert!(!actual.used_tau_fallback);
+                assert_close(actual.tau, expected_tau);
+                for (&actual, &expected) in actual.xy.iter().zip(&expected) {
+                    assert_close(actual, expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn increment_resolvent_preserves_a_small_point_between_large_columns() {
+        // K = rho, d = -1/rho, and the point-coordinate particular solution
+        // is 1/rho. Recovering x near one by adding these columns loses its
+        // significant digits. The displacement equation remains well scaled.
+        let rho = 1e-16;
+        let r_tau = rho - 1.0;
+        let problem = Problem::new(
+            None,
+            vec![1.0],
+            crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let state = State::new(vec![1.0], vec![], vec![], 1.0).unwrap();
+        let mut cache = KktCache::new();
+        let mut resolvent = Resolvent::new(
+            &problem,
+            &state,
+            &[],
+            rho,
+            &KktSettings::new(LinearSolver::Faer),
+            &mut cache,
+        )
+        .unwrap();
+        let actual = resolvent.solve_rhs(&[1.0], r_tau, 0.0).unwrap();
+        // Solve the two scalar equations without subtracting large columns.
+        let expected_x = (rho - r_tau) / (1.0 + rho * rho);
+        let expected_tau = (1.0 + rho * r_tau) / (1.0 + rho * rho);
+        assert!(!actual.used_tau_fallback);
+        assert_close(actual.x()[0], expected_x);
+        assert_close(actual.tau, expected_tau);
     }
 
     #[test]
@@ -1568,8 +1791,9 @@ mod tests {
 
         let boundary = resolvent.solve(&[0.0; 2], &[0.0; 2], -1.0, 0.0).unwrap();
         assert_eq!(boundary.tau, 0.0);
-        assert_eq!(boundary.x(), [0.0; 2]);
-        assert_eq!(boundary.y(), [0.0; 2]);
+        for &value in boundary.x().iter().chain(boundary.y()) {
+            assert_close(value, 0.0);
+        }
         assert!(resolvent.fallback.get().is_none());
 
         let interior = resolvent.solve(&[0.0; 2], &[0.0; 2], -1.0, 0.1).unwrap();

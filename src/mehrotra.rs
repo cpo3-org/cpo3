@@ -32,7 +32,7 @@ pub(crate) enum StepKind {
 pub(crate) struct Step {
     /// True KKT shift used for this step (legacy diagnostic name).
     pub(crate) mu_step: f64,
-    /// Complementarity of the state used to construct this step.
+    /// Complementarity used to construct this step.
     pub(crate) mu_before: f64,
     pub(crate) recentered: bool,
     pub(crate) state: State,
@@ -262,6 +262,7 @@ fn accepted_tau(current: f64, candidate: f64, alpha: f64) -> Result<f64, Embeddi
 
 /// Nesterov--Todd scaling `H_k` and Jordan inverse `y_k^{-1}` at one iterate.
 pub(crate) struct Scaling {
+    /// Complementarity in the current spherical coordinates.
     mu: f64,
     pub(crate) h: Vec<f64>,
     pub(crate) y_inverse: Vec<f64>,
@@ -293,16 +294,14 @@ pub(crate) struct Predictor {
     /// Second-order correction, reusing the slack-displacement allocation.
     pub(crate) correction: Vec<f64>,
     pub(crate) alpha_affine: f64,
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) mu_affine: f64,
     pub(crate) sigma: f64,
 }
 
 /// Solve the surrogate system at target zero with the current iterate as
-/// surrogate, then evaluate Mehrotra's centering heuristic.
+/// surrogate, then evaluate the step-length centering heuristic.
 ///
 /// The numerical shift `rho` is also the predictor anchor weight.
-/// Centering uses the actual complementarity, independently of this shift.
+/// Centering uses complementarity, independently of numerical shift retries.
 pub(crate) fn predictor(
     embedding: &Embedding<'_>,
     state: &State,
@@ -313,12 +312,13 @@ pub(crate) fn predictor(
     if !rho.is_finite() || rho <= 0.0 {
         return Err(MehrotraError::InvalidDualityMeasure(rho));
     }
-    // Stacked right-hand side (r_x, -r_y) = (rho x, -(rho y + s)).
+    // Current-anchor predictor RHS: (-r_dual, b tau - A x).
+    // H y = s cancels algebraically, before floating-point evaluation.
     let mut rhs = Vec::with_capacity(state.x().len() + state.y().len());
-    rhs.extend(state.x().iter().map(|x| rho * x));
-    rhs.extend(state.y().iter().zip(state.s()).map(|(y, s)| -(rho * y + s)));
+    rhs.extend(resolvent.dual_residual().iter().map(|rd| -rd));
+    rhs.extend_from_slice(resolvent.primal_rhs());
     let r_tau = rho * state.tau();
-    let affine = resolvent.solve_rhs(&rhs, r_tau, 0.0)?;
+    let affine = resolvent.solve_increment_rhs(&rhs, r_tau, 0.0)?;
 
     let dy = difference(affine.y(), state.y());
     let mut ds = dy
@@ -334,10 +334,11 @@ pub(crate) fn predictor(
     let alpha_affine = geometry
         .step_to_boundary_from_interior(state.s(), &ds)?
         .min(geometry.step_to_boundary_from_interior(state.y(), &dy)?);
-    let mu_affine = affine_trial_mu(state, &affine, &ds, &dy, alpha_affine, embedding.nu())?;
     let raw_mu = scaling.mu;
+    // A long feasible affine step supports a smaller centering target.
+    // Keep mu as current complementarity; only the dimensionless sigma changes.
     let sigma = if raw_mu > 0.0 {
-        (mu_affine / raw_mu).powi(3).clamp(0.0, 1.0)
+        (1.0 - alpha_affine).powi(3)
     } else {
         0.0
     };
@@ -345,7 +346,7 @@ pub(crate) fn predictor(
         return Err(EmbeddingError::NonFiniteResult.into());
     }
 
-    // The affine boundary and trial complementarity are complete. Reuse
+    // The affine boundary is complete. Reuse
     // ds for the correction and release dy before any centered solve.
     if embedding.nu() > 0 {
         geometry.negated_triple_product_in_place(&scaling.y_inverse, &mut ds, &dy)?;
@@ -360,50 +361,8 @@ pub(crate) fn predictor(
         s_affine,
         correction: ds,
         alpha_affine,
-        mu_affine,
         sigma,
     })
-}
-
-/// Complementarity of the boundary-limited predictor probe after projection
-/// onto ||(x, y, tau)|| = sqrt(nu + 1). Leave the full predictor unchanged.
-fn affine_trial_mu(
-    state: &State,
-    affine: &ResolventSolution,
-    ds: &[f64],
-    dy: &[f64],
-    alpha: f64,
-    nu: usize,
-) -> Result<f64, EmbeddingError> {
-    if nu == 0 {
-        return Ok(0.0);
-    }
-    let x = state
-        .x()
-        .iter()
-        .zip(affine.x())
-        .map(|(x, target)| x + alpha * (target - x));
-    let y = state.y().iter().zip(dy).map(|(y, dy)| y + alpha * dy);
-    let tau = state.tau() + alpha * (affine.tau - state.tau());
-    let norm = crate::matrix::stable_norm(x.chain(y).chain(std::iter::once(tau)));
-    if !norm.is_finite() || norm <= 0.0 {
-        return Err(EmbeddingError::NonFiniteResult);
-    }
-    // Divide before multiplying to avoid overflow/underflow in the raw
-    // complementarity and squared norm of a homogeneously scaled probe.
-    let mu = state
-        .s()
-        .iter()
-        .zip(ds)
-        .zip(state.y())
-        .zip(dy)
-        .map(|(((s, ds), y), dy)| ((s + alpha * ds) / norm) * ((y + alpha * dy) / norm))
-        .sum::<f64>()
-        * ((nu as f64 + 1.0) / nu as f64);
-    if !mu.is_finite() {
-        return Err(EmbeddingError::NonFiniteResult);
-    }
-    Ok(mu)
 }
 
 /// The centered iterate and its slack, both at target `mu_c = sigma mu_k`.
@@ -468,21 +427,34 @@ fn centered_solve(
 ) -> Result<(ResolventSolution, Vec<f64>), MehrotraError> {
     let residual_weight = rho - mu_centered;
     let m = state.y().len();
-    // Stacked right-hand side (r_x, -r_y).
+    // Form the increment RHS from actual feasibility residuals. This
+    // cancels H y = s and common shifted anchor terms algebraically.
+    let mu_over_y = |index: usize| {
+        if scaling.y_inverse[index] > 0.0 {
+            mu_centered / state.y()[index]
+        } else {
+            0.0
+        }
+    };
     let mut rhs = Vec::with_capacity(state.x().len() + m);
-    rhs.extend(anchor_x.iter().map(|x| residual_weight * x));
+    rhs.extend(
+        anchor_x
+            .iter()
+            .zip(state.x())
+            .zip(resolvent.dual_residual())
+            .map(|((anchor, current), rd)| -rd + rho * (anchor - current) - mu_centered * anchor),
+    );
     rhs.extend((0..m).map(|index| {
-        -(residual_weight * anchor_y[index]
-            + state.s()[index]
-            + mu_centered * scaling.y_inverse[index]
-            + correction.map_or(0.0, |values| values[index]))
+        resolvent.primal_rhs()[index] - rho * (anchor_y[index] - state.y()[index])
+            + mu_centered * anchor_y[index]
+            - mu_over_y(index)
+            - correction.map_or(0.0, |values| values[index])
     }));
     let r_tau = residual_weight * anchor_tau;
-    let centered = resolvent.solve_rhs(&rhs, r_tau, mu_centered)?;
+    let centered = resolvent.solve_increment_rhs(&rhs, r_tau, mu_centered)?;
     let s_centered: Vec<f64> = (0..m)
         .map(|index| {
-            mu_centered * scaling.y_inverse[index]
-                - scaling.h[index] * (centered.y()[index] - state.y()[index])
+            mu_over_y(index) - scaling.h[index] * (centered.y()[index] - state.y()[index])
                 + correction.map_or(0.0, |values| values[index])
         })
         .collect();
@@ -499,7 +471,7 @@ fn difference(left: &[f64], right: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cone, LinearSolver, Problem, linear_system::LinearSystemError, matrix::dot};
+    use crate::{Cone, LinearSolver, Problem, linear_system::LinearSystemError};
 
     const TOLERANCE: f64 = 1e-12;
 
@@ -574,27 +546,6 @@ mod tests {
             });
         assert_eq!(result, Err(error));
         assert_eq!(calls, 1);
-    }
-
-    #[test]
-    fn affine_complementarity_matches_a_fixed_reference_and_handles_no_barrier() {
-        // At alpha = 1/4, (x, y, tau) = (1, 1/2, 3/2) and s = 1/2.
-        // Thus mu_affine = 2 * (1/4) / (7/2) = 1/7 at every common scale.
-        for scale in [1e-200, 1.0, 1e200] {
-            let state = State::new(vec![0.0], vec![scale], vec![scale], scale).unwrap();
-            let affine = ResolventSolution {
-                xy: vec![4.0 * scale, -scale],
-                primal_len: 1,
-                tau: 3.0 * scale,
-                used_tau_fallback: false,
-            };
-            let ds = [-2.0 * scale];
-            let dy = [-2.0 * scale];
-            let mu = affine_trial_mu(&state, &affine, &ds, &dy, 0.25, 1).unwrap();
-            assert_close(mu, 1.0 / 7.0);
-            assert_close(mu.powi(3), 1.0 / 343.0);
-            assert_eq!(affine_trial_mu(&state, &affine, &ds, &dy, 0.25, 0), Ok(0.0));
-        }
     }
 
     #[test]
@@ -837,47 +788,15 @@ mod tests {
             }
             assert!(result.alpha_affine > 0.0 && result.alpha_affine <= 1.0);
             assert!((0.0..=1.0).contains(&result.sigma));
-            assert!(result.mu_affine >= 0.0);
-            let probe = |base: &[f64], target: &[f64]| {
-                base.iter()
-                    .zip(target)
-                    .map(|(base, target)| base + result.alpha_affine * (target - base))
-                    .collect::<Vec<_>>()
-            };
-            let x = probe(state.x(), result.affine.x());
-            let y = probe(state.y(), result.affine.y());
-            let s = probe(state.s(), &result.s_affine);
-            let tau = state.tau() + result.alpha_affine * (result.affine.tau - state.tau());
-            let norm_sq = dot(&x, &x) + dot(&y, &y) + tau * tau;
-            let embedding = Embedding::new(&problem).unwrap();
-            let nu = embedding.nu() as f64;
-            let expected_mu = (nu + 1.0) * dot(&s, &y) / (nu * norm_sq);
-            assert_close(result.mu_affine, expected_mu);
-            assert_close(
-                result.sigma,
-                (expected_mu / embedding.duality_measure(&state))
-                    .powi(3)
-                    .clamp(0.0, 1.0),
-            );
+            assert_close(result.sigma, (1.0 - result.alpha_affine).powi(3));
         }
     }
 
     #[test]
-    fn predictor_slack_vanishes_on_zero_rows_and_is_exact_when_the_step_is_full() {
+    fn predictor_slack_vanishes_on_zero_rows() {
         let problem = quadratic_problem();
-        let (_, mu, _, result) = run_predictor(&problem);
+        let (_, _, _, result) = run_predictor(&problem);
         assert_eq!(result.s_affine[0], 0.0);
-        if result.alpha_affine == 1.0 {
-            let nu = problem.constraint_count() as f64 - 1.0;
-            let norm_sq = dot(result.affine.x(), result.affine.x())
-                + dot(result.affine.y(), result.affine.y())
-                + result.affine.tau.powi(2);
-            assert_close(
-                result.mu_affine,
-                (nu + 1.0) * dot(&result.s_affine, result.affine.y()) / (nu * norm_sq),
-            );
-        }
-        assert!(result.mu_affine < mu, "the affine step must reduce mu");
     }
 
     #[test]
@@ -885,7 +804,9 @@ mod tests {
         for problem in [quadratic_problem(), linear_problem()] {
             let (state, mu, first, second) = run_both(&problem);
             assert_close(second.mu_centered, first.sigma * mu);
-            assert!(second.centered.tau > 0.0);
+            // A zero centering target can place the trial on the boundary.
+            // The accepted (damped) iterate is tested separately for interiority.
+            assert!(second.centered.tau.is_finite() && second.centered.tau >= 0.0);
             let nonneg = |index: usize| problem.cones()[0] != Cone::Zero(1) || index > 0;
             for index in 0..problem.constraint_count() {
                 let (s, y) = (state.s()[index], state.y()[index]);
@@ -932,7 +853,6 @@ mod tests {
             s_affine: state.s().to_vec(),
             correction: vec![-0.0; state.s().len()],
             alpha_affine: 1.0,
-            mu_affine: mu,
             sigma: 1.0,
         };
         let second = corrector(&state, mu, &scaling, &mut pure, &mut resolvent).unwrap();

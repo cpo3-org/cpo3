@@ -41,7 +41,9 @@ pub struct Settings {
     /// falls back to the canonical point.
     pub cvxopt_init: bool,
     pub data_equilibration: Equilibration,
-    /// Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
+    /// Maximum equilibration sweeps: primal columns, then constraint rows.
+    /// The linear data is normalized once after the matrix sweeps.
+    /// Zero leaves all problem data unscaled.
     pub max_equilibration_passes: usize,
     /// Nonnegative tolerance on scaled P/A row infinity norms relative to one.
     pub equilibration_tolerance: f64,
@@ -63,9 +65,10 @@ pub struct Settings {
     /// Initial requested KKT shift floor for problems with no barrier. Numerical failures raise
     /// the shift; accurate steps relax the numerical-retry floor. Stalled outer
     /// progress can also relax the requested floor for barrier-free problems.
-    /// Centering targets always use the actual complementarity.
+    /// Centering targets use complementarity in the current spherical coordinates.
     pub initial_shift_floor: f64,
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
+    /// The default leaves a relative margin of sqrt(machine epsilon).
     pub step_fraction: f64,
     /// Most Gondzio centrality correctors per iteration, each one extra solve
     /// on the iteration's factorization; 0 disables them.
@@ -99,7 +102,7 @@ impl Default for Settings {
             force_warm_start: false,
             cvxopt_init: false,
             data_equilibration: Equilibration::Ruiz,
-            max_equilibration_passes: 20,
+            max_equilibration_passes: 1,
             equilibration_tolerance: 1e-2,
 
             linear_solver: LinearSolver::Faer,
@@ -109,8 +112,8 @@ impl Default for Settings {
             refinement_tolerance: 1e-8,
 
             initial_shift_floor: 1e-10,
-            step_fraction: 0.999,
-            max_centrality_correctors: 1,
+            step_fraction: 1.0 - f64::EPSILON.sqrt(),
+            max_centrality_correctors: 0,
             corrector_gate: 0.9,
             governor: false,
             max_recenters: 8,
