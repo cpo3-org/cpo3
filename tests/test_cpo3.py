@@ -91,7 +91,7 @@ def test_cvxopt_initialization_solves_and_is_reported() -> None:
     assert math.isfinite(cvxopt.info.init_proximity)
     # The initialization solve is counted with the main loop's linear algebra.
     assert cvxopt.info.factorizations >= 1
-    assert cvxopt.info.kkt_solves >= 1
+    assert cvxopt.info.primary_solves >= 1
 
 
 def test_presolved_problem_reports_no_initialization() -> None:
@@ -533,7 +533,7 @@ def test_untriggered_governor_preserves_iterates_and_work_counts() -> None:
         assert solution.status is cpo3.SolverStatus.SOLVED
         assert solution.info.recenter_steps == 0
         assert solution.info.factorizations == solution.info.iters
-        assert solution.info.kkt_solves == 3 * solution.info.iters
+        assert solution.info.primary_solves == 3 * solution.info.iters
     np.testing.assert_array_equal(solutions[0].x, solutions[1].x)
     np.testing.assert_array_equal(solutions[0].y, solutions[1].y)
     np.testing.assert_array_equal(solutions[0].s, solutions[1].s)
@@ -552,7 +552,7 @@ def test_barrier_problem_uses_complementarity_instead_of_initial_floor() -> None
     assert 0 <= solution.info.recenter_steps <= 8
     assert solution.info.factorizations == solution.info.iters < 100
     assert (
-        solution.info.kkt_solves
+        solution.info.primary_solves
         == 3 * solution.info.iters - solution.info.recenter_steps
     )
     assert settings.initial_shift_floor == 100.0
@@ -572,6 +572,39 @@ def test_work_counters_on_early_returns(limit: str) -> None:
     expected = 0 if limit == "time" else 1
     assert solution.info.iters == solution.info.factorizations == expected
     assert solution.info.recenter_steps == 0
+
+
+@pytest.mark.parametrize("backend", [cpo3.LinearSolver.FAER, cpo3.LinearSolver.FERAL])
+def test_initial_and_refinement_solves_are_separate(backend: Any) -> None:
+    problem = cpo3.Problem(
+        P=None,
+        c=[1.0],
+        A=scipy.sparse.csc_matrix([[-1.0]]),
+        b=[-1.0],
+        cones=[cpo3.NonnegativeCone(1)],
+    )
+    solution = cpo3.solve(
+        problem,
+        settings=cpo3.Settings(
+            presolve=False,
+            linear_solver=backend,
+            min_static_regularization=1e-4,
+            refinement_tolerance=1e-14,
+            max_iters=1000,
+        ),
+    )
+    assert solution.status is cpo3.SolverStatus.SOLVED
+    assert solution.info.primary_solves >= 3 * solution.info.iters
+    assert solution.info.refinement_solves > 0
+
+    unrefined = cpo3.solve(
+        problem,
+        settings=cpo3.Settings(
+            presolve=False, linear_solver=backend, max_iters=1, max_refinement_steps=0
+        ),
+    )
+    assert unrefined.info.primary_solves == 3
+    assert unrefined.info.refinement_solves == 0
 
 
 @pytest.mark.parametrize("presolve", [False, True])

@@ -751,7 +751,7 @@ impl KktPattern {
         rhs: &[f64],
         initial: Option<(&[f64], &[f64])>,
     ) -> Result<Vec<f64>, LinearSystemError> {
-        factorization.stats_mut().kkt_solves += 1;
+        factorization.stats_mut().primary_solves += 1;
         let initial = match initial {
             Some((x, y)) => {
                 debug_assert_eq!(x.len(), problem.variable_count());
@@ -1553,7 +1553,7 @@ mod tests {
         // The preconditioner alone solves to 1e8. True-system refinement must
         // attempt corrections, but cannot resolve this weak direction in 30.
         assert!(solution[0] > 1e8 && solution[0] < 1e14);
-        assert!(factor.stats().refinement_passes > 0);
+        assert!(factor.stats().refinement_solves > 0);
         assert_eq!(factor.stats().refinement_settled, 1);
         assert!((1.0 - 1e-14 * solution[0]).abs() > 0.99);
     }

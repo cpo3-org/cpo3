@@ -367,12 +367,20 @@ class SolutionInfo:
         return self._native.presolve_parallel_comparisons
 
     @property
-    def kkt_solves(self) -> int:
-        return self._native.kkt_solves
+    def primary_solves(self) -> int:
+        """Initial linear solves attempted for KKT right-hand sides.
+
+        Includes initialization and internal retries, but excludes refinement.
+        """
+        return self._native.primary_solves
 
     @property
-    def refinement_passes(self) -> int:
-        return self._native.refinement_passes
+    def refinement_solves(self) -> int:
+        """Correction linear solves attempted, including internally failed attempts.
+
+        Excludes the initial solve for each right-hand side and residual checks.
+        """
+        return self._native.refinement_solves
 
     @property
     def refinement_settled(self) -> int:

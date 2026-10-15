@@ -255,13 +255,13 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn kkt_solves(&self) -> usize {
-        self.inner.linear_algebra.kkt_solves
+    fn primary_solves(&self) -> usize {
+        self.inner.linear_algebra.primary_solves
     }
 
     #[getter]
-    fn refinement_passes(&self) -> usize {
-        self.inner.linear_algebra.refinement_passes
+    fn refinement_solves(&self) -> usize {
+        self.inner.linear_algebra.refinement_solves
     }
 
     #[getter]

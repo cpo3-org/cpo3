@@ -54,10 +54,12 @@ impl From<&Settings> for KktSettings {
 pub struct LinearAlgebraStats {
     /// Numeric factorization attempts, including failures.
     pub factorizations: usize,
-    /// Refined KKT solves requested.
-    pub kkt_solves: usize,
-    /// Correction back-solves taken by iterative refinement.
-    pub refinement_passes: usize,
+    /// Initial linear solves attempted for KKT right-hand sides, including failures.
+    /// Includes initialization and retries, but excludes refinement corrections.
+    pub primary_solves: usize,
+    /// Correction linear solves attempted by iterative refinement, including failures.
+    /// Excludes the initial solve for each right-hand side and residual evaluations.
+    pub refinement_solves: usize,
     /// Refinements that returned their best iterate after stalling or diverging.
     pub refinement_settled: usize,
     /// Refinements that failed (strict stall/divergence, or singular).
@@ -83,8 +85,8 @@ pub(crate) struct PivotReport {
 impl LinearAlgebraStats {
     pub(crate) fn absorb(&mut self, other: Self) {
         self.factorizations += other.factorizations;
-        self.kkt_solves += other.kkt_solves;
-        self.refinement_passes += other.refinement_passes;
+        self.primary_solves += other.primary_solves;
+        self.refinement_solves += other.refinement_solves;
         self.refinement_settled += other.refinement_settled;
         self.refinement_failures += other.refinement_failures;
         self.inertia_failures += other.inertia_failures;
@@ -162,7 +164,7 @@ impl Factorization {
             refinement,
             ..
         } = self;
-        stats.kkt_solves += 1;
+        stats.primary_solves += 1;
         let initial = solve_owned(inner, rhs)?;
         refine_with(
             rhs,
@@ -439,8 +441,8 @@ pub(crate) fn refine_with(
         if iteration == settings.max_refinement_steps {
             return settle_refinement(best_error, strict, best, stats);
         }
+        stats.refinement_solves += 1;
         solve_correction(residual, correction)?;
-        stats.refinement_passes += 1;
         if correction.len() != solution.len() {
             return Err(LinearSystemError::InvalidSolutionDimension {
                 expected: solution.len(),
@@ -784,6 +786,46 @@ mod tests {
     }
 
     #[test]
+    fn refinement_counts_failed_corrections_and_successful_retries() {
+        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let mut stats = LinearAlgebraStats::default();
+        let failed = refine_solution(
+            &matrix,
+            &[1.0],
+            vec![0.0],
+            true,
+            |_| Err(LinearSystemError::Singular),
+            &mut stats,
+        );
+        assert!(matches!(failed, Err(LinearSystemError::Singular)));
+        assert_eq!(stats.refinement_solves, 1);
+
+        let solution = refine_solution(
+            &matrix,
+            &[1.0],
+            vec![0.0],
+            true,
+            |residual| Ok(residual.to_vec()),
+            &mut stats,
+        )
+        .unwrap();
+        assert_eq!(solution, vec![1.0]);
+        assert_eq!(stats.refinement_solves, 2);
+
+        // An accurate initial solve needs only a residual check, not a correction.
+        refine_solution(
+            &matrix,
+            &[1.0],
+            solution,
+            true,
+            |_| panic!("an accurate solution needs no correction solve"),
+            &mut stats,
+        )
+        .unwrap();
+        assert_eq!(stats.refinement_solves, 2);
+    }
+
+    #[test]
     fn refinement_stops_once_the_rate_cannot_reach_tolerance() {
         let matrix: CscMatrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
         let mut correction_count = 0;
@@ -804,7 +846,7 @@ mod tests {
         // Two stalled passes are enough to extrapolate a miss.
         assert_eq!(solution, vec![0.0]);
         assert_eq!(correction_count, 2);
-        assert_eq!(stats.refinement_passes, 2);
+        assert_eq!(stats.refinement_solves, 2);
         assert_eq!(stats.refinement_settled, 1);
 
         let mut stats = LinearAlgebraStats::default();

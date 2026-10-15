@@ -47,6 +47,20 @@ print(solution.x)  # approximately [1.0, 2.0]
 Use SciPy sparse matrices for `A` and `P`; set `P=None` for a linear program.
 Options can be passed with `settings=cpo3.Settings(...)`.
 
+Work counters are available on `solution.info`:
+
+```python
+info = solution.info
+print(info.iters, info.factorizations)
+print(info.primary_solves, info.refinement_solves)
+total_linear_solves = info.primary_solves + info.refinement_solves
+```
+
+`primary_solves` counts the initial solve for each KKT right-hand side,
+throughout initialization and the outer iterations. `refinement_solves`
+counts additional correction solves using the existing factorization. Both count
+attempts, including internally failed attempts; residual evaluations are excluded.
+
 ## Rust example
 
 ```rust

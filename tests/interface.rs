@@ -161,7 +161,7 @@ fn bound_elimination_is_optional_with_every_sparse_solver() {
                 )
                 .unwrap();
                 assert_eq!(solution.status(), SolverStatus::Solved);
-                assert!(solution.info().linear_algebra.kkt_solves > 0);
+                assert!(solution.info().linear_algebra.primary_solves > 0);
                 assert_eq!(solution.info().kkt_bound_elimination, kkt_bound_elimination);
                 assert_close(solution.x()[0], 0.5);
                 assert_close(solution.x()[1], 1.5);
@@ -330,7 +330,7 @@ fn cvxopt_initialization_solves_the_reference_problems_with_every_solver() {
                 assert_ne!(info.cvxopt_init_used, Some(false));
                 if info.cvxopt_init_used.is_some() {
                     assert!(info.linear_algebra.factorizations >= 1);
-                    assert!(info.linear_algebra.kkt_solves >= 1);
+                    assert!(info.linear_algebra.primary_solves >= 1);
                 }
                 for (actual, expected) in solution.x().iter().zip(&expected) {
                     assert_close(*actual, *expected);

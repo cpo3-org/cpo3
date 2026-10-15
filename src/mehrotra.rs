@@ -634,7 +634,7 @@ mod tests {
             .unwrap();
             let recentered = kind == StepKind::Recenter;
             assert_eq!(cache.stats().factorizations, 1);
-            assert_eq!(cache.stats().kkt_solves, if recentered { 2 } else { 3 });
+            assert_eq!(cache.stats().primary_solves, if recentered { 2 } else { 3 });
             assert_eq!(result.recentered, recentered);
             assert_eq!(result.alpha_affine.is_none(), recentered);
             if recentered {
