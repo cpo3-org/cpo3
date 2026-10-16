@@ -1,4 +1,9 @@
-//! Mehrotra-style predictor--corrector substeps on the shared resolvent.
+//! Modified Mehrotra iteration (`alg:ipm`, `subsec:mehrotra` in the paper).
+//!
+//! A step forms D_k = diag(s_k / y_k), shares one shifted KKT factorization,
+//! probes with target zero, then solves at sigma * mu_k with the full predictor
+//! as surrogate and the second-order complementarity correction. The centering
+//! rule is sigma = (1 - alpha_affine)^3. Numerical retries wrap this same step.
 
 use thiserror::Error;
 
@@ -22,22 +27,15 @@ pub(crate) enum MehrotraError {
     InvalidDualityMeasure(f64),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum StepKind {
-    Ordinary { sigma_floor: f64 },
-    Recenter,
-}
-
 /// One accepted outer iterate and the scalars that produced it.
 pub(crate) struct Step {
-    /// True KKT shift used for this step (legacy diagnostic name).
-    pub(crate) mu_step: f64,
+    /// True KKT shift used for this step.
+    pub(crate) rho: f64,
     /// Complementarity used to construct this step.
     pub(crate) mu_before: f64,
-    pub(crate) recentered: bool,
     pub(crate) state: State,
     pub(crate) sigma: f64,
-    pub(crate) alpha_affine: Option<f64>,
+    pub(crate) alpha_affine: f64,
     pub(crate) alpha: f64,
 }
 
@@ -47,7 +45,6 @@ pub(crate) fn step(
     state: &State,
     kkt: &KktSettings,
     requested_shift_floor: f64,
-    kind: StepKind,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
@@ -58,11 +55,7 @@ pub(crate) fn step(
         raw_mu,
         requested_shift_floor,
         cache,
-        |trial, rho, cache| {
-            step_attempt(
-                embedding, state, trial, rho, &scaling, kind, settings, cache,
-            )
-        },
+        |trial, rho, cache| step_attempt(embedding, state, trial, rho, &scaling, settings, cache),
     )
 }
 
@@ -119,107 +112,19 @@ fn step_attempt(
     kkt: &KktSettings,
     rho: f64,
     scaling: &Scaling,
-    kind: StepKind,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
     let raw_mu = scaling.mu;
-    let mut resolvent = Resolvent::new(embedding.problem(), state, &scaling.h, rho, kkt, cache)?;
+    let mut resolvent = Resolvent::new(embedding.problem(), state, &scaling.d, rho, kkt, cache)?;
     let geometry = embedding.geometry();
-    let recentered = kind == StepKind::Recenter;
-    let (mut centered, mut slack, sigma, alpha_affine, boundary) = match kind {
-        StepKind::Recenter => {
-            let (centered, slack) = centered_solve(
-                state,
-                rho,
-                scaling,
-                (state.x(), state.y(), state.tau()),
-                raw_mu,
-                None,
-                &mut resolvent,
-            )?;
-            let boundary = geometry
-                .step_to_boundary_toward(state.s(), &slack)?
-                .min(geometry.step_to_boundary_toward(state.y(), centered.y())?);
-            (centered, slack, 1.0, None, boundary)
-        }
-        StepKind::Ordinary { sigma_floor } => {
-            let mut first = predictor(embedding, state, rho, scaling, &mut resolvent)?;
-            first.sigma = first.sigma.max(sigma_floor);
-            let second = corrector(state, rho, scaling, &mut first, &mut resolvent)?;
-
-            let mut second = second;
-            let mut boundary = geometry
-                .step_to_boundary_toward(state.s(), &second.s_centered)?
-                .min(geometry.step_to_boundary_toward(state.y(), second.centered.y())?);
-
-            // Gondzio centrality correctors on the same factorization: push the
-            // complementarity products of an aspirational trial point back into
-            // [0.1 mu_c, 10 mu_c] through the dual block, and keep the direction only
-            // if it lengthens the step. Skip the extra solve once the boundary
-            // reaches the configured gate. Also stop after accepting a tau fallback.
-            let mu_c = second.mu_centered;
-            let mut tries = 0;
-            let mut accepts = 0;
-            for _ in 0..if embedding.nu() > 0 {
-                settings.max_centrality_correctors
-            } else {
-                0
-            } {
-                if second.centered.used_tau_fallback || boundary >= settings.corrector_gate {
-                    break;
-                }
-                let aspiration = (1.5 * boundary + 0.3).min(1.0);
-                let mut changed = false;
-                for (i, correction) in second.correction.iter_mut().enumerate() {
-                    let y_inverse = scaling.y_inverse[i];
-                    if y_inverse <= 0.0 {
-                        continue;
-                    }
-                    let y = state.y()[i] + aspiration * (second.centered.y()[i] - state.y()[i]);
-                    let s = state.s()[i] + aspiration * (second.s_centered[i] - state.s()[i]);
-                    let v = y * s;
-                    let t = v.clamp(0.1 * mu_c, 10.0 * mu_c) - v;
-                    if t != 0.0 {
-                        changed = true;
-                        *correction += y_inverse * t;
-                    }
-                }
-                if !changed {
-                    break;
-                }
-                tries += 1;
-                let (centered, s_centered) = centered_solve(
-                    state,
-                    rho,
-                    scaling,
-                    (first.affine.x(), first.affine.y(), first.affine.tau),
-                    mu_c,
-                    Some(&second.correction),
-                    &mut resolvent,
-                )?;
-                let trial = geometry
-                    .step_to_boundary_toward(state.s(), &s_centered)?
-                    .min(geometry.step_to_boundary_toward(state.y(), centered.y())?);
-                if trial <= boundary {
-                    break;
-                }
-                accepts += 1;
-                boundary = trial;
-                second.centered = centered;
-                second.s_centered = s_centered;
-            }
-            cache.corrector_tries += tries;
-            cache.corrector_accepts += accepts;
-            (
-                second.centered,
-                second.s_centered,
-                first.sigma,
-                Some(first.alpha_affine),
-                boundary,
-            )
-        }
-    };
+    let mut first = predictor(embedding, state, rho, scaling, &mut resolvent)?;
+    let second = corrector(state, rho, scaling, &mut first, &mut resolvent)?;
+    let boundary = geometry
+        .step_to_boundary_toward(state.s(), &second.s_centered)?
+        .min(geometry.step_to_boundary_toward(state.y(), second.centered.y())?);
+    let mut centered = second.centered;
+    let mut slack = second.s_centered;
     let alpha = (settings.step_fraction * boundary).min(1.0);
 
     // `base + alpha (target - base)`, overwriting the corrector's buffers.
@@ -241,11 +146,10 @@ fn step_attempt(
 
     Ok(Step {
         state: next,
-        mu_step: rho,
+        rho,
         mu_before: raw_mu,
-        recentered,
-        sigma,
-        alpha_affine,
+        sigma: first.sigma,
+        alpha_affine: first.alpha_affine,
         alpha,
     })
 }
@@ -260,11 +164,11 @@ fn accepted_tau(current: f64, candidate: f64, alpha: f64) -> Result<f64, Embeddi
     Ok(tau.max(1e-30))
 }
 
-/// Nesterov--Todd scaling `H_k` and Jordan inverse `y_k^{-1}` at one iterate.
+/// Diagonal barrier scaling `D_k` and Jordan inverse `y_k^{-1}` at one iterate.
 pub(crate) struct Scaling {
     /// Complementarity in the current spherical coordinates.
     mu: f64,
-    pub(crate) h: Vec<f64>,
+    pub(crate) d: Vec<f64>,
     pub(crate) y_inverse: Vec<f64>,
 }
 
@@ -277,12 +181,12 @@ impl Scaling {
         // Initialization and acceptance establish the interior invariant;
         // checked sphere normalization preserves it between iterations.
         debug_assert!(embedding.ensure_domain(state).is_ok());
-        let mut h = vec![0.0; state.s().len()];
+        let mut d = vec![0.0; state.s().len()];
         let mut y_inverse = vec![0.0; state.y().len()];
         embedding
             .geometry()
-            .scaling_and_inverse(state.s(), state.y(), &mut h, &mut y_inverse)?;
-        Ok(Self { mu, h, y_inverse })
+            .scaling_and_inverse(state.s(), state.y(), &mut d, &mut y_inverse)?;
+        Ok(Self { mu, d, y_inverse })
     }
 }
 
@@ -323,12 +227,12 @@ pub(crate) fn predictor(
     let dy = difference(affine.y(), state.y());
     let mut ds = dy
         .iter()
-        .zip(&scaling.h)
+        .zip(&scaling.d)
         .zip(state.s())
         .map(|((dy, h), s)| -h * dy - s)
         .collect::<Vec<_>>();
     #[cfg(test)]
-    let s_affine = dy.iter().zip(&scaling.h).map(|(dy, h)| -h * dy).collect();
+    let s_affine = dy.iter().zip(&scaling.d).map(|(dy, h)| -h * dy).collect();
 
     let geometry = embedding.geometry();
     let alpha_affine = geometry
@@ -369,10 +273,6 @@ pub(crate) fn predictor(
 pub(crate) struct Corrector {
     pub(crate) centered: ResolventSolution,
     pub(crate) s_centered: Vec<f64>,
-    pub(crate) mu_centered: f64,
-    /// Dual-block correction the solve used (Mehrotra's, plus any accepted
-    /// centrality terms).
-    pub(crate) correction: Vec<f64>,
 }
 
 /// Solve the surrogate system at target `sigma * complementarity` with the given surrogate
@@ -409,8 +309,6 @@ pub(crate) fn corrector(
     Ok(Corrector {
         centered,
         s_centered,
-        mu_centered,
-        correction,
     })
 }
 
@@ -454,7 +352,7 @@ fn centered_solve(
     let centered = resolvent.solve_increment_rhs(&rhs, r_tau, mu_centered)?;
     let s_centered: Vec<f64> = (0..m)
         .map(|index| {
-            mu_over_y(index) - scaling.h[index] * (centered.y()[index] - state.y()[index])
+            mu_over_y(index) - scaling.d[index] * (centered.y()[index] - state.y()[index])
                 + correction.map_or(0.0, |values| values[index])
         })
         .collect();
@@ -559,7 +457,7 @@ mod tests {
         let mut resolvent = Resolvent::new(
             &problem,
             &state,
-            &scaling.h,
+            &scaling.d,
             mu,
             &KktSettings::new(LinearSolver::Faer),
             &mut cache,
@@ -612,68 +510,24 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_and_recenter_share_one_factorization_with_expected_solve_counts() {
+    fn predictor_corrector_share_one_factorization_and_three_solves() {
         let problem = quadratic_problem();
         let embedding = Embedding::new(&problem).unwrap();
         let mut state = interior_state(&problem);
         state.normalize_sphere(embedding.nu()).unwrap();
-        for kind in [StepKind::Ordinary { sigma_floor: 0.0 }, StepKind::Recenter] {
-            let mut cache = KktCache::new();
-            let result = step(
-                &embedding,
-                &state,
-                &KktSettings::new(LinearSolver::Faer),
-                1e-14,
-                kind,
-                &Settings {
-                    max_centrality_correctors: 0,
-                    ..Settings::default()
-                },
-                &mut cache,
-            )
-            .unwrap();
-            let recentered = kind == StepKind::Recenter;
-            assert_eq!(cache.stats().factorizations, 1);
-            assert_eq!(cache.stats().primary_solves, if recentered { 2 } else { 3 });
-            assert_eq!(result.recentered, recentered);
-            assert_eq!(result.alpha_affine.is_none(), recentered);
-            if recentered {
-                assert_eq!(result.sigma, 1.0);
-                let mu = embedding.duality_measure(&state);
-                let scaling = Scaling::new(&embedding, &state).unwrap();
-                let mut cache = KktCache::new();
-                let mut resolvent = Resolvent::new(
-                    &problem,
-                    &state,
-                    &scaling.h,
-                    mu,
-                    &KktSettings::new(LinearSolver::Faer),
-                    &mut cache,
-                )
-                .unwrap();
-                // Independent reference RHS: no predictor, anchor, or cross term.
-                let ry = state
-                    .s()
-                    .iter()
-                    .zip(&scaling.y_inverse)
-                    .map(|(s, v)| s + mu * v)
-                    .collect::<Vec<_>>();
-                let centered = resolvent
-                    .solve(&vec![0.0; state.x().len()], &ry, 0.0, mu)
-                    .unwrap();
-                for (i, x) in result.state.x().iter().enumerate() {
-                    assert_close(
-                        *x,
-                        state.x()[i] + result.alpha * (centered.x()[i] - state.x()[i]),
-                    );
-                }
-                for (i, s) in result.state.s().iter().enumerate() {
-                    let target =
-                        mu * scaling.y_inverse[i] - scaling.h[i] * (centered.y()[i] - state.y()[i]);
-                    assert_close(*s, state.s()[i] + result.alpha * (target - state.s()[i]));
-                }
-            }
-        }
+        let mut cache = KktCache::new();
+        let result = step(
+            &embedding,
+            &state,
+            &KktSettings::new(LinearSolver::Faer),
+            1e-14,
+            &Settings::default(),
+            &mut cache,
+        )
+        .unwrap();
+        assert_eq!(cache.stats().factorizations, 1);
+        assert_eq!(cache.stats().primary_solves, 3);
+        assert_eq!(result.sigma, (1.0 - result.alpha_affine).powi(3));
     }
 
     #[test]
@@ -747,7 +601,7 @@ mod tests {
         let mut resolvent = Resolvent::new(
             problem,
             &state,
-            &scaling.h,
+            &scaling.d,
             mu,
             &KktSettings::new(LinearSolver::Faer),
             &mut cache,
@@ -766,7 +620,7 @@ mod tests {
         let mut resolvent = Resolvent::new(
             problem,
             &state,
-            &scaling.h,
+            &scaling.d,
             mu,
             &KktSettings::new(LinearSolver::Faer),
             &mut cache,
@@ -803,7 +657,6 @@ mod tests {
     fn corrector_slack_carries_the_second_order_correction() {
         for problem in [quadratic_problem(), linear_problem()] {
             let (state, mu, first, second) = run_both(&problem);
-            assert_close(second.mu_centered, first.sigma * mu);
             // A zero centering target can place the trial on the boundary.
             // The accepted (damped) iterate is tested separately for interiority.
             assert!(second.centered.tau.is_finite() && second.centered.tau >= 0.0);
@@ -814,7 +667,7 @@ mod tests {
                 let dy = first.affine.y()[index] - y;
                 let lhs = second.s_centered[index] * y + s * second.centered.y()[index];
                 let expected = if nonneg(index) {
-                    s * y + second.mu_centered - ds * dy
+                    s * y + (first.sigma * mu) - ds * dy
                 } else {
                     0.0
                 };
@@ -834,7 +687,7 @@ mod tests {
         let mut resolvent = Resolvent::new(
             &problem,
             &state,
-            &scaling.h,
+            &scaling.d,
             mu,
             &KktSettings::new(LinearSolver::Faer),
             &mut cache,
@@ -885,13 +738,12 @@ mod tests {
                     &state,
                     &KktSettings::new(LinearSolver::Faer),
                     1e-14,
-                    StepKind::Ordinary { sigma_floor: 0.0 },
                     &Settings::default(),
                     &mut cache,
                 )
                 .unwrap();
                 assert!(result.alpha > 0.0 && result.alpha <= 1.0);
-                assert!(result.alpha_affine.is_some_and(|a| a > 0.0 && a <= 1.0));
+                assert!(result.alpha_affine > 0.0 && result.alpha_affine <= 1.0);
                 assert!((0.0..=1.0).contains(&result.sigma));
                 embedding.ensure_domain(&result.state).unwrap();
                 assert!(
@@ -918,7 +770,7 @@ mod tests {
         let mut resolvent = Resolvent::new(
             &problem,
             &state,
-            &scaling.h,
+            &scaling.d,
             1.0,
             &KktSettings::new(LinearSolver::Faer),
             &mut cache,

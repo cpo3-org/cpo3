@@ -200,33 +200,13 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn init_level(&self) -> f64 {
-        self.inner.init_level
-    }
-
-    #[getter]
-    fn init_proximity(&self) -> f64 {
-        self.inner.init_proximity
-    }
-
-    #[getter]
-    fn init_proximity_after(&self) -> f64 {
-        self.inner.init_proximity_after
+    fn warm_start_score(&self) -> Option<f64> {
+        self.inner.warm_start_score
     }
 
     #[getter]
     fn warm_start_used(&self) -> Option<bool> {
         self.inner.warm_start_used
-    }
-
-    #[getter]
-    fn warm_level(&self) -> f64 {
-        self.inner.warm_level
-    }
-
-    #[getter]
-    fn warm_proximity(&self) -> f64 {
-        self.inner.warm_proximity
     }
 
     #[getter]
@@ -275,11 +255,6 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn recenter_steps(&self) -> usize {
-        self.inner.recenter_steps
-    }
-
-    #[getter]
     fn factorizations(&self) -> usize {
         self.inner.linear_algebra.factorizations
     }
@@ -287,16 +262,6 @@ impl PySolutionInfo {
     #[getter]
     fn inertia_failures(&self) -> usize {
         self.inner.linear_algebra.inertia_failures
-    }
-
-    #[getter]
-    fn corrector_tries(&self) -> usize {
-        self.inner.linear_algebra.corrector_tries
-    }
-
-    #[getter]
-    fn corrector_accepts(&self) -> usize {
-        self.inner.linear_algebra.corrector_accepts
     }
 
     #[getter]

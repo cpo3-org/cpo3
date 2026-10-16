@@ -67,9 +67,6 @@ pub struct LinearAlgebraStats {
     /// Factorizations rejected before any solve because their inertia
     /// was not that of a quasi-definite matrix.
     pub inertia_failures: usize,
-    /// Extra centrality correctors solved and accepted.
-    pub corrector_tries: usize,
-    pub corrector_accepts: usize,
 }
 
 /// Inertia and pivot extremes of the most recent factorization.
@@ -90,8 +87,6 @@ impl LinearAlgebraStats {
         self.refinement_settled += other.refinement_settled;
         self.refinement_failures += other.refinement_failures;
         self.inertia_failures += other.inertia_failures;
-        self.corrector_tries += other.corrector_tries;
-        self.corrector_accepts += other.corrector_accepts;
     }
 }
 
@@ -104,6 +99,7 @@ pub(crate) struct Factorization {
     stats: LinearAlgebraStats,
     /// Buffer lent to callers that solve reduced systems.
     scratch: Vec<f64>,
+    #[cfg(test)]
     refinement: RefinementWorkspace,
 }
 
@@ -113,6 +109,7 @@ enum FactorizationInner {
 }
 
 impl Factorization {
+    #[cfg(test)]
     pub(crate) fn new(
         matrix: CscMatrix,
         settings: &KktSettings,
@@ -144,14 +141,17 @@ impl Factorization {
             settings: *settings,
             stats: LinearAlgebraStats::default(),
             scratch: Vec::new(),
+            #[cfg(test)]
             refinement: RefinementWorkspace::default(),
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn dim(&self) -> usize {
         self.diagonal.len()
     }
 
+    #[cfg(test)]
     pub(crate) fn solve(
         &mut self,
         matrix: &CscMatrix,
@@ -225,6 +225,7 @@ impl Factorization {
 
     /// One factored solve without refinement, for callers refining against
     /// a larger system.
+    #[cfg(test)]
     pub(crate) fn solve_unrefined(&mut self, rhs: &[f64]) -> Result<Vec<f64>, LinearSystemError> {
         solve_owned(&mut self.inner, rhs)
     }
@@ -273,6 +274,7 @@ impl Factorization {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn refactor(&mut self, matrix: CscMatrix) -> Result<(), LinearSystemError> {
         validate_square(matrix.rows(), matrix.columns())?;
         match &mut self.inner {
@@ -286,6 +288,7 @@ impl Factorization {
     }
 }
 
+#[cfg(test)]
 fn solve_owned(inner: &mut FactorizationInner, rhs: &[f64]) -> Result<Vec<f64>, LinearSystemError> {
     let mut out = Vec::with_capacity(rhs.len());
     solve_into(inner, rhs, &mut out)?;
@@ -487,12 +490,14 @@ fn settle_refinement(
 }
 
 /// `residual <- rhs - matrix * solution`.
+#[cfg(test)]
 fn residual_into(matrix: &CscMatrix, solution: &[f64], rhs: &[f64], residual: &mut [f64]) {
     residual.copy_from_slice(rhs);
     crate::matrix::symmetric_accumulate(matrix, solution, [residual], |product| [-product]);
 }
 
 /// First refinement residual and its fixed normalizer in one matrix traversal.
+#[cfg(test)]
 fn residual_and_denominator_into(
     matrix: &CscMatrix,
     solution: &[f64],
@@ -565,6 +570,7 @@ impl TriangleSource {
     }
 
     /// Gather unchanged-coordinate triangle values in backend order.
+    #[cfg(test)]
     fn gather_values(
         &self,
         matrix: &CscMatrix,
@@ -579,6 +585,7 @@ impl TriangleSource {
     }
 }
 
+#[cfg(test)]
 fn upper_triangle_usize(matrix: &CscMatrix) -> (Vec<usize>, Vec<usize>, Vec<f64>) {
     (
         matrix.column_pointers().to_vec(),
@@ -653,12 +660,12 @@ pub(crate) enum LinearSystemError {
     NonFiniteRightHandSide,
     #[error("linear-system solution must have length {expected}, received {actual}")]
     InvalidSolutionDimension { expected: usize, actual: usize },
+    #[cfg(test)]
     #[error("matrix dimension changed from {expected} to {actual}")]
     DimensionChanged { expected: usize, actual: usize },
+    #[cfg(test)]
     #[error("matrix sparsity pattern changed during numeric refactorization")]
     SparsityPatternChanged,
-    #[error("linear-system index exceeds the supported 64-bit range")]
-    IndexOverflow,
 }
 
 #[cfg(test)]
@@ -696,10 +703,6 @@ mod tests {
         for (actual, expected) in solution.iter().zip(expected) {
             assert!((actual - expected).abs() < 1e-10);
         }
-    }
-
-    fn matrix_value(matrix: &CscMatrix, row: usize, column: usize) -> f64 {
-        matrix.get(row.min(column), row.max(column)).unwrap_or(0.0)
     }
 
     fn backward_error_of(matrix: &CscMatrix, solution: &[f64], rhs: &[f64]) -> f64 {

@@ -156,14 +156,6 @@ class Settings:
     initial_shift_floor: float = _SETTINGS_DEFAULTS["initial_shift_floor"]
     # Fraction of the cone-boundary step to take, strictly between zero and one.
     step_fraction: float = _SETTINGS_DEFAULTS["step_fraction"]
-    max_centrality_correctors: int = _SETTINGS_DEFAULTS["max_centrality_correctors"]
-    # Skip extra correctors at this undamped boundary step; zero skips all.
-    corrector_gate: float = _SETTINGS_DEFAULTS["corrector_gate"]
-    governor: bool = _SETTINGS_DEFAULTS["governor"]
-    # Maximum governor-triggered recentering steps; zero disables the governor.
-    max_recenters: int = _SETTINGS_DEFAULTS["max_recenters"]
-    # Persistent centering floor in [0, 1] after the governor first triggers.
-    recenter_sigma_floor: float = _SETTINGS_DEFAULTS["recenter_sigma_floor"]
 
     def __post_init__(self) -> None:
         # Check Python types before conversion to Rust's unsigned counts/bools.
@@ -172,8 +164,6 @@ class Settings:
             "max_iters",
             "max_equilibration_passes",
             "max_refinement_steps",
-            "max_centrality_correctors",
-            "max_recenters",
         ):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -184,7 +174,6 @@ class Settings:
             "force_warm_start",
             "cvxopt_init",
             "kkt_bound_elimination",
-            "governor",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -316,28 +305,12 @@ class SolutionInfo:
         return self._native.comp
 
     @property
-    def init_level(self) -> float:
-        return self._native.init_level
-
-    @property
-    def init_proximity(self) -> float:
-        return self._native.init_proximity
-
-    @property
-    def init_proximity_after(self) -> float:
-        return self._native.init_proximity_after
+    def warm_start_score(self) -> float | None:
+        return self._native.warm_start_score
 
     @property
     def warm_start_used(self) -> bool | None:
         return self._native.warm_start_used
-
-    @property
-    def warm_level(self) -> float:
-        return self._native.warm_level
-
-    @property
-    def warm_proximity(self) -> float:
-        return self._native.warm_proximity
 
     @property
     def cvxopt_init_used(self) -> bool | None:
@@ -391,24 +364,12 @@ class SolutionInfo:
         return self._native.refinement_failures
 
     @property
-    def recenter_steps(self) -> int:
-        return self._native.recenter_steps
-
-    @property
     def factorizations(self) -> int:
         return self._native.factorizations
 
     @property
     def inertia_failures(self) -> int:
         return self._native.inertia_failures
-
-    @property
-    def corrector_tries(self) -> int:
-        return self._native.corrector_tries
-
-    @property
-    def corrector_accepts(self) -> int:
-        return self._native.corrector_accepts
 
     @property
     def linear_solver(self) -> LinearSolver:

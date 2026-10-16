@@ -92,6 +92,7 @@ impl State {
 
     /// Normalize all homogeneous coordinates using the floored sphere norm.
     /// Validate the scale before mutating so failure leaves the state intact.
+    // Paper: eq:iterate_normalisation; scale s along with u = (x, y, tau).
     pub(crate) fn normalize_sphere(&mut self, nu: usize) -> Result<(), EmbeddingError> {
         let norm = faer::ColRef::from_slice(&self.xy).norm_l2().hypot(self.tau);
         let scale = if norm.is_infinite() {

@@ -21,17 +21,10 @@ pub struct WarmStart {
 /// What the initialization decided and measured.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InitReport {
-    /// Path level `mu` at which the starting point is closest to the path.
-    pub(crate) level: f64,
-    /// Local-norm proximity of the starting point before iteration one.
-    pub(crate) proximity: f64,
-    /// Proximity after initialization (currently equal to `proximity`).
-    pub(crate) proximity_after: f64,
     /// `Some(true)` when a supplied warm start was used.
     pub(crate) warm_start_used: Option<bool>,
-    /// Best level and proximity of the supplied warm start itself (NaN when none).
-    pub(crate) warm_level: f64,
-    pub(crate) warm_proximity: f64,
+    /// Local-norm score used to accept or reject the best warm candidate.
+    pub(crate) warm_start_score: Option<f64>,
     /// `Some(true)` when the CVXOPT-style point started the solve and
     /// `Some(false)` for the canonical point, including after a fallback;
     /// `None` when an accepted warm start was used instead.
@@ -49,94 +42,6 @@ const CVXOPT_REGULARIZATION: f64 = 1e-8;
 const MAX_CVXOPT_SHIFT: f64 = 1e-4;
 /// cpo3's interior margin: cone components are shifted to at least this.
 const INTERIOR_MARGIN: f64 = 1.0;
-
-/// Path residual `t(mu) = a + mu b` on the linear blocks (weight `1/mu`) and
-/// the complementarity block in the v-space local norm
-/// `sum_i (p_i / mu + mu / p_i - 2)` with `p = s o y` on cone rows:
-/// `lambda(mu)^2 = A/mu + 2B + C mu + E/mu + F mu - 2 count`.
-struct Coefficients {
-    a: f64,
-    b: f64,
-    c: f64,
-    e: f64,
-    f: f64,
-    count: f64,
-}
-
-impl Coefficients {
-    fn new(embedding: &Embedding<'_>, state: &State, cone_rows: &[bool]) -> Self {
-        let problem = embedding.problem();
-        let (x, y, s, tau) = (state.x(), state.y(), state.s(), state.tau());
-        // Cold starts have x = 0. Avoid scanning P and A for zero products.
-        let (px, ax) = if x.iter().all(|&value| value == 0.0) {
-            (vec![0.0; x.len()], vec![0.0; y.len()])
-        } else {
-            (problem.p_mul(x), matrix_mul(problem.a(), x))
-        };
-        let aty = matrix_transpose_mul(problem.a(), y);
-        let (mut a_sum, mut b_sum, mut c_sum) = (0.0, 0.0, 0.0);
-        let mut add = |a: f64, b: f64| {
-            a_sum += a * a;
-            b_sum += a * b;
-            c_sum += b * b;
-        };
-        for i in 0..x.len() {
-            add(px[i] + aty[i] + problem.c()[i] * tau, x[i]);
-        }
-        for i in 0..y.len() {
-            add(-ax[i] + problem.b()[i] * tau - s[i], y[i]);
-        }
-        let quadratic = dot(x, &px);
-        add(
-            -dot(problem.c(), x) - dot(problem.b(), y) - quadratic / tau,
-            tau - 1.0 / tau,
-        );
-        let (mut e_sum, mut f_sum, mut count) = (0.0, 0.0, 0.0);
-        for i in 0..y.len() {
-            if cone_rows[i] {
-                let product = s[i] * y[i];
-                e_sum += product;
-                f_sum += 1.0 / product;
-                count += 1.0;
-            }
-        }
-        Self {
-            a: a_sum,
-            b: b_sum,
-            c: c_sum,
-            e: e_sum,
-            f: f_sum,
-            count,
-        }
-    }
-
-    /// The level minimizing `lambda(mu)^2`: `sqrt((A + E) / (C + F))`.
-    fn level(&self) -> f64 {
-        let denominator = self.c + self.f;
-        if denominator > 0.0 && self.a + self.e > 0.0 {
-            ((self.a + self.e) / denominator).sqrt()
-        } else {
-            1.0
-        }
-    }
-
-    fn proximity_at(&self, mu: f64) -> f64 {
-        ((self.a + self.e) / mu + 2.0 * self.b + (self.c + self.f) * mu - 2.0 * self.count)
-            .max(0.0)
-            .sqrt()
-    }
-}
-
-/// Proximity of a state to the path at its best level: `(level, lambda)`.
-pub(crate) fn proximity(
-    embedding: &Embedding<'_>,
-    state: &State,
-    cone_rows: &[bool],
-) -> (f64, f64) {
-    let coefficients = Coefficients::new(embedding, state, cone_rows);
-    let level = coefficients.level();
-    (level, coefficients.proximity_at(level))
-}
 
 /// Try cpo3's three interior floors and keep the lowest finite local score.
 /// The supplied vectors are in original units; every candidate is formed in
@@ -430,12 +335,9 @@ pub(crate) fn initial_state(
     cache: &mut KktCache,
 ) -> Result<(State, InitReport), EmbeddingError> {
     let mut report = InitReport {
-        level: f64::NAN,
-        proximity: f64::NAN,
-        proximity_after: f64::NAN,
         warm_start_used: None,
-        warm_level: f64::NAN,
-        warm_proximity: f64::NAN,
+        warm_start_score: None,
+
         cvxopt_init_used: None,
     };
     if let Some(warm) = warm {
@@ -445,15 +347,10 @@ pub(crate) fn initial_state(
         } else if let Some((candidate, score)) =
             warm_state(embedding, equilibrated, warm, cone_rows)
         {
-            let (warm_level, warm_proximity) = proximity(embedding, &candidate, cone_rows);
             let accept = settings.force_warm_start || score <= WARM_THRESHOLD;
             report.warm_start_used = Some(accept);
-            report.warm_level = warm_level;
-            report.warm_proximity = warm_proximity;
+            report.warm_start_score = Some(score);
             if accept {
-                report.level = warm_level;
-                report.proximity = warm_proximity;
-                report.proximity_after = warm_proximity;
                 return Ok((candidate, report));
             }
             eprintln!(
@@ -465,10 +362,6 @@ pub(crate) fn initial_state(
         }
     }
     let (cold, cvxopt_init_used) = cold_state(embedding, cone_rows, settings, kkt, cache)?;
-    let (level, proximity) = proximity(embedding, &cold, cone_rows);
-    report.level = level;
-    report.proximity = proximity;
-    report.proximity_after = proximity;
     report.cvxopt_init_used = Some(cvxopt_init_used);
     Ok((cold, report))
 }
@@ -589,7 +482,6 @@ mod tests {
         for (actual, expected) in state.y().iter().zip([1.0, 2.0]) {
             assert_close(actual / tau, expected, 1e-6);
         }
-        assert!(report.proximity.is_finite());
     }
 
     #[test]
@@ -759,33 +651,5 @@ mod tests {
         assert_eq!(report.warm_start_used, Some(false));
         assert_eq!(report.cvxopt_init_used, Some(false));
         assert_eq!(state, canonical_state(&embedding).unwrap());
-    }
-
-    #[test]
-    fn proximity_coefficients_include_nonzero_primal_contributions() {
-        {
-            let problem = Problem::new(
-                Some(crate::matrix::test_matrix(2, 2, vec![4.0, 1.0, 1.0, 3.0]).unwrap()),
-                vec![-2.0, 1.0],
-                crate::matrix::test_matrix(2, 2, vec![2.0, -1.0, 1.0, 3.0]).unwrap(),
-                vec![4.0, 2.0],
-                vec![Cone::Nonnegative(2)],
-            )
-            .unwrap();
-            let embedding = Embedding::new(&problem).unwrap();
-            // Exact coefficients of A/mu + 2B + C*mu for these two points.
-            for (x, expected) in [
-                (vec![-0.0, 0.0], (84.25, 3.0, 4.25)),
-                (vec![1.0, 0.0], (145.25, 5.0, 5.25)),
-            ] {
-                let state = State::new(x, vec![2.0, 1.0], vec![0.5, 2.0], 1.0).unwrap();
-                let coefficients = Coefficients::new(&embedding, &state, &[true, true]);
-                assert_eq!((coefficients.a, coefficients.b, coefficients.c), expected);
-                assert_eq!(
-                    (coefficients.e, coefficients.f, coefficients.count),
-                    (3.0, 1.5, 2.0)
-                );
-            }
-        }
     }
 }

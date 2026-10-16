@@ -3,12 +3,11 @@ use std::{env, io::IsTerminal, time::Duration};
 use crate::{LinearSolver, Problem, Settings, SolverStatus};
 
 const FRAME_WIDTH: usize = 62;
-const TABLE_LABELS: [&str; 14] = [
+const TABLE_LABELS: [&str; 13] = [
     "iter",
     "time",
     "mu_raw",
-    "mu_step",
-    "recenter",
+    "rho",
     "tau",
     "sigma",
     "alpha_aff",
@@ -19,15 +18,14 @@ const TABLE_LABELS: [&str; 14] = [
     "dres",
     "comp",
 ];
-const TABLE_WIDTHS: [usize; 14] = [5, 7, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
+const TABLE_WIDTHS: [usize; 13] = [5, 7, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct IterationRecord {
     pub iteration: usize,
     pub elapsed: Duration,
     pub mu: f64,
-    pub mu_step: Option<f64>,
-    pub recentered: bool,
+    pub rho: Option<f64>,
     pub tau: Option<f64>,
     pub sigma: Option<f64>,
     pub alpha_aff: Option<f64>,
@@ -91,7 +89,6 @@ impl ProgressReporter {
             "  factor floor   {:.1e}",
             settings.min_static_regularization
         );
-        eprintln!("  governor       {}", settings.governor);
         eprintln!("  force warm start {}", settings.force_warm_start);
         eprintln!(
             "  tolerances     feas {:.1e} {} gap abs {:.1e} {} gap rel {:.1e}",
@@ -270,12 +267,11 @@ fn format_iteration(record: IterationRecord, unicode: bool) -> String {
     let alpha_aff = optional_number(record.alpha_aff, missing);
     let alpha = optional_number(record.alpha, missing);
     format!(
-        "{iteration:>5} {separator} {elapsed:>6.2}s {separator} {mu:>10.3e} {separator} {mu_step} {separator} {recenter:>10} {separator} {tau} {separator} {sigma} {separator} {alpha_aff} {separator} {alpha} {separator} {pobj} {separator} {dobj} {separator} {pres} {separator} {dres} {separator} {comp}",
+        "{iteration:>5} {separator} {elapsed:>6.2}s {separator} {mu:>10.3e} {separator} {rho} {separator} {tau} {separator} {sigma} {separator} {alpha_aff} {separator} {alpha} {separator} {pobj} {separator} {dobj} {separator} {pres} {separator} {dres} {separator} {comp}",
         iteration = record.iteration,
         elapsed = record.elapsed.as_secs_f64(),
         mu = record.mu,
-        mu_step = optional_number(record.mu_step, missing),
-        recenter = if record.recentered { "yes" } else { missing },
+        rho = optional_number(record.rho, missing),
         pobj = optional_number(record.pobj, missing),
         dobj = optional_number(record.dobj, missing),
         pres = optional_number(record.pres, missing),
@@ -333,8 +329,7 @@ mod tests {
                 iteration: 1,
                 elapsed: Duration::ZERO,
                 mu: 1.0,
-                mu_step: Some(1.0),
-                recentered: false,
+                rho: Some(1.0),
                 tau: Some(1.0),
                 sigma: Some(0.1),
                 alpha_aff: Some(0.2),
@@ -360,8 +355,7 @@ mod tests {
                 iteration: 1,
                 elapsed: Duration::ZERO,
                 mu: 1.0,
-                mu_step: Some(1.0),
-                recentered: false,
+                rho: Some(1.0),
                 tau: Some(1.0),
                 sigma: Some(0.1),
                 alpha_aff: Some(0.2),

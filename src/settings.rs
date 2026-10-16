@@ -69,18 +69,6 @@ pub struct Settings {
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
     /// The default leaves a relative margin of sqrt(machine epsilon).
     pub step_fraction: f64,
-    /// Most Gondzio centrality correctors per iteration, each one extra solve
-    /// on the iteration's factorization; 0 disables them.
-    pub max_centrality_correctors: usize,
-    /// Skip extra centrality correctors when the undamped boundary step reaches
-    /// this threshold in [0, 1]. Zero skips all extra correctors.
-    pub corrector_gate: f64,
-    /// Recenter and pace complementarity reduction when progress stalls; off by default.
-    pub governor: bool,
-    /// Maximum governor-triggered recentering steps; zero disables the governor.
-    pub max_recenters: usize,
-    /// Persistent centering floor in [0, 1] after the governor first triggers.
-    pub recenter_sigma_floor: f64,
 }
 
 impl Default for Settings {
@@ -112,11 +100,6 @@ impl Default for Settings {
 
             initial_shift_floor: 1e-10,
             step_fraction: 1.0 - f64::EPSILON.sqrt(),
-            max_centrality_correctors: 0,
-            corrector_gate: 0.9,
-            governor: false,
-            max_recenters: 8,
-            recenter_sigma_floor: 1.0 / 30.0,
         }
     }
 }
@@ -134,24 +117,14 @@ impl Settings {
                 "equilibration_tolerance must be finite and nonnegative",
             ));
         }
-        if !self.recenter_sigma_floor.is_finite()
-            || !(0.0..=1.0).contains(&self.recenter_sigma_floor)
-        {
-            return Err(SolveError::InvalidSetting(
-                "recenter_sigma_floor must be finite and between zero and one inclusive",
-            ));
-        }
+
         if !self.step_fraction.is_finite() || self.step_fraction <= 0.0 || self.step_fraction >= 1.0
         {
             return Err(SolveError::InvalidSetting(
                 "step_fraction must be finite and strictly between zero and one",
             ));
         }
-        if !self.corrector_gate.is_finite() || !(0.0..=1.0).contains(&self.corrector_gate) {
-            return Err(SolveError::InvalidSetting(
-                "corrector_gate must be finite and between zero and one inclusive",
-            ));
-        }
+
         if self.max_iters == 0 {
             return Err(SolveError::InvalidSetting("max_iters must be positive"));
         }

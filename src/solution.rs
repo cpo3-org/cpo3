@@ -7,12 +7,11 @@ use crate::{
     Equilibration, LinearSolver, Problem, Settings,
     data_equilibration::EquilibratedProblem,
     embedding::{Embedding, EmbeddingError, State},
-    governor::{Governor, Observation},
     init::{self, WarmStart},
     josephy::KktCache,
     linear_system::{KktSettings, LinearAlgebraStats},
-    matrix::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul, stable_norm},
-    mehrotra::{self, MehrotraError, StepKind},
+    matrix::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
+    mehrotra::{self, MehrotraError},
     presolve::{self, PresolveOutcome, Presolved},
     progress::{IterationRecord, ProgressReporter},
 };
@@ -47,7 +46,6 @@ impl SolverStatus {
 #[derive(Clone, Debug)]
 pub struct SolutionInfo {
     pub iters: usize,
-    pub recenter_steps: usize,
     pub solve_time: Duration,
     pub pobj: f64,
     pub dobj: f64,
@@ -57,17 +55,10 @@ pub struct SolutionInfo {
     pub linear_solver: LinearSolver,
     pub data_equilibration: Equilibration,
     pub kkt_bound_elimination: bool,
-    /// Path level at which the starting point was closest to the central path.
-    pub init_level: f64,
-    /// Local-norm proximity of the starting point to the path before iteration one.
-    pub init_proximity: f64,
-    /// Proximity after initialization (equal to `init_proximity` without centering).
-    pub init_proximity_after: f64,
     /// Whether a supplied warm start was used; `None` when none was supplied.
     pub warm_start_used: Option<bool>,
-    /// Best level and proximity of the supplied warm start (NaN when none).
-    pub warm_level: f64,
-    pub warm_proximity: f64,
+    /// Score used to screen the best warm candidate; `None` without one.
+    pub warm_start_score: Option<f64>,
     /// `Some(true)` when the CVXOPT-style point started the solve and
     /// `Some(false)` for the canonical point, including after a fallback;
     /// `None` when an accepted warm start was used or no interior-point
@@ -92,17 +83,12 @@ impl SolutionInfo {
         init_report: Option<init::InitReport>,
     ) -> Self {
         let init = init_report.unwrap_or(init::InitReport {
-            level: f64::NAN,
-            proximity: f64::NAN,
-            proximity_after: f64::NAN,
             warm_start_used: None,
-            warm_level: f64::NAN,
-            warm_proximity: f64::NAN,
+            warm_start_score: None,
             cvxopt_init_used: None,
         });
         Self {
             iters: 0,
-            recenter_steps: 0,
             solve_time: Duration::ZERO,
             pobj: measures.pobj,
             dobj: measures.dobj,
@@ -112,12 +98,8 @@ impl SolutionInfo {
             linear_solver,
             data_equilibration: settings.data_equilibration,
             kkt_bound_elimination: settings.kkt_bound_elimination,
-            init_level: init.level,
-            init_proximity: init.proximity,
-            init_proximity_after: init.proximity_after,
             warm_start_used: init.warm_start_used,
-            warm_level: init.warm_level,
-            warm_proximity: init.warm_proximity,
+            warm_start_score: init.warm_start_score,
             cvxopt_init_used: init.cvxopt_init_used,
             presolve_rows_removed: 0,
             presolve_columns_removed: 0,
@@ -425,13 +407,6 @@ struct Products {
 }
 
 impl Products {
-    #[cfg(test)]
-    fn new(problem: &Problem, x: &[f64], y: &[f64]) -> Self {
-        let mut products = Self::default();
-        products.update(problem, x, y);
-        products
-    }
-
     fn update(&mut self, problem: &Problem, x: &[f64], y: &[f64]) {
         matrix_products_into(problem.a(), x, y, &mut self.ax, &mut self.aty);
         if let Some(p) = problem.p() {
@@ -440,33 +415,6 @@ impl Products {
             self.px.resize(problem.variable_count(), 0.0);
             self.px.fill(0.0);
         }
-    }
-
-    /// Euclidean residual of the central-path equations at raw complementarity.
-    /// Equality rows have no barrier term; slack is not a separate term in Ty.
-    fn delta_path(&self, problem: &Problem, state: &State, cone_rows: &[bool], raw_mu: f64) -> f64 {
-        let tau = state.tau().max(RECOVERY_EPS);
-        let t_tau = -dot(problem.c(), state.x())
-            - dot(problem.b(), state.y())
-            - dot(state.x(), &self.px) / tau
-            + raw_mu * (state.tau() - 1.0 / tau);
-        let tx = self
-            .px
-            .iter()
-            .zip(&self.aty)
-            .zip(problem.c())
-            .zip(state.x())
-            .map(|(((px, aty), c), x)| px + aty + c * state.tau() + raw_mu * x);
-        let ty = self
-            .ax
-            .iter()
-            .zip(problem.b())
-            .zip(state.y())
-            .zip(cone_rows)
-            .map(|(((ax, b), y), cone)| {
-                -ax + b * state.tau() + raw_mu * y - if *cone { raw_mu / y } else { 0.0 }
-            });
-        stable_norm(tx.chain(ty).chain(std::iter::once(t_tau))) / raw_mu.max(1e-15)
     }
 }
 
@@ -631,11 +579,9 @@ fn solve_core(
     let linear_solver = settings.linear_solver;
     let kkt = KktSettings::from(settings);
     let mut cache = KktCache::new();
-    let mut governor = Governor::new(settings);
     let equilibrated = EquilibratedProblem::new(problem, settings)
         .map_err(|error| SolveError::Numerical(error.to_string()))?;
     let embedding = Embedding::new(equilibrated.problem())?;
-    let governor_enabled = settings.governor && settings.max_recenters > 0 && embedding.nu() > 0;
     let mut identity = vec![0.0; problem.constraint_count()];
     embedding
         .geometry()
@@ -684,7 +630,6 @@ fn solve_core(
             settings,
             init_report,
             cache.stats(),
-            governor.recenter_steps(),
         ));
     }
 
@@ -726,7 +671,6 @@ fn solve_core(
                 settings,
                 init_report,
                 cache.stats(),
-                governor.recenter_steps(),
             ));
         }
 
@@ -738,11 +682,6 @@ fn solve_core(
             &state,
             &kkt,
             requested_floor,
-            if governor_enabled {
-                governor.next_step()
-            } else {
-                StepKind::Ordinary { sigma_floor: 0.0 }
-            },
             settings,
             &mut cache,
         ) {
@@ -772,10 +711,8 @@ fn solve_core(
         );
         let progress = recovered.stopping_score(settings);
         // Compare in the same coordinates as the KKT solve.
-        let floor_active = diagnostics
-            .mu_step
-            .expect("an accepted step has a KKT shift")
-            > raw_mu_before_step;
+        let floor_active =
+            diagnostics.rho.expect("an accepted step has a KKT shift") > raw_mu_before_step;
         if embedding.nu() == 0
             && floor_active
             && recovered.ktratio < 1.0
@@ -814,13 +751,12 @@ fn solve_core(
                 settings,
                 init_report,
                 cache.stats(),
-                governor.recenter_steps(),
             ));
         }
         let solved = status == Some(SolverStatus::Solved);
         reporter.iteration(
             recovered.iteration_record(iteration, started.elapsed(), diagnostics),
-            solved || diagnostics.recentered,
+            solved,
         );
         if solved {
             let elapsed = started.elapsed();
@@ -839,34 +775,7 @@ fn solve_core(
                 settings,
                 init_report,
                 cache.stats(),
-                governor.recenter_steps(),
             ));
-        }
-        if governor_enabled && iteration < settings.max_iters && governor.needs_observation() {
-            let mut products = recovered.products.take().unwrap_or_default();
-            if original.is_some() {
-                products.update(embedding.problem(), state.x(), state.y());
-            } else {
-                equilibrated.scale_products(
-                    &mut products.ax,
-                    &mut products.px,
-                    &mut products.aty,
-                    state.tau().max(RECOVERY_EPS),
-                );
-            }
-            governor.observe(Observation {
-                mu_step: diagnostics
-                    .mu_step
-                    .expect("an accepted step has a working mu"),
-                delta_path: products.delta_path(
-                    embedding.problem(),
-                    &state,
-                    &cone_rows,
-                    diagnostics.mu,
-                ),
-                stopping_score: recovered.stopping_score(settings),
-            });
-            recovered.products = Some(products);
         }
     }
 
@@ -890,7 +799,6 @@ fn solve_core(
         settings,
         init_report,
         cache.stats(),
-        governor.recenter_steps(),
     ))
 }
 
@@ -900,7 +808,6 @@ fn predictor_corrector_step(
     state: &State,
     kkt: &KktSettings,
     requested_shift_floor: f64,
-    kind: StepKind,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<(State, StepDiagnostics), MehrotraError> {
@@ -909,7 +816,6 @@ fn predictor_corrector_step(
         state,
         kkt,
         requested_shift_floor,
-        kind,
         settings,
         cache,
     )?;
@@ -928,9 +834,8 @@ fn predictor_corrector_step(
         mu_before: step.mu_before,
         tau: step.state.tau(),
         sigma: Some(step.sigma),
-        alpha_aff: step.alpha_affine,
-        mu_step: Some(step.mu_step),
-        recentered: step.recentered,
+        alpha_aff: Some(step.alpha_affine),
+        rho: Some(step.rho),
         alpha: Some(step.alpha),
     };
     Ok((step.state, diagnostics))
@@ -938,7 +843,6 @@ fn predictor_corrector_step(
 
 #[derive(Debug)]
 struct RecoveredSolution {
-    products: Option<Products>,
     x: Vec<f64>,
     y: Vec<f64>,
     s: Vec<f64>,
@@ -951,8 +855,7 @@ struct StepDiagnostics {
     /// Keep the numerator to preserve recovery's division order.
     sy: f64,
     mu_before: f64,
-    mu_step: Option<f64>,
-    recentered: bool,
+    rho: Option<f64>,
     mu: f64,
     tau: f64,
     sigma: Option<f64>,
@@ -975,8 +878,7 @@ impl StepDiagnostics {
                 sy / embedding.nu() as f64
             },
             mu_before: 0.0,
-            mu_step: None,
-            recentered: false,
+            rho: None,
             tau: state.tau(),
             sigma: None,
             alpha_aff: None,
@@ -988,7 +890,6 @@ impl StepDiagnostics {
 impl RecoveredSolution {
     fn empty() -> Self {
         Self {
-            products: None,
             x: Vec::new(),
             y: Vec::new(),
             s: Vec::new(),
@@ -1025,8 +926,7 @@ impl RecoveredSolution {
             iteration,
             elapsed,
             mu: diagnostics.mu,
-            mu_step: diagnostics.mu_step,
-            recentered: diagnostics.recentered,
+            rho: diagnostics.rho,
             tau: Some(diagnostics.tau),
             sigma: diagnostics.sigma,
             alpha_aff: diagnostics.alpha_aff,
@@ -1185,7 +1085,7 @@ fn recover_into(
             )
         }
         None => {
-            let products = out.products.get_or_insert_with(Products::default);
+            let products = &mut workspace.products;
             products.update(problem, &out.x, &out.y);
             Measures::with_norms(
                 problem,
@@ -1211,7 +1111,6 @@ fn build_solution(
     settings: &Settings,
     init_report: init::InitReport,
     stats: LinearAlgebraStats,
-    recenter_steps: usize,
 ) -> Solution {
     Solution {
         status,
@@ -1222,7 +1121,6 @@ fn build_solution(
             solve_time,
             iters,
             linear_algebra: stats,
-            recenter_steps,
             ..SolutionInfo::new(
                 recovered.measures,
                 linear_solver,
@@ -1244,7 +1142,6 @@ fn build_certificate(
     settings: &Settings,
     init_report: init::InitReport,
     stats: LinearAlgebraStats,
-    recenter_steps: usize,
 ) -> Solution {
     let nan = |len: usize| vec![f64::NAN; len];
     let scaled = |v: &[f64], slope: f64| v.iter().map(|e| e / slope.abs()).collect::<Vec<_>>();
@@ -1267,7 +1164,6 @@ fn build_certificate(
             solve_time,
             iters,
             linear_algebra: stats,
-            recenter_steps,
             ..SolutionInfo::new(Measures::nan(), linear_solver, settings, Some(init_report))
         },
     }
@@ -1369,7 +1265,6 @@ mod tests {
             s: vec![0.0, 0.0, 1.0, 0.0],
         });
         let mut point = RecoveredSolution {
-            products: None,
             measures: Measures::new(presolved.problem(), &x, &y, &s),
             x,
             y,
@@ -1383,91 +1278,9 @@ mod tests {
     }
 
     #[test]
-    fn shared_products_match_direct_path_residual_with_scaling_and_guarded_tau() {
-        let problem = Problem::new(
-            Some(crate::matrix::test_matrix(2, 2, vec![200.0, 0.0, 0.0, 0.03]).unwrap()),
-            vec![8.0, -0.2],
-            crate::matrix::test_matrix(4, 2, vec![10.0, 2.0, -0.1, 3.0, 2.0, -7.0, 4.0, 0.0])
-                .unwrap(),
-            vec![30.0, -2.0, 4.0, 0.1],
-            vec![
-                crate::Cone::Zero(1),
-                crate::Cone::Nonnegative(1),
-                crate::Cone::Zero(1),
-                crate::Cone::Nonnegative(1),
-            ],
-        )
-        .unwrap();
-        let cone_rows = [false, true, false, true];
-        for method in [Equilibration::None, Equilibration::Ruiz] {
-            let scaled = EquilibratedProblem::new(
-                &problem,
-                &crate::Settings {
-                    data_equilibration: method,
-                    ..crate::Settings::default()
-                },
-            )
-            .unwrap();
-            for tau in [0.8, 1e-20] {
-                let state = State::new(
-                    vec![0.3, -0.4],
-                    vec![0.0, 0.8, 0.0, 1.2],
-                    vec![0.2, 1.3, -0.6, 0.9],
-                    tau,
-                )
-                .unwrap();
-                let mut recovered = recover(
-                    &problem,
-                    &scaled,
-                    &state,
-                    2,
-                    dot(state.s(), state.y()),
-                    None,
-                );
-                let products = recovered.products.as_mut().unwrap();
-                scaled.scale_products(
-                    &mut products.ax,
-                    &mut products.px,
-                    &mut products.aty,
-                    tau.max(RECOVERY_EPS),
-                );
-                let direct = Products::new(scaled.problem(), state.x(), state.y());
-                for (actual, expected) in products
-                    .ax
-                    .iter()
-                    .chain(&products.px)
-                    .chain(&products.aty)
-                    .zip(direct.ax.iter().chain(&direct.px).chain(&direct.aty))
-                {
-                    assert!((actual - expected).abs() < 1e-12 * (1.0 + expected.abs()));
-                }
-                let mu = 1.06;
-                let actual = products.delta_path(scaled.problem(), &state, &cone_rows, mu);
-                let expected = direct.delta_path(scaled.problem(), &state, &cone_rows, mu);
-                if method == Equilibration::None && tau == 0.8 {
-                    // Independently expanded path equations for this fixed state.
-                    let residual = [
-                        70.988,
-                        7.904,
-                        22.012,
-                        1.008 - 1.06 / 1.3,
-                        -0.836,
-                        -0.166 - 1.06 / 0.9,
-                        -26.553,
-                    ];
-                    let reference = residual.iter().map(|v| v * v).sum::<f64>().sqrt() / 1.06;
-                    assert!((actual - reference).abs() < 1e-12 * reference);
-                }
-                assert!((actual - expected).abs() < 1e-12 * expected);
-            }
-        }
-    }
-
-    #[test]
     fn cpo3_stopping_uses_gap_or_relative_gap_and_strict_feasibility() {
         let settings = Settings::default();
         let mut point = RecoveredSolution {
-            products: None,
             x: vec![],
             y: vec![],
             s: vec![],
