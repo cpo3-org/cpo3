@@ -4,11 +4,9 @@ mod cone;
 mod data_equilibration;
 mod embedding;
 mod equilibration;
-mod governor;
 mod init;
 mod josephy;
 mod linear_solver;
-#[allow(dead_code)]
 mod linear_system;
 mod matrix;
 mod mehrotra;

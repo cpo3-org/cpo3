@@ -36,11 +36,6 @@ macro_rules! scalar_fields {
             // Outer iterations.
             initial_shift_floor,
             step_fraction,
-            max_centrality_correctors,
-            corrector_gate,
-            governor,
-            max_recenters,
-            recenter_sigma_floor,
         }
     };
 }

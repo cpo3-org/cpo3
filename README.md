@@ -101,6 +101,42 @@ uv run ty check
 
 See [benchmarks/README.md](benchmarks/README.md) for the included benchmark data.
 
+## Connection to the paper
+
+The numerical iteration follows the modified Mehrotra algorithm (`alg:ipm`).
+Equation labels below refer to the paper source, `mpc_main.tex`.
+
+| Code | Mathematical role |
+| --- | --- |
+| `src/embedding.rs` | Homogeneous state, complementarity, and spherical normalization (`eq:iterate_normalisation`). |
+| `src/init.rs` | Canonical or CVXOPT cold starts and local-norm warm-start screening (`subsec:warm-start`). |
+| `src/mehrotra.rs` | Predictor, centering, second-order corrector, and damped boundary step (`subsec:mehrotra`). |
+| `src/josephy.rs` | Surrogate right-hand sides, cached data solve, scalar quadratic, and reconstruction (`eq:surrogate_rhs`, `eq:cached_data_solve`, `thm:resolvent`). |
+| `src/josephy/kkt.rs` | Sparse quasi-definite system (`eq:qd_system`), singleton Schur complement, and full-system refinement. |
+| `src/linear_system/` | Faer and Feral factorization adapters. |
+| `src/solution.rs` | Preparation, outer loop, original-unit stopping tests, certificates, and recovery (`subsec:termination`). |
+
+The implemented centering rule is `sigma = (1 - alpha_affine)^3`; the paper's
+normalized affine-complementarity formula is awaiting revision. `mu` denotes
+current complementarity or a target, while `rho` denotes the true KKT shift.
+Factor-diagonal clamping is distinct from `rho`: refinement targets the full
+system with shift `rho`. The resolvent uses increment equations to preserve
+small updates when point-coordinate terms would cancel.
+
+Each ordinary iteration shares one factorization and three primary solves:
+the constant data column, predictor, and corrector. Numerical retries and
+refinement can add work. Spherical normalization, shift retries, the homogeneous
+root fallback, and CVXOPT initialization remain supported. Governor recentering
+and additional Gondzio centrality correctors are not part of this iteration.
+
+`SolutionInfo.warm_start_score` reports the score used to accept or reject the
+best warm candidate (`None` if no finite candidate was screened). The former
+best-level initialization diagnostics and governor/MCC settings and counters
+have been removed from both the Rust and Python interfaces.
+
+The [paired 618-problem comparison](benchmarks/refactor/results/report.md)
+records numerical equivalence checks and Dolan–Moré profiles for this refactor.
+
 ## Authors and license
 
 Matteo Santamaria, Michael Cummins, and Brendan O'Donoghue.

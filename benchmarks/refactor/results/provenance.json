@@ -1,0 +1,54 @@
+{
+  "baseline_commit": "c74a982ad1c3fd1dafcfb0f3d963522339becc56",
+  "branch": "spherical-renormalization",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "python": "3.14.3",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "timestamp_utc": "2026-10-16T16:33:45.665552+00:00",
+  "cargo_lock_sha256": "f5c7231122744413a4d070d5b9cf032d780c487138501638979825aa90afcad6",
+  "build_features": [
+    "python",
+    "mps"
+  ],
+  "build_profile": "release",
+  "extra_rustc_arguments": [
+    "-C",
+    "link-arg=-undefined",
+    "-C",
+    "link-arg=dynamic_lookup"
+  ],
+  "candidate_sources": {
+    "src/cone/geometry.rs": "31ef2443a3ba7fcbd2528fcba3727c9e43071069149856b1824cf47bf1091f6d",
+    "src/cone.rs": "54f3217cb35da3656199bef0e7f808294c42c7b1c07ec5af0347327a223936cb",
+    "src/data_equilibration.rs": "92568655135cdf5caeb0e2dbc5d46cdbada0640317948096d211a60d6a89b148",
+    "src/embedding.rs": "5f6ad79b6336a0d789dd180b1187d2608f27b683696013658dc96fd9f3840f50",
+    "src/equilibration.rs": "1759c969357e0c4b1aeaa18908763bd3f28da42fed84c135b78efdedb73f5c65",
+    "src/init.rs": "e755e67d458280462dd8666d2eca5da2fc5691415bc6e7a35b3b87625898f40e",
+    "src/josephy/kkt.rs": "21370ad058d5fc1d5affa454b6677df45ce43e9a7bac15e40edaeea9f07c05a4",
+    "src/josephy/tests.rs": "d27d9d9b92f44ec0c0fff400d9513587a897eaf14efdcbb25f4c19797f823f90",
+    "src/josephy.rs": "3e6871b417ad15f0092f8ad0fb519ed9f327bcf609cdc1204c5270c9433e9d74",
+    "src/lib.rs": "3d6f9794374d71183c0b081b18b38e4865a958533a0b7b2acd043e54390afc44",
+    "src/linear_solver.rs": "10df7ebf9dd5d213c08f749a0212118a3debe03312371bd476e11a7425a9e905",
+    "src/linear_system/faer.rs": "eca7009685885008c2d88aa81a955b255264c6922c95d0aabb6b221c96bb44af",
+    "src/linear_system/feral.rs": "d8d31a366532fe8981056c994838fbbca52d62f0ff5d120656879ca95ad97d1c",
+    "src/linear_system.rs": "e53994e59905c76bffbb185bb69a101f7dd8c1c361070917f84c6790bd8d24f0",
+    "src/matrix/csc.rs": "221ee7640428a4294a9b96b1794f05da29f1e5caa9f5f40cdb76ee6d3115c545",
+    "src/matrix.rs": "018ca4c0c0295f46a4e3cc4c0dbcd69fd2867b34c05cee06fdd02f8ba9307549",
+    "src/mehrotra.rs": "10fe6627f59cdbf520ca2bac9db1fc59ec973d32ef076ece2c30eabb458370ff",
+    "src/mps.rs": "76d673c01a87a8d88fdd9e2aea3f6a109f76b953c54b5aa0f33770e181b58e0f",
+    "src/presolve.rs": "73e395455631013efd6bf444056fd517ab24daec22e96fbfa12084a63f4fc5f0",
+    "src/problem.rs": "b8ab9602dd0ed9cb18d3858caba404060a945d65d7e8b96cff78d4dfb240d960",
+    "src/progress.rs": "780ab1a1f366ff01c0a708b793b68b9fc28f22a78bf68c14895d11fa431adc38",
+    "src/python/settings.rs": "b04cc2a0e1f0b314c277ea71963ed97e69a5544d6740355f6512437910a8865e",
+    "src/python.rs": "d673285b00b7d314aa21d4987bdd06bb1a540688d77e1a4ee37335cf7b98d050",
+    "src/settings.rs": "9c0e5445b5259d555c5073359f4678a051ad7fb47de61a104840c5283d3e656f",
+    "src/solution.rs": "327440c78378e9f71155c676a6056b8b2faa895d5b4c8519145784b803f0ae6a"
+  },
+  "checks": {
+    "rust_tests": 113,
+    "python_tests": 70,
+    "cargo_clippy": "--all-targets --all-features -- -D warnings",
+    "ruff": "check and format --check",
+    "ty": "check python tests"
+  }
+}

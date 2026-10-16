@@ -1,0 +1,167 @@
+[
+  {
+    "problem": "miplib/ns1116954",
+    "settings": {
+      "presolve": false,
+      "max_iters": 13,
+      "time_limit": 600.0
+    },
+    "results": {
+      "baseline": {
+        "status": "max_iterations",
+        "elapsed": 71.2648914582096,
+        "solve_time": 71.264569875,
+        "vectors_sha256": "fffcb10a71930a3a7fc46994ef54eec9382fd5e531fa92bad3390e66aee012c4",
+        "n": 12648,
+        "m": 157287,
+        "cvxopt_init_used": false,
+        "iters": 13,
+        "factorizations": 13,
+        "primary_solves": 39,
+        "refinement_solves": 0,
+        "refinement_failures": 0,
+        "refinement_settled": 0,
+        "inertia_failures": 0,
+        "pobj": "0x0.0p+0",
+        "dobj": "-0x1.b7c336f79784cp+1",
+        "pres": "0x1.a6faf646121d8p+1",
+        "dres": "0x1.69ce953ea6462p-4",
+        "comp": "0x1.60506644c8f47p+1",
+        "verified": false
+      },
+      "candidate": {
+        "status": "max_iterations",
+        "elapsed": 69.86859437497333,
+        "solve_time": 69.868223541,
+        "vectors_sha256": "fffcb10a71930a3a7fc46994ef54eec9382fd5e531fa92bad3390e66aee012c4",
+        "n": 12648,
+        "m": 157287,
+        "cvxopt_init_used": false,
+        "iters": 13,
+        "factorizations": 13,
+        "primary_solves": 39,
+        "refinement_solves": 0,
+        "refinement_failures": 0,
+        "refinement_settled": 0,
+        "inertia_failures": 0,
+        "pobj": "0x0.0p+0",
+        "dobj": "-0x1.b7c336f79784cp+1",
+        "pres": "0x1.a6faf646121d8p+1",
+        "dres": "0x1.69ce953ea6462p-4",
+        "comp": "0x1.60506644c8f47p+1",
+        "verified": false
+      }
+    },
+    "different_fields": []
+  },
+  {
+    "problem": "miplib/ns1644855",
+    "settings": {
+      "presolve": false,
+      "max_iters": 4,
+      "time_limit": 600.0
+    },
+    "results": {
+      "baseline": {
+        "status": "max_iterations",
+        "elapsed": 79.44726733397692,
+        "solve_time": 79.446974583,
+        "vectors_sha256": "98af807acfe49722a5abfc600effc5da6e34258ee7513512d84a12a41c900302",
+        "n": 30200,
+        "m": 70698,
+        "cvxopt_init_used": false,
+        "iters": 4,
+        "factorizations": 4,
+        "primary_solves": 12,
+        "refinement_solves": 0,
+        "refinement_failures": 0,
+        "refinement_settled": 0,
+        "inertia_failures": 0,
+        "pobj": "-0x1.a602fb39c52a1p+2",
+        "dobj": "-0x1.9241a4d285f5ep+4",
+        "pres": "0x1.3e60d3903ab39p+4",
+        "dres": "0x1.fb7e1a3097dcap-1",
+        "comp": "0x1.df2dce7f06226p-4",
+        "verified": false
+      },
+      "candidate": {
+        "status": "max_iterations",
+        "elapsed": 79.71043229103088,
+        "solve_time": 79.709781959,
+        "vectors_sha256": "98af807acfe49722a5abfc600effc5da6e34258ee7513512d84a12a41c900302",
+        "n": 30200,
+        "m": 70698,
+        "cvxopt_init_used": false,
+        "iters": 4,
+        "factorizations": 4,
+        "primary_solves": 12,
+        "refinement_solves": 0,
+        "refinement_failures": 0,
+        "refinement_settled": 0,
+        "inertia_failures": 0,
+        "pobj": "-0x1.a602fb39c52a1p+2",
+        "dobj": "-0x1.9241a4d285f5ep+4",
+        "pres": "0x1.3e60d3903ab39p+4",
+        "dres": "0x1.fb7e1a3097dcap-1",
+        "comp": "0x1.df2dce7f06226p-4",
+        "verified": false
+      }
+    },
+    "different_fields": []
+  },
+  {
+    "problem": "miplib/physiciansched3-3",
+    "settings": {
+      "presolve": false,
+      "max_iters": 10,
+      "time_limit": 600.0
+    },
+    "results": {
+      "baseline": {
+        "status": "max_iterations",
+        "elapsed": 71.04756462480873,
+        "solve_time": 71.047133375,
+        "vectors_sha256": "250056b73f566f073854c635c7847ff278841aa72e993a3b71ebfccf2fa96c7e",
+        "n": 79555,
+        "m": 417922,
+        "cvxopt_init_used": false,
+        "iters": 10,
+        "factorizations": 10,
+        "primary_solves": 30,
+        "refinement_solves": 0,
+        "refinement_failures": 0,
+        "refinement_settled": 0,
+        "inertia_failures": 0,
+        "pobj": "0x1.260d1400dc28ep-8",
+        "dobj": "-0x1.1175df0d712d4p+9",
+        "pres": "0x1.768fb7a4a95fbp+12",
+        "dres": "0x1.ffebb5c801da4p-1",
+        "comp": "0x1.d72a73cc9edf6p-1",
+        "verified": false
+      },
+      "candidate": {
+        "status": "max_iterations",
+        "elapsed": 70.72259987518191,
+        "solve_time": 70.72132225,
+        "vectors_sha256": "250056b73f566f073854c635c7847ff278841aa72e993a3b71ebfccf2fa96c7e",
+        "n": 79555,
+        "m": 417922,
+        "cvxopt_init_used": false,
+        "iters": 10,
+        "factorizations": 10,
+        "primary_solves": 30,
+        "refinement_solves": 0,
+        "refinement_failures": 0,
+        "refinement_settled": 0,
+        "inertia_failures": 0,
+        "pobj": "0x1.260d1400dc28ep-8",
+        "dobj": "-0x1.1175df0d712d4p+9",
+        "pres": "0x1.768fb7a4a95fbp+12",
+        "dres": "0x1.ffebb5c801da4p-1",
+        "comp": "0x1.d72a73cc9edf6p-1",
+        "verified": false
+      }
+    },
+    "different_fields": []
+  }
+]

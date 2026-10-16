@@ -1,0 +1,278 @@
+{
+  "problems": 618,
+  "runs": 2472,
+  "repeats": 2,
+  "completed_pairs": 1236,
+  "numerical_differences": [],
+  "time_censored_pairs": [
+    {
+      "problem": "miplib/ex10",
+      "repeat": 0,
+      "fields": []
+    },
+    {
+      "problem": "miplib/ex10",
+      "repeat": 1,
+      "fields": []
+    },
+    {
+      "problem": "miplib/neos-5093327-huahum",
+      "repeat": 0,
+      "fields": []
+    },
+    {
+      "problem": "miplib/neos-5093327-huahum",
+      "repeat": 1,
+      "fields": []
+    },
+    {
+      "problem": "miplib/ns1116954",
+      "repeat": 0,
+      "fields": [
+        "factorizations",
+        "dobj",
+        "comp",
+        "dres",
+        "primary_solves",
+        "pres",
+        "iters",
+        "vectors_sha256"
+      ]
+    },
+    {
+      "problem": "miplib/ns1116954",
+      "repeat": 1,
+      "fields": []
+    },
+    {
+      "problem": "miplib/ns1644855",
+      "repeat": 0,
+      "fields": [
+        "factorizations",
+        "dobj",
+        "comp",
+        "dres",
+        "primary_solves",
+        "pres",
+        "iters",
+        "vectors_sha256",
+        "pobj"
+      ]
+    },
+    {
+      "problem": "miplib/ns1644855",
+      "repeat": 1,
+      "fields": []
+    },
+    {
+      "problem": "miplib/physiciansched3-3",
+      "repeat": 0,
+      "fields": [
+        "factorizations",
+        "dobj",
+        "comp",
+        "dres",
+        "primary_solves",
+        "pres",
+        "iters",
+        "vectors_sha256",
+        "pobj"
+      ]
+    },
+    {
+      "problem": "miplib/physiciansched3-3",
+      "repeat": 1,
+      "fields": [
+        "factorizations",
+        "dobj",
+        "comp",
+        "dres",
+        "primary_solves",
+        "pres",
+        "iters",
+        "vectors_sha256",
+        "pobj"
+      ]
+    },
+    {
+      "problem": "miplib/rail02",
+      "repeat": 0,
+      "fields": []
+    },
+    {
+      "problem": "miplib/rail02",
+      "repeat": 1,
+      "fields": []
+    },
+    {
+      "problem": "miplib/supportcase10",
+      "repeat": 0,
+      "fields": []
+    },
+    {
+      "problem": "miplib/supportcase10",
+      "repeat": 1,
+      "fields": []
+    }
+  ],
+  "status_counts": {
+    "kennington": {
+      "baseline": {
+        "solved": 30,
+        "max_iterations": 2
+      },
+      "candidate": {
+        "solved": 30,
+        "max_iterations": 2
+      }
+    },
+    "maros-meszaros": {
+      "baseline": {
+        "solved": 274
+      },
+      "candidate": {
+        "solved": 274
+      }
+    },
+    "miplib": {
+      "baseline": {
+        "solved": 400,
+        "time_limit": 14,
+        "max_iterations": 24
+      },
+      "candidate": {
+        "solved": 400,
+        "time_limit": 14,
+        "max_iterations": 24
+      }
+    },
+    "netlib": {
+      "baseline": {
+        "solved": 192,
+        "max_iterations": 4
+      },
+      "candidate": {
+        "solved": 192,
+        "max_iterations": 4
+      }
+    },
+    "qplib": {
+      "baseline": {
+        "max_iterations": 4,
+        "solved": 28
+      },
+      "candidate": {
+        "max_iterations": 4,
+        "solved": 28
+      }
+    },
+    "mpc_qpbenchmark": {
+      "baseline": {
+        "solved": 128
+      },
+      "candidate": {
+        "solved": 128
+      }
+    },
+    "dc_opf": {
+      "baseline": {
+        "solved": 134,
+        "max_iterations": 2
+      },
+      "candidate": {
+        "solved": 134,
+        "max_iterations": 2
+      }
+    }
+  },
+  "verified_problems": {
+    "baseline": 593,
+    "candidate": 593
+  },
+  "common_verified": 593,
+  "median_candidate_over_baseline": 1.0016117007734002,
+  "over_10ms_count": 335,
+  "over_10ms_median_ratio": 1.0020044979528933,
+  "over_10ms_ratio_quantiles": [
+    0.9721230991330599,
+    0.9902257667921033,
+    1.0020044979528933,
+    1.012977914134071,
+    1.0325732739027036
+  ],
+  "baseline_repeat_ratio_quantiles": [
+    0.9696700340226397,
+    0.9857950382847869,
+    0.9983038841334833,
+    1.0117691684385612,
+    1.0336876280421188
+  ],
+  "profile_thresholds": [
+    1.0,
+    1.01,
+    1.02,
+    1.05,
+    1.1,
+    1.25,
+    1.5,
+    2.0,
+    5.0,
+    10.0
+  ],
+  "runtime_profiles": [
+    [
+      0.5064724919093851,
+      0.6537216828478964,
+      0.7459546925566343,
+      0.8543689320388349,
+      0.9061488673139159,
+      0.9466019417475728,
+      0.9563106796116505,
+      0.959546925566343,
+      0.959546925566343,
+      0.959546925566343
+    ],
+    [
+      0.45307443365695793,
+      0.6229773462783171,
+      0.7572815533980582,
+      0.8673139158576052,
+      0.9207119741100324,
+      0.948220064724919,
+      0.9546925566343042,
+      0.959546925566343,
+      0.959546925566343,
+      0.959546925566343
+    ]
+  ],
+  "baseline_repeat_profiles": [
+    [
+      0.36893203883495146,
+      0.5436893203883495,
+      0.6472491909385113,
+      0.7572815533980582,
+      0.843042071197411,
+      0.9255663430420712,
+      0.9498381877022654,
+      0.9563106796116505,
+      0.959546925566343,
+      0.959546925566343
+    ],
+    [
+      0.5906148867313916,
+      0.6941747572815534,
+      0.7734627831715211,
+      0.8689320388349514,
+      0.901294498381877,
+      0.9433656957928802,
+      0.9530744336569579,
+      0.9579288025889967,
+      0.959546925566343,
+      0.959546925566343
+    ]
+  ],
+  "over_10ms_median_ratio_bootstrap_95ci": [
+    0.9999181528086959,
+    1.0041357310635135
+  ]
+}

@@ -125,23 +125,6 @@ impl<'a> EquilibratedProblem<'a> {
         );
     }
 
-    /// Map original recovered products back to operating homogeneous coordinates.
-    /// `tau` is the same guarded divisor used in solution recovery.
-    pub(crate) fn scale_products(&self, ax: &mut [f64], px: &mut [f64], aty: &mut [f64], tau: f64) {
-        let factor = self.tau * tau;
-        crate::matrix::update(ax, &self.y, |value, scale| value * (factor * scale));
-        faer::zip!(
-            faer::ColMut::from_slice_mut(px),
-            faer::ColMut::from_slice_mut(aty),
-            faer::ColRef::from_slice(&self.x)
-        )
-        .for_each(|faer::unzip!(px, aty, scale)| {
-            let scale = factor * scale;
-            *px *= scale;
-            *aty *= scale;
-        });
-    }
-
     fn ruiz(problem: &'a Problem, settings: &Settings) -> Result<Self, DataEquilibrationError> {
         if settings.max_equilibration_passes == 0 {
             return Ok(Self::unscaled(problem));

@@ -72,6 +72,7 @@ impl FeralFactorization {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn refactor(
         &mut self,
         matrix: &CscMatrix,

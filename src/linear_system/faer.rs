@@ -113,6 +113,7 @@ impl FaerFactorization {
         validate_finite(vector)
     }
 
+    #[cfg(test)]
     pub(super) fn refactor(
         &mut self,
         matrix: &CscMatrix,
