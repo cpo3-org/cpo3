@@ -108,7 +108,7 @@ impl Default for Settings {
             kkt_bound_elimination: true,
             min_static_regularization: 0.0,
             max_refinement_steps: 30,
-            refinement_tolerance: 1e-8,
+            refinement_tolerance: 1e-7,
 
             initial_shift_floor: 1e-10,
             step_fraction: 1.0 - f64::EPSILON.sqrt(),
