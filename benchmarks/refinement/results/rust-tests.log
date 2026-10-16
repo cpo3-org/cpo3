@@ -1,0 +1,170 @@
+   Compiling num-traits v0.2.19
+   Compiling syn v2.0.119
+   Compiling once_cell v1.21.4
+   Compiling memchr v2.8.3
+   Compiling serde_json v1.0.151
+   Compiling thiserror-impl v1.0.69
+   Compiling enum-as-inner v0.6.1
+   Compiling equator-macro v0.2.1
+   Compiling equator-macro v0.4.2
+   Compiling num-complex v0.4.6
+   Compiling equator v0.2.2
+   Compiling equator v0.4.2
+   Compiling pulp v0.22.3
+   Compiling nano-gemm-c64 v0.2.1
+   Compiling nano-gemm-c32 v0.2.1
+   Compiling thiserror v1.0.69
+   Compiling spindle v0.2.6
+   Compiling sysctl v0.6.0
+   Compiling nano-gemm v0.2.2
+   Compiling gemm-common v0.19.0
+   Compiling qd v0.8.0
+   Compiling faer-traits v0.24.0
+   Compiling feral v0.17.0
+   Compiling gemm-f64 v0.19.0
+   Compiling gemm-c32 v0.19.0
+   Compiling gemm-f32 v0.19.0
+   Compiling gemm-c64 v0.19.0
+   Compiling gemm v0.19.0
+   Compiling faer v0.24.4
+   Compiling cpo3 v0.0.1 (/private/tmp/cpo3-refinement-reassessment/candidate-source)
+    Finished `release` profile [optimized] target(s) in 47.24s
+     Running unittests src/lib.rs (/private/tmp/cpo3-first-pass/target/release/deps/cpo3-a55d8a8120faa758)
+
+running 87 tests
+test cone::geometry::tests::dual_interior_ignores_zero_rows ... ok
+test cone::geometry::tests::lays_out_mixed_blocks_and_builds_canonical_point ... ok
+test cone::geometry::tests::step_to_boundary_is_the_smallest_positive_ratio_capped_at_one ... ok
+test cone::geometry::tests::nt_scaling_satisfies_both_self_scaled_identities ... ok
+test cone::geometry::tests::reports_layout_domain_and_extension_errors ... ok
+test data_equilibration::tests::unit_ruiz_scaling_preserves_original_data_and_maps ... ok
+test data_equilibration::tests::homogeneous_ruiz_balances_the_augmented_data ... ok
+test data_equilibration::tests::none_borrows_the_original_problem_and_uses_identity_maps ... ok
+test embedding::tests::canonical_initial_state_has_unit_duality_measure_per_slack ... ok
+test data_equilibration::tests::homogeneous_ruiz_preserves_the_qp_under_coordinate_mapping ... ok
+test embedding::tests::invalid_states_and_parameters_are_rejected ... ok
+test embedding::tests::normalization_uses_the_norm_floor_and_corrects_small_deviations ... ok
+test embedding::tests::sphere_projection_avoids_squaring_extreme_coordinates ... ok
+test embedding::tests::sphere_projection_preserves_the_projective_solution_and_cone_geometry ... ok
+test embedding::tests::unrepresentable_sphere_projection_leaves_the_state_unchanged ... ok
+test init::tests::all_equality_warm_point_is_ignored ... ok
+test init::tests::cold_start_is_centered_on_the_sphere_after_data_scaling ... ok
+test init::tests::cvxopt_equality_only_start_is_the_kkt_point_at_unit_scale ... ok
+test init::tests::cvxopt_linear_program_splits_the_primal_and_dual_solves ... ok
+test init::tests::cvxopt_quadratic_start_solves_the_initial_kkt_system_and_shifts_cone_rows ... ok
+test init::tests::interior_shift_moves_only_cone_rows_and_only_upward ... ok
+test init::tests::local_score_matches_the_guarded_metric_with_an_equality_row ... ok
+test init::tests::screening_can_select_each_of_the_three_floors ... ok
+test josephy::tests::assembles_sparse_quasi_definite_systems ... ok
+test josephy::tests::assembly_rejects_a_nonpositive_diagonal ... ok
+test josephy::tests::best_effort_refines_true_system_even_without_eliminated_rows ... ok
+test josephy::tests::bound_rows_fold_into_the_reduced_diagonal ... ok
+test josephy::tests::failed_root_uses_current_state_and_reuses_fallback_products ... ok
+test josephy::tests::fused_full_system_residual_preserves_rounding_and_the_normalizer ... ok
+test josephy::tests::increment_resolvent_matches_point_equations_for_lp_and_qp ... ok
+test josephy::tests::increment_resolvent_preserves_a_small_point_between_large_columns ... ok
+test josephy::tests::positive_tau_coefficient_handles_extreme_weights_before_squaring ... ok
+test josephy::tests::resolvent_accepts_zero_tau_without_fallback ... ok
+test josephy::tests::bound_row_elimination_leaves_the_resolvent_solution_unchanged ... ok
+test josephy::tests::resolvent_rejects_bad_inputs ... ok
+test josephy::tests::root_thresholds_are_in_original_units ... ok
+test josephy::tests::scaled_roots_handle_extreme_coefficients_and_general_signs ... ok
+test josephy::tests::tau_root_accepts_zero_and_roundoff_but_rejects_invalid_roots ... ok
+test josephy::tests::resolvent_solves_the_shifted_system_for_every_solver ... ok
+test linear_system::tests::componentwise_backward_error_detects_a_badly_scaled_row ... ok
+test josephy::tests::refinement_warm_start_preserves_weak_components_and_corrects_the_rest ... ok
+test linear_system::tests::componentwise_backward_error_is_invariant_under_row_scaling ... ok
+test josephy::tests::failed_step_restores_the_previous_constant_column_without_copying ... ok
+test josephy::tests::constant_column_warm_start_survives_refactorization_only_within_its_cache ... ok
+test linear_system::tests::faer_regularizes_a_tiny_pivot_and_refines_to_the_true_solution ... ok
+test linear_system::tests::faer_factors_solves_and_refactors_sparse_systems ... ok
+test linear_system::tests::fused_initial_residual_preserves_rounding_and_the_normalizer ... ok
+test linear_system::tests::numeric_failure_is_counted_but_shape_validation_is_not ... ok
+test linear_system::tests::refinement_allows_slow_initial_progress_that_later_accelerates ... ok
+test linear_system::tests::refinement_corrects_a_componentwise_inaccurate_solution ... ok
+test linear_system::tests::refinement_counts_failed_corrections_and_successful_retries ... ok
+test linear_system::tests::refinement_keeps_the_best_iterate_when_it_diverges ... ok
+test linear_system::tests::refinement_stops_when_the_correction_does_not_improve ... ok
+test matrix::arithmetic_tests::rectangular_products_handle_explicit_sparse_zeros ... ok
+test linear_system::tests::inertia_check_counts_positive_pivots ... ok
+test matrix::norm_tests::ordinary_extreme_and_nonfinite_norms ... ok
+test mehrotra::tests::accepted_tau_damps_zero_candidates_and_rejects_nonfinite_updates ... ok
+test josephy::tests::clamped_preconditioner_is_identical_with_or_without_bound_elimination ... ok
+test mehrotra::tests::corrector_slack_carries_the_second_order_correction ... ok
+test mehrotra::tests::corrector_uses_full_affine_anchor_even_when_working_mu_is_floored ... ok
+test mehrotra::tests::corrector_with_unit_sigma_and_zero_displacement_is_pure_centering ... ok
+test mehrotra::tests::predictor_corrector_share_one_factorization_and_three_solves ... ok
+test mehrotra::tests::predictor_rejects_a_nonpositive_duality_measure ... ok
+test mehrotra::tests::predictor_slack_is_the_newton_update_on_affine_complementarity ... ok
+test mehrotra::tests::predictor_slack_vanishes_on_zero_rows ... ok
+test mehrotra::tests::retries_are_bounded_and_skip_nonnumerical_failures ... ok
+test mehrotra::tests::retries_increase_the_true_shift_and_decay_after_accurate_steps ... ok
+test progress::tests::banner_uses_the_minimal_signature ... ok
+test progress::tests::cadence_is_dense_at_first_and_periodic_afterward ... ok
+test mehrotra::tests::step_stays_interior_and_reduces_the_duality_measure ... ok
+test progress::tests::iteration_rows_include_both_objectives ... ok
+test progress::tests::redirected_output_has_an_ascii_fallback ... ok
+test progress::tests::table_columns_are_aligned ... ok
+test solution::tests::cpo3_dual_certificate_uses_supplied_slack_and_sum_of_norms ... ok
+test solution::tests::cpo3_stopping_uses_gap_or_relative_gap_and_strict_feasibility ... ok
+test solution::tests::large_nullspace_iterates_do_not_relax_stationarity ... ok
+test solution::tests::measures_use_infinity_norms_and_equation_scales ... ok
+test linear_system::faer::tests::cached_permutation_matches_faer_for_both_numeric_kernels ... ok
+test linear_system::tests::diagonal_updates_preserve_off_diagonals_across_refactors ... ok
+test solution::tests::recovery_uses_the_tracked_slack ... ok
+test linear_system::tests::feral_factors_solves_and_refactors_sparse_systems ... ok
+test solution::tests::the_core_keeps_time_already_spent_in_presolve ... ok
+test solution::tests::dual_infeasible_lp_returns_an_unbounded_ray ... ok
+test solution::tests::feasible_lp_is_not_declared_infeasible ... ok
+test solution::tests::warm_start_can_be_forced ... ok
+test solution::tests::primal_infeasible_lp_returns_a_farkas_certificate ... ok
+test solution::tests::presolved_acceptance_uses_original_equation_scales ... ok
+
+test result: ok. 87 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/interface.rs (/private/tmp/cpo3-first-pass/target/release/deps/interface-da6b7ff422427b9e)
+
+running 16 tests
+test cones_report_their_vector_dim ... ok
+test cone_rows_must_match_constraint_rows ... ok
+test owned_conversion_moves_cpo3_matrix_and_vector_buffers ... ok
+test settings_use_short_names ... ok
+test quadratic_matrix_must_be_symmetric ... ok
+test cvxopt_initialization_solves_an_equality_constrained_quadratic_in_one_step ... ok
+test solves_an_equality_constrained_quadratic ... ok
+test solves_a_sparse_bounded_quadratic_with_every_sparse_solver ... ok
+test native_presolve_converts_cpo3_cones_and_recovers_original_coordinates ... ok
+test solves_a_linear_program ... ok
+test solves_a_quadratic_with_an_inactive_nonnegative_constraint ... ok
+test solves_mixed_equality_and_inequality_constraints ... ok
+test sparse_problem_preserves_dimensions ... ok
+test solves_equality_chain_without_homogeneous_scale_stagnation ... ok
+test bound_elimination_is_optional_with_every_sparse_solver ... ok
+test cvxopt_initialization_solves_the_reference_problems_with_every_solver ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/mps_conversion.rs (/private/tmp/cpo3-first-pass/target/release/deps/mps_conversion-85a99ab94410156f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mps_parser.rs (/private/tmp/cpo3-first-pass/target/release/deps/mps_parser-ec4b50f4998f42a9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/mps_read.rs (/private/tmp/cpo3-first-pass/target/release/deps/mps_read-e63960e53855163d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests cpo3
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,0 +1,22 @@
+{
+  "broad_base_commit": "f937dabd37acfbc48ef04d285dd45bfb1c84aeb8",
+  "integration_base_commit": "370a9472ba1ef3a001a71c91e0a3f3a98d894a02",
+  "native_sha256": {
+    "headbaseline-package": "110c3e63b4e0f46005b601f4f5dd7fbb9a593cd6f6ee33664b29d5966c20043e",
+    "baseline-package": "8c48940281b12962bca132f6a4d45d89eef04e4a5d518c91f273559ec3950d6d",
+    "best_effort-package": "149016719b251fa57a50a214745f37a1e2f70bd34c130bc73419385867e74353",
+    "monotone-package": "0f5698801067be62fdbc60f43a2c845fed5c08bc7eb4e2d87b585e238fb81ca3",
+    "control-package": "8c48940281b12962bca132f6a4d45d89eef04e4a5d518c91f273559ec3950d6d",
+    "headcandidate-package": "789dc010468a0899ad331cda35b7f5ea0808adb75f42bff8b0c37de55efdd760",
+    "candidate-package": "29f5ba6eae35a283a8068b21d179adf1425804201bed302b87b1d0b236460cf8"
+  },
+  "record_counts": {
+    "full": 2472,
+    "deadline": 2,
+    "control": 216,
+    "head-confirmation": 486,
+    "small-control": 459,
+    "screen": 708,
+    "confirmation": 486
+  }
+}

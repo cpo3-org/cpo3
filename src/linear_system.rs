@@ -8,10 +8,6 @@ use thiserror::Error;
 
 use crate::{CscMatrix, LinearSolver, Settings};
 
-// Per-pass contraction below which refinement counts as stalled (no halving
-// over two passes).
-const STALL_RATE: f64 = std::f64::consts::FRAC_1_SQRT_2;
-
 /// How KKT systems are factorized and solved.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct KktSettings {
@@ -400,47 +396,31 @@ pub(crate) fn refine_with(
     denominator.resize(rhs.len(), 0.0);
     initialize(&solution, rhs, residual, denominator);
     let mut best_error: Option<f64> = None;
-    let mut errors = [f64::INFINITY; 2];
     for iteration in 0..=settings.max_refinement_steps {
         if iteration != 0 {
             residual_into(&solution, rhs, residual);
         }
         let backward_error = backward_error(residual, denominator);
-        let improved = match best_error {
-            Some(error) if !backward_error.is_finite() || backward_error > 10.0 * error => {
-                return settle_refinement(best_error, strict, best, stats);
-            }
-            Some(error) => backward_error < error,
-            None => true,
-        };
+        // Stop on stagnation or deterioration; do not forecast future progress.
+        let improved = best_error.is_none_or(|error| backward_error < error);
+        if !backward_error.is_finite() || !improved {
+            return settle_refinement(best_error, strict, best, stats);
+        }
         if backward_error <= settings.refinement_tolerance {
             return validate_solution(solution);
         }
-        // Strict refinement needs only the best error: failure never returns
-        // a saved iterate. Best-effort mode keeps the original swap scheme.
-        if improved {
-            if !strict {
-                if best_error.is_some() {
-                    std::mem::swap(best, &mut solution);
-                } else {
-                    best.clear();
-                    best.extend_from_slice(&solution);
-                }
-            }
-            best_error = Some(backward_error);
-        }
-        if iteration >= 2 {
-            let rate = (backward_error / errors[0]).sqrt();
-            let remaining =
-                i32::try_from(settings.max_refinement_steps - iteration).unwrap_or(i32::MAX);
-            if rate.is_nan()
-                || (rate > STALL_RATE
-                    && backward_error * rate.powi(remaining) > settings.refinement_tolerance)
-            {
-                return settle_refinement(best_error, strict, best, stats);
+        // Every accepted refinement iterate improves the backward error.
+        // Strict mode needs only that error; best-effort mode also retains
+        // the iterate so non-convergence can return it.
+        if !strict {
+            if best_error.is_some() {
+                std::mem::swap(best, &mut solution);
+            } else {
+                best.clear();
+                best.extend_from_slice(&solution);
             }
         }
-        errors = [errors[1], backward_error];
+        best_error = Some(backward_error);
         if iteration == settings.max_refinement_steps {
             return settle_refinement(best_error, strict, best, stats);
         }
@@ -452,7 +432,7 @@ pub(crate) fn refine_with(
                 actual: correction.len(),
             });
         }
-        if !strict && improved {
+        if !strict {
             // After a best-effort swap, `solution` is the stale output buffer.
             crate::matrix::binary_into(&mut solution, best, correction, |base, correction| {
                 base + correction
@@ -829,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn refinement_stops_once_the_rate_cannot_reach_tolerance() {
+    fn refinement_stops_when_the_correction_does_not_improve() {
         let matrix: CscMatrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
         let mut correction_count = 0;
         let mut stats = LinearAlgebraStats::default();
@@ -846,10 +826,10 @@ mod tests {
         )
         .unwrap();
 
-        // Two stalled passes are enough to extrapolate a miss.
+        // An unchanged iterate cannot benefit from repeating the same correction.
         assert_eq!(solution, vec![0.0]);
-        assert_eq!(correction_count, 2);
-        assert_eq!(stats.refinement_solves, 2);
+        assert_eq!(correction_count, 1);
+        assert_eq!(stats.refinement_solves, 1);
         assert_eq!(stats.refinement_settled, 1);
 
         let mut stats = LinearAlgebraStats::default();
@@ -868,6 +848,32 @@ mod tests {
     }
 
     #[test]
+    fn refinement_allows_slow_initial_progress_that_later_accelerates() {
+        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let mut corrections = 0;
+        let mut stats = LinearAlgebraStats::default();
+        let solution = refine_solution(
+            &matrix,
+            &[1.0],
+            vec![0.0],
+            true,
+            |residual| {
+                corrections += 1;
+                let fraction = if corrections <= 2 { 0.1 } else { 1.0 };
+                Ok(vec![fraction * residual[0]])
+            },
+            &mut stats,
+        )
+        .unwrap();
+        // The first two corrections reduce error by only 10% each. A
+        // constant-rate forecast would reject them, but the next solves it.
+        assert_eq!(solution, vec![1.0]);
+        assert_eq!(corrections, 3);
+        assert_eq!(stats.refinement_solves, 3);
+        assert_eq!(stats.refinement_failures, 0);
+    }
+
+    #[test]
     fn refinement_keeps_the_best_iterate_when_it_diverges() {
         let matrix: CscMatrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
         // Corrections push the iterate away from the solution x = 1.
@@ -877,18 +883,19 @@ mod tests {
             &[1.0],
             vec![0.9],
             false,
-            |_| Ok(vec![100.0]),
+            |_| Ok(vec![-0.01]),
             &mut stats,
         )
         .unwrap();
         assert_eq!(solution, vec![0.9]);
+        assert_eq!(stats.refinement_solves, 1);
         assert!(matches!(
             refine_solution(
                 &matrix,
                 &[1.0],
                 vec![0.9],
                 true,
-                |_| Ok(vec![100.0]),
+                |_| Ok(vec![-0.01]),
                 &mut stats,
             ),
             Err(LinearSystemError::RefinementDiverged(_))

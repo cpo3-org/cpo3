@@ -1,0 +1,218 @@
+[
+  {
+    "path": "/private/tmp/cpo3-first-pass/target/debug",
+    "logical_bytes": 1420423375
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/target",
+    "logical_bytes": 751854696
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/seed-first-package",
+    "logical_bytes": 3242365
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/clean-package",
+    "logical_bytes": 3250893
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/domain-retry-package",
+    "logical_bytes": 3216723
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/validate-scaling-package",
+    "logical_bytes": 3225051
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/main-package",
+    "logical_bytes": 3272988
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/cap-unit-start-package",
+    "logical_bytes": 3224881
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/domain-retry-wheels",
+    "logical_bytes": 1318154
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/ratio-domain-wheels",
+    "logical_bytes": 1318363
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/initial-cap-wheels",
+    "logical_bytes": 1320900
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/validate-scaling-wheels",
+    "logical_bytes": 1321007
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/retry-free-decay-wheels",
+    "logical_bytes": 1320927
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/cap-small-start-package",
+    "logical_bytes": 3224886
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/exact-centering-wheels",
+    "logical_bytes": 1320221
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/raw-probe-wheels",
+    "logical_bytes": 1320398
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/initial-cap-simple-retry-wheels",
+    "logical_bytes": 1321028
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/trial-sphere-package",
+    "logical_bytes": 3217123
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/main-wheels",
+    "logical_bytes": 1328509
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/rho-target-package",
+    "logical_bytes": 3224861
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/cap-before-centering-wheels",
+    "logical_bytes": 1320797
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/no-retention-wheels",
+    "logical_bytes": 1320890
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/smooth-target-package",
+    "logical_bytes": 3224876
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/fixed-cap-target-wheels",
+    "logical_bytes": 1320824
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/retry-free-decay-package",
+    "logical_bytes": 3224891
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/cap-small-start-wheels",
+    "logical_bytes": 1320892
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/initial-cap-package",
+    "logical_bytes": 3224866
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/initial-cap-simple-retry-package",
+    "logical_bytes": 3224931
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/current-mu-wheels",
+    "logical_bytes": 1320847
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/exact-centering-package",
+    "logical_bytes": 3190885
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/ratio-domain-package",
+    "logical_bytes": 3190652
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/cap-before-centering-package",
+    "logical_bytes": 3224911
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/current-mu-package",
+    "logical_bytes": 3216937
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/cap-unit-start-wheels",
+    "logical_bytes": 1320671
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/raw-probe-package",
+    "logical_bytes": 3250921
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/rho-target-wheels",
+    "logical_bytes": 1320770
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/smooth-target-wheels",
+    "logical_bytes": 1320828
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/no-retention-package",
+    "logical_bytes": 3224871
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/trial-sphere-wheels",
+    "logical_bytes": 1320559
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/raw-local-shift-wheels",
+    "logical_bytes": 1320313
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/clean-wheels",
+    "logical_bytes": 1320952
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/seed-first-wheels",
+    "logical_bytes": 1325536
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/raw-local-shift-package",
+    "logical_bytes": 3216962
+  },
+  {
+    "path": "/private/tmp/cpo3-effort-audit/fixed-cap-target-package",
+    "logical_bytes": 3224891
+  },
+  {
+    "path": "/private/tmp/cpo3-no-floor-package",
+    "logical_bytes": 3225145
+  },
+  {
+    "path": "/private/tmp/cpo3-policy-commit-package",
+    "logical_bytes": 3224579
+  },
+  {
+    "path": "/private/tmp/cpo3-goal-audit-package",
+    "logical_bytes": 3224573
+  },
+  {
+    "path": "/private/tmp/cpo3-comp-probe-package",
+    "logical_bytes": 3224653
+  },
+  {
+    "path": "/private/tmp/cpo3-goal-audit-wheels",
+    "logical_bytes": 1321260
+  },
+  {
+    "path": "/private/tmp/cpo3-main-unconditional-wheels",
+    "logical_bytes": 1
+  },
+  {
+    "path": "/private/tmp/cpo3-no-floor-wheels",
+    "logical_bytes": 1320924
+  },
+  {
+    "path": "/private/tmp/cpo3-comp-probe-wheels",
+    "logical_bytes": 1320629
+  },
+  {
+    "path": "/private/tmp/cpo3-normalization-wheels",
+    "logical_bytes": 1
+  },
+  {
+    "path": "/private/tmp/cpo3-policy-commit-wheels",
+    "logical_bytes": 1321259
+  }
+]

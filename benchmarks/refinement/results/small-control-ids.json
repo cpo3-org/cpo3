@@ -1,0 +1,19 @@
+[
+  "mpc_qpbenchmark/LIPMWALK20",
+  "mpc_qpbenchmark/LIPMWALK25",
+  "mpc_qpbenchmark/LIPMWALK5",
+  "mpc_qpbenchmark/LIPMWALK7",
+  "mpc_qpbenchmark/QUADCMPC3",
+  "mpc_qpbenchmark/QUADCMPC4",
+  "mpc_qpbenchmark/WHLIPBAL10",
+  "mpc_qpbenchmark/WHLIPBAL7",
+  "dc_opf/case15nbr",
+  "dc_opf/case9",
+  "dc_opf/case59",
+  "maros-meszaros/TAME",
+  "maros-meszaros/HS35MOD",
+  "maros-meszaros/QBORE3D",
+  "netlib/KB2",
+  "netlib/SC105",
+  "netlib/SCFXM1"
+]

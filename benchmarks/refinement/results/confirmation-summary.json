@@ -1,0 +1,1903 @@
+{
+  "candidate": {
+    "groups": {
+      "all": {
+        "n": 81,
+        "solved_b": 81,
+        "solved_c": 81,
+        "geomean_ratio_common": 1.0033086055757279,
+        "same_vectors": 75,
+        "profiles": {
+          "time": {
+            "1": [
+              0.5308641975308642,
+              0.4691358024691358
+            ],
+            "1.01": [
+              0.7160493827160493,
+              0.7777777777777778
+            ],
+            "1.05": [
+              0.9876543209876543,
+              0.9629629629629629
+            ],
+            "1.1": [
+              1.0,
+              0.9753086419753086
+            ],
+            "1.25": [
+              1.0,
+              0.9876543209876543
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              0.9876543209876543,
+              0.9876543209876543
+            ],
+            "1.01": [
+              0.9876543209876543,
+              0.9876543209876543
+            ],
+            "1.05": [
+              0.9876543209876543,
+              1.0
+            ],
+            "1.1": [
+              0.9876543209876543,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "dc_opf": {
+        "n": 7,
+        "solved_b": 7,
+        "solved_c": 7,
+        "geomean_ratio_common": 1.0061162258990501,
+        "same_vectors": 7,
+        "profiles": {
+          "time": {
+            "1": [
+              0.42857142857142855,
+              0.5714285714285714
+            ],
+            "1.01": [
+              0.8571428571428571,
+              0.7142857142857143
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "kennington": {
+        "n": 5,
+        "solved_b": 5,
+        "solved_c": 5,
+        "geomean_ratio_common": 0.9999536121215356,
+        "same_vectors": 5,
+        "profiles": {
+          "time": {
+            "1": [
+              0.4,
+              0.6
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "maros-meszaros": {
+        "n": 11,
+        "solved_b": 11,
+        "solved_c": 11,
+        "geomean_ratio_common": 0.9907513295809173,
+        "same_vectors": 11,
+        "profiles": {
+          "time": {
+            "1": [
+              0.2727272727272727,
+              0.7272727272727273
+            ],
+            "1.01": [
+              0.45454545454545453,
+              0.9090909090909091
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "miplib": {
+        "n": 26,
+        "solved_b": 26,
+        "solved_c": 26,
+        "geomean_ratio_common": 1.0000858643772041,
+        "same_vectors": 24,
+        "profiles": {
+          "time": {
+            "1": [
+              0.6153846153846154,
+              0.38461538461538464
+            ],
+            "1.01": [
+              0.7692307692307693,
+              0.8076923076923077
+            ],
+            "1.05": [
+              0.9615384615384616,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "mpc_qpbenchmark": {
+        "n": 8,
+        "solved_b": 8,
+        "solved_c": 8,
+        "geomean_ratio_common": 1.024912956034521,
+        "same_vectors": 8,
+        "profiles": {
+          "time": {
+            "1": [
+              0.875,
+              0.125
+            ],
+            "1.01": [
+              0.875,
+              0.625
+            ],
+            "1.05": [
+              1.0,
+              0.875
+            ],
+            "1.1": [
+              1.0,
+              0.875
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "netlib": {
+        "n": 15,
+        "solved_b": 15,
+        "solved_c": 15,
+        "geomean_ratio_common": 0.9974850531524037,
+        "same_vectors": 11,
+        "profiles": {
+          "time": {
+            "1": [
+              0.4666666666666667,
+              0.5333333333333333
+            ],
+            "1.01": [
+              0.6666666666666666,
+              0.6666666666666666
+            ],
+            "1.05": [
+              1.0,
+              0.9333333333333333
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              0.9333333333333333,
+              0.9333333333333333
+            ],
+            "1.01": [
+              0.9333333333333333,
+              0.9333333333333333
+            ],
+            "1.05": [
+              0.9333333333333333,
+              1.0
+            ],
+            "1.1": [
+              0.9333333333333333,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "qplib": {
+        "n": 9,
+        "solved_b": 9,
+        "solved_c": 9,
+        "geomean_ratio_common": 1.0186144655621556,
+        "same_vectors": 9,
+        "profiles": {
+          "time": {
+            "1": [
+              0.5555555555555556,
+              0.4444444444444444
+            ],
+            "1.01": [
+              0.5555555555555556,
+              0.7777777777777778
+            ],
+            "1.05": [
+              1.0,
+              0.8888888888888888
+            ],
+            "1.1": [
+              1.0,
+              0.8888888888888888
+            ],
+            "1.25": [
+              1.0,
+              0.8888888888888888
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    "cases": [
+      {
+        "problem": "dc_opf/case1354pegase",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.012944667134433985,
+        "candidate_time": 0.012928749434649944,
+        "ratio": 0.9987703276091435,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 14,
+        "iters_c": 14,
+        "refinement_b": 3,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case15nbr",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 3.622564487159252e-05,
+        "candidate_time": 3.786576135704915e-05,
+        "ratio": 1.0452750114254772,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case1888rte",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.015856083016842604,
+        "candidate_time": 0.01581645803526044,
+        "ratio": 0.9975009602598527,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 14,
+        "iters_c": 14,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case59",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00011646117216774395,
+        "candidate_time": 0.00011640665786606925,
+        "ratio": 0.9995319100721726,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 3,
+        "iters_c": 3,
+        "refinement_b": 13,
+        "refinement_c": 13,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case8387pegase",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.21838929178193212,
+        "candidate_time": 0.21418929193168879,
+        "ratio": 0.9807682885182981,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 28,
+        "iters_c": 28,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case9",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 3.696610995878776e-05,
+        "candidate_time": 3.728550393134355e-05,
+        "ratio": 1.0086401834791887,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case94pi",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00014640604140314124,
+        "candidate_time": 0.00014838404380358182,
+        "ratio": 1.013510387832931,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "kennington/CRE-A",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.053086791187524796,
+        "candidate_time": 0.053066291846334934,
+        "ratio": 0.9996138523212403,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 33,
+        "iters_c": 33,
+        "refinement_b": 34,
+        "refinement_c": 34,
+        "same_vectors": true
+      },
+      {
+        "problem": "kennington/KEN-07",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.024697333108633757,
+        "candidate_time": 0.024725624825805426,
+        "ratio": 1.001145537335842,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 23,
+        "iters_c": 23,
+        "refinement_b": 4,
+        "refinement_c": 4,
+        "same_vectors": true
+      },
+      {
+        "problem": "kennington/OSA-07",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.3505592499859631,
+        "candidate_time": 0.3494029170833528,
+        "ratio": 0.9967014622987224,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 39,
+        "iters_c": 39,
+        "refinement_b": 5,
+        "refinement_c": 5,
+        "same_vectors": true
+      },
+      {
+        "problem": "kennington/OSA-14",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.1452347496524453,
+        "candidate_time": 1.1398484581150115,
+        "ratio": 0.9952967795126122,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 50,
+        "iters_c": 50,
+        "refinement_b": 7,
+        "refinement_c": 7,
+        "same_vectors": true
+      },
+      {
+        "problem": "kennington/PDS-02",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.09655016707256436,
+        "candidate_time": 0.09723108261823654,
+        "ratio": 1.0070524533133165,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 37,
+        "iters_c": 37,
+        "refinement_b": 43,
+        "refinement_c": 43,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/BOYD1",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.4102853750810027,
+        "candidate_time": 0.409363416954875,
+        "ratio": 0.9977528857177868,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 16,
+        "iters_c": 16,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/CONT-100",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.18667674995958805,
+        "candidate_time": 0.18372579105198383,
+        "ratio": 0.9841921454694115,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 11,
+        "iters_c": 11,
+        "refinement_b": 12,
+        "refinement_c": 12,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/CONT-101",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.2630003746598959,
+        "candidate_time": 0.27215991681441665,
+        "ratio": 1.0348271068676826,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 13,
+        "iters_c": 13,
+        "refinement_b": 41,
+        "refinement_c": 43,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/CVXQP2_M",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.012966832844540477,
+        "candidate_time": 0.012888791970908642,
+        "ratio": 0.993981500759093,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 10,
+        "iters_c": 10,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/HS35MOD",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.6140985923508803e-05,
+        "candidate_time": 1.586246769875288e-05,
+        "ratio": 0.9827446584690795,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/QBORE3D",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.002648700578984889,
+        "candidate_time": 0.002599102275615389,
+        "ratio": 0.9812744770915146,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 21,
+        "iters_c": 21,
+        "refinement_b": 23,
+        "refinement_c": 23,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/QFFFFF80",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.027076040860265493,
+        "candidate_time": 0.026719541754573584,
+        "ratio": 0.986833410854573,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 25,
+        "iters_c": 25,
+        "refinement_b": 8,
+        "refinement_c": 8,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/QGROW22",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.016020792070776224,
+        "candidate_time": 0.01604141714051366,
+        "ratio": 1.001287393884542,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 29,
+        "iters_c": 29,
+        "refinement_b": 8,
+        "refinement_c": 8,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/QSCTAP1",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0028942461125552655,
+        "candidate_time": 0.0028231039643287657,
+        "ratio": 0.9754194545108363,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 21,
+        "iters_c": 21,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/STADAT2",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.015277083963155746,
+        "candidate_time": 0.01533025037497282,
+        "ratio": 1.0034801413637116,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 19,
+        "iters_c": 19,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/TAME",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 7.41048405567805e-06,
+        "candidate_time": 7.1019058426221215e-06,
+        "ratio": 0.9583592366251041,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 2,
+        "iters_c": 2,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/blp-ic98",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.4712944170460105,
+        "candidate_time": 0.47481341613456607,
+        "ratio": 1.007466668310251,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 40,
+        "iters_c": 40,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/cod105",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.09155658399686217,
+        "candidate_time": 0.09348466712981462,
+        "ratio": 1.0210589238783585,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 5,
+        "iters_c": 5,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/cvs16r128-89",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.025707959197461605,
+        "candidate_time": 0.025330042000859976,
+        "ratio": 0.9852996033757925,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/gfd-schedulen180f7d50m30k18",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 3.3224511658772826,
+        "candidate_time": 3.2974534169770777,
+        "ratio": 0.9924761124687278,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 15,
+        "iters_c": 15,
+        "refinement_b": 11,
+        "refinement_c": 11,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/hypothyroid-k1",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 2.2438406655564904,
+        "candidate_time": 2.2536679999902844,
+        "ratio": 1.0043796935248772,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 45,
+        "iters_c": 45,
+        "refinement_b": 34,
+        "refinement_c": 34,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/mad",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0010386993443327291,
+        "candidate_time": 0.00101946884699698,
+        "ratio": 0.981485982983745,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/mcsched",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.020397416315972805,
+        "candidate_time": 0.020696915686130524,
+        "ratio": 1.014683201319139,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 23,
+        "iters_c": 23,
+        "refinement_b": 15,
+        "refinement_c": 15,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/mik-250-20-75-4",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.020036250352859497,
+        "candidate_time": 0.019973082933574915,
+        "ratio": 0.9968473432816951,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 25,
+        "iters_c": 25,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos-1122047",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.749809792265296,
+        "candidate_time": 0.778961000032723,
+        "ratio": 1.0388781369197067,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 18,
+        "iters_c": 18,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos-3004026-krka",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0280817081220448,
+        "candidate_time": 0.027771542314440012,
+        "ratio": 0.9889548810116254,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 4,
+        "iters_c": 4,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos-3656078-kumeu",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.9839576249942183,
+        "candidate_time": 0.9880530419759452,
+        "ratio": 1.0041621883683771,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 47,
+        "iters_c": 47,
+        "refinement_b": 49,
+        "refinement_c": 46,
+        "same_vectors": false
+      },
+      {
+        "problem": "miplib/neos-4954672-berkel",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.04673225013539195,
+        "candidate_time": 0.04686200013384223,
+        "ratio": 1.0027764551904599,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 27,
+        "iters_c": 27,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos-827175",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.1961691253818572,
+        "candidate_time": 1.1962134591303766,
+        "ratio": 1.0000370631105406,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 26,
+        "iters_c": 26,
+        "refinement_b": 54,
+        "refinement_c": 54,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos-860300",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.9092548340559006,
+        "candidate_time": 1.9098662077449262,
+        "ratio": 1.0003202158654363,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 34,
+        "iters_c": 34,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos-950242",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.5459705842658877,
+        "candidate_time": 0.5495541668497026,
+        "ratio": 1.0065636916842935,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 12,
+        "iters_c": 12,
+        "refinement_b": 1,
+        "refinement_c": 1,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos5",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0009747139333436887,
+        "candidate_time": 0.0009638541533301274,
+        "ratio": 0.9888584951522058,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/neos8",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 2.2138035828247666,
+        "candidate_time": 2.219149666838348,
+        "ratio": 1.0024148863318578,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 81,
+        "iters_c": 81,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/nexp-150-20-8-5",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.048378041945397854,
+        "candidate_time": 0.049072917085140944,
+        "ratio": 1.0143634407636293,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 10,
+        "iters_c": 10,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/nu25-pr12",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.07053058408200741,
+        "candidate_time": 0.07024733303114772,
+        "ratio": 0.9959839968072525,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 33,
+        "iters_c": 33,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/peg-solitaire-a3",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.1285137920640409,
+        "candidate_time": 0.12959204241633415,
+        "ratio": 1.008390152799755,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 15,
+        "iters_c": 15,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/rmatr200-p5",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.3359219157136977,
+        "candidate_time": 1.3379943752661347,
+        "ratio": 1.0015513328496672,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 55,
+        "iters_c": 55,
+        "refinement_b": 24,
+        "refinement_c": 24,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/rococoB10-011000",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.06839725002646446,
+        "candidate_time": 0.06857858318835497,
+        "ratio": 1.0026511762069432,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 26,
+        "iters_c": 26,
+        "refinement_b": 4,
+        "refinement_c": 4,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/seymour1",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.11562100006267428,
+        "candidate_time": 0.11544341593980789,
+        "ratio": 0.9984640841821976,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 20,
+        "iters_c": 20,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/thor50dday",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.9486172921024263,
+        "candidate_time": 0.9602211252786219,
+        "ratio": 1.0122323652254726,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 37,
+        "iters_c": 37,
+        "refinement_b": 1,
+        "refinement_c": 1,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/traininstance2",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.14225204195827246,
+        "candidate_time": 0.14051158260554075,
+        "ratio": 0.9877649604970715,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 23,
+        "iters_c": 23,
+        "refinement_b": 27,
+        "refinement_c": 26,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/traininstance6",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.12740754196420312,
+        "candidate_time": 0.12071537505835295,
+        "ratio": 0.9474743268516206,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 26,
+        "iters_c": 26,
+        "refinement_b": 46,
+        "refinement_c": 29,
+        "same_vectors": false
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK20",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00011502899110828545,
+        "candidate_time": 0.00011539534556076807,
+        "ratio": 1.0031848879917389,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 8,
+        "iters_c": 8,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK25",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00010718974108631546,
+        "candidate_time": 0.00010510208924208675,
+        "ratio": 0.9805237719293715,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK5",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00011325105785941466,
+        "candidate_time": 0.00011357045374237574,
+        "ratio": 1.002820246353527,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 8,
+        "iters_c": 8,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK7",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00010213627212165251,
+        "candidate_time": 0.0001030144393603945,
+        "ratio": 1.008597995800121,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/QUADCMPC3",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0006710568374795158,
+        "candidate_time": 0.0006842967577096893,
+        "ratio": 1.0197299535459656,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 4,
+        "iters_c": 4,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/QUADCMPC4",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0009712327978220479,
+        "candidate_time": 0.0011480661622922995,
+        "ratio": 1.1820710388557651,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/WHLIPBAL10",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00026338042139455127,
+        "candidate_time": 0.00026649613950953437,
+        "ratio": 1.0118297256055935,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 5,
+        "iters_c": 5,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/WHLIPBAL7",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00026258729132158415,
+        "candidate_time": 0.0002634832901614053,
+        "ratio": 1.0034121942281047,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 5,
+        "iters_c": 5,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/AGG",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.005718300212174654,
+        "candidate_time": 0.005726016592234373,
+        "ratio": 1.0013494184938543,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 28,
+        "iters_c": 28,
+        "refinement_b": 35,
+        "refinement_c": 31,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/CYCLE",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.3534904168918729,
+        "candidate_time": 0.3440367500297725,
+        "ratio": 0.9732562287113088,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 76,
+        "iters_c": 67,
+        "refinement_b": 520,
+        "refinement_c": 581,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/D6CUBE",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.08719333307817578,
+        "candidate_time": 0.08896912494674325,
+        "ratio": 1.0203661427528563,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 18,
+        "iters_c": 18,
+        "refinement_b": 4,
+        "refinement_c": 1,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/DEGEN3",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.06589445797726512,
+        "candidate_time": 0.06563866697251797,
+        "ratio": 0.9961181711998389,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 15,
+        "iters_c": 15,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/GREENBEB",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.39968041703104973,
+        "candidate_time": 0.4050111249089241,
+        "ratio": 1.0133374257299683,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 69,
+        "iters_c": 69,
+        "refinement_b": 105,
+        "refinement_c": 105,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/KB2",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0003613166080148362,
+        "candidate_time": 0.00035986078402666904,
+        "ratio": 0.9959707803187741,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 20,
+        "iters_c": 20,
+        "refinement_b": 11,
+        "refinement_c": 11,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/MAROS-R7",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.6104395841248333,
+        "candidate_time": 0.6057815421372652,
+        "ratio": 0.9923693644568509,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 17,
+        "iters_c": 17,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/PILOT4",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.03717487491667271,
+        "candidate_time": 0.03767283307388425,
+        "ratio": 1.0133950190371241,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 51,
+        "iters_c": 52,
+        "refinement_b": 325,
+        "refinement_c": 304,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/SC105",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0003905333435306182,
+        "candidate_time": 0.00039478654328447123,
+        "ratio": 1.0108907467808048,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 13,
+        "iters_c": 13,
+        "refinement_b": 19,
+        "refinement_c": 19,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/SCFXM1",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.004977241437882185,
+        "candidate_time": 0.00490078330039978,
+        "ratio": 0.9846384511507769,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 24,
+        "iters_c": 24,
+        "refinement_b": 15,
+        "refinement_c": 15,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/SHIP04S",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.005177866667509079,
+        "candidate_time": 0.004973425064235926,
+        "ratio": 0.9605162480223725,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 16,
+        "iters_c": 16,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/SHIP08L",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.02281987527385354,
+        "candidate_time": 0.021881249733269215,
+        "ratio": 0.9588680687637333,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 26,
+        "iters_c": 26,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/STOCFOR2",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.022245957981795073,
+        "candidate_time": 0.022293416783213615,
+        "ratio": 1.0021333673945343,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 29,
+        "iters_c": 29,
+        "refinement_b": 4,
+        "refinement_c": 4,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/TUFF",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.009687416488304734,
+        "candidate_time": 0.009582541650161147,
+        "ratio": 0.9891741169309487,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 21,
+        "iters_c": 21,
+        "refinement_b": 40,
+        "refinement_c": 40,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/WOOD1P",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.08610229101032019,
+        "candidate_time": 0.0907476251013577,
+        "ratio": 1.053951341323551,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 19,
+        "iters_c": 19,
+        "refinement_b": 1,
+        "refinement_c": 1,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8495",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.28485633386299014,
+        "candidate_time": 0.2885961253196001,
+        "ratio": 1.0131286933518169,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 10,
+        "iters_c": 10,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8515",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.033234958071261644,
+        "candidate_time": 0.03186566708609462,
+        "ratio": 0.958799677669789,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8559",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 5.213069874793291,
+        "candidate_time": 5.14550737477839,
+        "ratio": 0.9870397862223974,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 31,
+        "iters_c": 31,
+        "refinement_b": 8,
+        "refinement_c": 8,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8785",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.2434687921777368,
+        "candidate_time": 1.2479888750240207,
+        "ratio": 1.0036350593394208,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 12,
+        "iters_c": 12,
+        "refinement_b": 25,
+        "refinement_c": 25,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8790",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.3444666247814894,
+        "candidate_time": 0.432371708098799,
+        "ratio": 1.255191873445132,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 13,
+        "iters_c": 13,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8792",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.14010595809668303,
+        "candidate_time": 0.13730891700834036,
+        "ratio": 0.9800362445227881,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 11,
+        "iters_c": 11,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8845",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.08529608324170113,
+        "candidate_time": 0.08570333430543542,
+        "ratio": 1.0047745576145657,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 27,
+        "iters_c": 27,
+        "refinement_b": 18,
+        "refinement_c": 18,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8906",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0930674159899354,
+        "candidate_time": 0.09214287484064698,
+        "ratio": 0.9900658985805687,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 16,
+        "iters_c": 16,
+        "refinement_b": 2,
+        "refinement_c": 2,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8938",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.03573224972933531,
+        "candidate_time": 0.035822917241603136,
+        "ratio": 1.0025374140434653,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 22,
+        "iters_c": 22,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      }
+    ]
+  }
+}

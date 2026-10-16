@@ -1,0 +1,934 @@
+{
+  "candidate": {
+    "groups": {
+      "all": {
+        "n": 8,
+        "solved_b": 8,
+        "solved_c": 8,
+        "geomean_ratio_common": 0.9975703576714862,
+        "same_vectors": 2,
+        "profiles": {
+          "time": {
+            "1": [
+              0.625,
+              0.375
+            ],
+            "1.01": [
+              0.75,
+              0.625
+            ],
+            "1.05": [
+              0.875,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              0.875,
+              0.875
+            ],
+            "1.01": [
+              0.875,
+              0.875
+            ],
+            "1.05": [
+              0.875,
+              1.0
+            ],
+            "1.1": [
+              0.875,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "miplib": {
+        "n": 2,
+        "solved_b": 2,
+        "solved_c": 2,
+        "geomean_ratio_common": 0.9752036536413723,
+        "same_vectors": 0,
+        "profiles": {
+          "time": {
+            "1": [
+              0.5,
+              0.5
+            ],
+            "1.01": [
+              0.5,
+              1.0
+            ],
+            "1.05": [
+              0.5,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "netlib": {
+        "n": 5,
+        "solved_b": 5,
+        "solved_c": 5,
+        "geomean_ratio_common": 1.0063965327561932,
+        "same_vectors": 1,
+        "profiles": {
+          "time": {
+            "1": [
+              0.8,
+              0.2
+            ],
+            "1.01": [
+              0.8,
+              0.4
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              0.8,
+              0.8
+            ],
+            "1.01": [
+              0.8,
+              0.8
+            ],
+            "1.05": [
+              0.8,
+              1.0
+            ],
+            "1.1": [
+              0.8,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "qplib": {
+        "n": 1,
+        "solved_b": 1,
+        "solved_c": 1,
+        "geomean_ratio_common": 0.9988769412254369,
+        "same_vectors": 1,
+        "profiles": {
+          "time": {
+            "1": [
+              0.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    "cases": [
+      {
+        "problem": "miplib/neos-3656078-kumeu",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.0092267501167953,
+        "candidate_time": 1.01520112529397,
+        "ratio": 1.0059197550763328,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 47,
+        "iters_c": 47,
+        "refinement_b": 49,
+        "refinement_c": 46,
+        "same_vectors": false
+      },
+      {
+        "problem": "miplib/traininstance6",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.1275290003977716,
+        "candidate_time": 0.12056916626170278,
+        "ratio": 0.9454254787980724,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 26,
+        "iters_c": 26,
+        "refinement_b": 46,
+        "refinement_c": 29,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/AGG",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.005605441424995661,
+        "candidate_time": 0.005681358650326729,
+        "ratio": 1.0135434874036038,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 28,
+        "iters_c": 28,
+        "refinement_b": 35,
+        "refinement_c": 31,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/CYCLE",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.3589364583604038,
+        "candidate_time": 0.3494959156960249,
+        "ratio": 0.9736985685223992,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 76,
+        "iters_c": 67,
+        "refinement_b": 520,
+        "refinement_c": 581,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/D6CUBE",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.088469082955271,
+        "candidate_time": 0.09030008316040039,
+        "ratio": 1.0206964980755493,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 18,
+        "iters_c": 18,
+        "refinement_b": 4,
+        "refinement_c": 1,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/PILOT4",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.03666570829227567,
+        "candidate_time": 0.037400666158646345,
+        "ratio": 1.0200448293678677,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 51,
+        "iters_c": 52,
+        "refinement_b": 325,
+        "refinement_c": 304,
+        "same_vectors": false
+      },
+      {
+        "problem": "netlib/WOOD1P",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.08599912468343973,
+        "candidate_time": 0.08640858391299844,
+        "ratio": 1.004761202292069,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 19,
+        "iters_c": 19,
+        "refinement_b": 1,
+        "refinement_c": 1,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8790",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.34221949987113476,
+        "candidate_time": 0.3418351672589779,
+        "ratio": 0.9988769412254369,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 13,
+        "iters_c": 13,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      }
+    ]
+  },
+  "control": {
+    "groups": {
+      "all": {
+        "n": 8,
+        "solved_b": 8,
+        "solved_c": 8,
+        "geomean_ratio_common": 1.0030737143409312,
+        "same_vectors": 8,
+        "profiles": {
+          "time": {
+            "1": [
+              0.75,
+              0.25
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "miplib": {
+        "n": 2,
+        "solved_b": 2,
+        "solved_c": 2,
+        "geomean_ratio_common": 1.0018262276817047,
+        "same_vectors": 2,
+        "profiles": {
+          "time": {
+            "1": [
+              0.5,
+              0.5
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "netlib": {
+        "n": 5,
+        "solved_b": 5,
+        "solved_c": 5,
+        "geomean_ratio_common": 1.0039583328256199,
+        "same_vectors": 5,
+        "profiles": {
+          "time": {
+            "1": [
+              0.8,
+              0.2
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "qplib": {
+        "n": 1,
+        "solved_b": 1,
+        "solved_c": 1,
+        "geomean_ratio_common": 1.0011509424314065,
+        "same_vectors": 1,
+        "profiles": {
+          "time": {
+            "1": [
+              1.0,
+              0.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    "cases": [
+      {
+        "problem": "miplib/neos-3656078-kumeu",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.0092267501167953,
+        "candidate_time": 1.0091506247408688,
+        "ratio": 0.9999245705923692,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 47,
+        "iters_c": 47,
+        "refinement_b": 49,
+        "refinement_c": 49,
+        "same_vectors": true
+      },
+      {
+        "problem": "miplib/traininstance6",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.1275290003977716,
+        "candidate_time": 0.12800487503409386,
+        "ratio": 1.0037315013435217,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 26,
+        "iters_c": 26,
+        "refinement_b": 46,
+        "refinement_c": 46,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/AGG",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.005605441424995661,
+        "candidate_time": 0.005634983256459236,
+        "ratio": 1.0052702060772312,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 28,
+        "iters_c": 28,
+        "refinement_b": 35,
+        "refinement_c": 35,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/CYCLE",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.3589364583604038,
+        "candidate_time": 0.35883983317762613,
+        "ratio": 0.9997308014259153,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 76,
+        "iters_c": 76,
+        "refinement_b": 520,
+        "refinement_c": 520,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/D6CUBE",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.088469082955271,
+        "candidate_time": 0.08896599989384413,
+        "ratio": 1.0056168428785948,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 18,
+        "iters_c": 18,
+        "refinement_b": 4,
+        "refinement_c": 4,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/PILOT4",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.03666570829227567,
+        "candidate_time": 0.03675108402967453,
+        "ratio": 1.0023284900626575,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 51,
+        "iters_c": 51,
+        "refinement_b": 325,
+        "refinement_c": 325,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/WOOD1P",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.08599912468343973,
+        "candidate_time": 0.08658924978226423,
+        "ratio": 1.0068619895957864,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 19,
+        "iters_c": 19,
+        "refinement_b": 1,
+        "refinement_c": 1,
+        "same_vectors": true
+      },
+      {
+        "problem": "qplib/QPLIB_8790",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.34221949987113476,
+        "candidate_time": 0.34261337481439114,
+        "ratio": 1.0011509424314065,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 13,
+        "iters_c": 13,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      }
+    ]
+  }
+}

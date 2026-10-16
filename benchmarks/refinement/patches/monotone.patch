@@ -1,0 +1,54 @@
+--- a/src/linear_system.rs
++++ b/src/linear_system.rs
+@@ -10,7 +10,7 @@
+ 
+ // Per-pass contraction below which refinement counts as stalled (no halving
+ // over two passes).
+-const STALL_RATE: f64 = std::f64::consts::FRAC_1_SQRT_2;
++
+ 
+ /// How KKT systems are factorized and solved.
+ #[derive(Clone, Copy, Debug, PartialEq)]
+@@ -400,19 +400,15 @@
+     denominator.resize(rhs.len(), 0.0);
+     initialize(&solution, rhs, residual, denominator);
+     let mut best_error: Option<f64> = None;
+-    let mut errors = [f64::INFINITY; 2];
+     for iteration in 0..=settings.max_refinement_steps {
+         if iteration != 0 {
+             residual_into(&solution, rhs, residual);
+         }
+         let backward_error = backward_error(residual, denominator);
+-        let improved = match best_error {
+-            Some(error) if !backward_error.is_finite() || backward_error > 10.0 * error => {
+-                return settle_refinement(best_error, strict, best, stats);
+-            }
+-            Some(error) => backward_error < error,
+-            None => true,
+-        };
++        let improved = best_error.is_none_or(|error| backward_error < error);
++        if !backward_error.is_finite() || !improved {
++            return settle_refinement(best_error, strict, best, stats);
++        }
+         if backward_error <= settings.refinement_tolerance {
+             return validate_solution(solution);
+         }
+@@ -429,18 +425,6 @@
+             }
+             best_error = Some(backward_error);
+         }
+-        if iteration >= 2 {
+-            let rate = (backward_error / errors[0]).sqrt();
+-            let remaining =
+-                i32::try_from(settings.max_refinement_steps - iteration).unwrap_or(i32::MAX);
+-            if rate.is_nan()
+-                || (rate > STALL_RATE
+-                    && backward_error * rate.powi(remaining) > settings.refinement_tolerance)
+-            {
+-                return settle_refinement(best_error, strict, best, stats);
+-            }
+-        }
+-        errors = [errors[1], backward_error];
+         if iteration == settings.max_refinement_steps {
+             return settle_refinement(best_error, strict, best, stats);
+         }

@@ -1,0 +1,1374 @@
+{
+  "candidate": {
+    "groups": {
+      "all": {
+        "n": 17,
+        "solved_b": 17,
+        "solved_c": 17,
+        "geomean_ratio_common": 1.0020515410040738,
+        "same_vectors": 17,
+        "profiles": {
+          "time": {
+            "1": [
+              0.6470588235294118,
+              0.35294117647058826
+            ],
+            "1.01": [
+              0.9411764705882353,
+              0.8823529411764706
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "dc_opf": {
+        "n": 3,
+        "solved_b": 3,
+        "solved_c": 3,
+        "geomean_ratio_common": 0.9969852488368403,
+        "same_vectors": 3,
+        "profiles": {
+          "time": {
+            "1": [
+              0.6666666666666666,
+              0.3333333333333333
+            ],
+            "1.01": [
+              0.6666666666666666,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "maros-meszaros": {
+        "n": 3,
+        "solved_b": 3,
+        "solved_c": 3,
+        "geomean_ratio_common": 0.994236152028909,
+        "same_vectors": 3,
+        "profiles": {
+          "time": {
+            "1": [
+              0.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "mpc_qpbenchmark": {
+        "n": 8,
+        "solved_b": 8,
+        "solved_c": 8,
+        "geomean_ratio_common": 1.0040837624814203,
+        "same_vectors": 8,
+        "profiles": {
+          "time": {
+            "1": [
+              0.75,
+              0.25
+            ],
+            "1.01": [
+              1.0,
+              0.875
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "netlib": {
+        "n": 3,
+        "solved_b": 3,
+        "solved_c": 3,
+        "geomean_ratio_common": 1.009591163774607,
+        "same_vectors": 3,
+        "profiles": {
+          "time": {
+            "1": [
+              1.0,
+              0.0
+            ],
+            "1.01": [
+              1.0,
+              0.6666666666666666
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    "cases": [
+      {
+        "problem": "dc_opf/case15nbr",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 3.4847068600356576e-05,
+        "candidate_time": 3.514328661064307e-05,
+        "ratio": 1.0085005144531285,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case59",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00011991641883339201,
+        "candidate_time": 0.00012019569054245949,
+        "ratio": 1.0023288863342015,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 3,
+        "iters_c": 3,
+        "refinement_b": 13,
+        "refinement_c": 13,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case9",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 3.727550463130077e-05,
+        "candidate_time": 3.6542929398516816e-05,
+        "ratio": 0.9803470069679808,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/HS35MOD",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.543164098014434e-05,
+        "candidate_time": 1.5322275770207248e-05,
+        "ratio": 0.9929129241616098,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/QBORE3D",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0026319014247168193,
+        "candidate_time": 0.002629609609192068,
+        "ratio": 0.9991292168075794,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 21,
+        "iters_c": 21,
+        "refinement_b": 23,
+        "refinement_c": 23,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/TAME",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 7.4525224044919014e-06,
+        "candidate_time": 7.383106276392937e-06,
+        "ratio": 0.9906855525778594,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 2,
+        "iters_c": 2,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK20",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00011367764205251839,
+        "candidate_time": 0.00011410643848791427,
+        "ratio": 1.0037720384382867,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 8,
+        "iters_c": 8,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK25",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00010230737268454857,
+        "candidate_time": 0.00010338418714299396,
+        "ratio": 1.0105252869875332,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK5",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0001143790256136503,
+        "candidate_time": 0.00011499057022424844,
+        "ratio": 1.0053466499414307,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 8,
+        "iters_c": 8,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK7",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00010175344058564292,
+        "candidate_time": 0.00010188803068749894,
+        "ratio": 1.0013227081175966,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/QUADCMPC3",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0006850680290925793,
+        "candidate_time": 0.000690564910722215,
+        "ratio": 1.0080238478460553,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 4,
+        "iters_c": 4,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/QUADCMPC4",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0009321593197769132,
+        "candidate_time": 0.0009320602623810028,
+        "ratio": 0.9998937334060727,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/WHLIPBAL10",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00026077503355702867,
+        "candidate_time": 0.000260577157691673,
+        "ratio": 0.9992412008823981,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 5,
+        "iters_c": 5,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/WHLIPBAL7",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0002596670894750527,
+        "candidate_time": 0.00026086108492953436,
+        "ratio": 1.0045981778318365,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 5,
+        "iters_c": 5,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/KB2",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.000352143664469025,
+        "candidate_time": 0.00035492463537783764,
+        "ratio": 1.0078972623659321,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 20,
+        "iters_c": 20,
+        "refinement_b": 11,
+        "refinement_c": 11,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/SC105",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0003972819719750148,
+        "candidate_time": 0.00040233653898422535,
+        "ratio": 1.0127228703182345,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 13,
+        "iters_c": 13,
+        "refinement_b": 19,
+        "refinement_c": 19,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/SCFXM1",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0049107418395578865,
+        "candidate_time": 0.0049508166499435905,
+        "ratio": 1.008160642871284,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 24,
+        "iters_c": 24,
+        "refinement_b": 15,
+        "refinement_c": 15,
+        "same_vectors": true
+      }
+    ]
+  },
+  "control": {
+    "groups": {
+      "all": {
+        "n": 17,
+        "solved_b": 17,
+        "solved_c": 17,
+        "geomean_ratio_common": 0.9980277310078879,
+        "same_vectors": 17,
+        "profiles": {
+          "time": {
+            "1": [
+              0.4117647058823529,
+              0.5882352941176471
+            ],
+            "1.01": [
+              0.8823529411764706,
+              0.9411764705882353
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "dc_opf": {
+        "n": 3,
+        "solved_b": 3,
+        "solved_c": 3,
+        "geomean_ratio_common": 0.9996118994039774,
+        "same_vectors": 3,
+        "profiles": {
+          "time": {
+            "1": [
+              0.3333333333333333,
+              0.6666666666666666
+            ],
+            "1.01": [
+              0.6666666666666666,
+              0.6666666666666666
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "maros-meszaros": {
+        "n": 3,
+        "solved_b": 3,
+        "solved_c": 3,
+        "geomean_ratio_common": 0.9949949713934058,
+        "same_vectors": 3,
+        "profiles": {
+          "time": {
+            "1": [
+              0.6666666666666666,
+              0.3333333333333333
+            ],
+            "1.01": [
+              0.6666666666666666,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "mpc_qpbenchmark": {
+        "n": 8,
+        "solved_b": 8,
+        "solved_c": 8,
+        "geomean_ratio_common": 0.998597028088156,
+        "same_vectors": 8,
+        "profiles": {
+          "time": {
+            "1": [
+              0.375,
+              0.625
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      },
+      "netlib": {
+        "n": 3,
+        "solved_b": 3,
+        "solved_c": 3,
+        "geomean_ratio_common": 0.9979645047085323,
+        "same_vectors": 3,
+        "profiles": {
+          "time": {
+            "1": [
+              0.3333333333333333,
+              0.6666666666666666
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          },
+          "iters": {
+            "1": [
+              1.0,
+              1.0
+            ],
+            "1.01": [
+              1.0,
+              1.0
+            ],
+            "1.05": [
+              1.0,
+              1.0
+            ],
+            "1.1": [
+              1.0,
+              1.0
+            ],
+            "1.25": [
+              1.0,
+              1.0
+            ],
+            "1.5": [
+              1.0,
+              1.0
+            ],
+            "2": [
+              1.0,
+              1.0
+            ],
+            "4": [
+              1.0,
+              1.0
+            ],
+            "8": [
+              1.0,
+              1.0
+            ]
+          }
+        }
+      }
+    },
+    "cases": [
+      {
+        "problem": "dc_opf/case15nbr",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 3.4847068600356576e-05,
+        "candidate_time": 3.5307733342051506e-05,
+        "ratio": 1.0132196124436768,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case59",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00011991641883339201,
+        "candidate_time": 0.00011862359674913542,
+        "ratio": 0.9892189735414565,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 3,
+        "iters_c": 3,
+        "refinement_b": 13,
+        "refinement_c": 13,
+        "same_vectors": true
+      },
+      {
+        "problem": "dc_opf/case9",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 3.727550463130077e-05,
+        "candidate_time": 3.7146829999983314e-05,
+        "ratio": 0.9965480110171492,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/HS35MOD",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 1.543164098014434e-05,
+        "candidate_time": 1.5451850680013497e-05,
+        "ratio": 1.0013096274009459,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/QBORE3D",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0026319014247168193,
+        "candidate_time": 0.002644003876908259,
+        "ratio": 1.0045983683422877,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 21,
+        "iters_c": 21,
+        "refinement_b": 23,
+        "refinement_c": 23,
+        "same_vectors": true
+      },
+      {
+        "problem": "maros-meszaros/TAME",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 7.4525224044919014e-06,
+        "candidate_time": 7.298020645976066e-06,
+        "ratio": 0.9792685281398535,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 2,
+        "iters_c": 2,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK20",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00011367764205251839,
+        "candidate_time": 0.00011355736676384421,
+        "ratio": 0.998941961792112,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 8,
+        "iters_c": 8,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK25",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00010230737268454857,
+        "candidate_time": 0.00010253637315923566,
+        "ratio": 1.0022383574973934,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK5",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0001143790256136503,
+        "candidate_time": 0.00011409507252466985,
+        "ratio": 0.9975174374195178,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 8,
+        "iters_c": 8,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/LIPMWALK7",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00010175344058564292,
+        "candidate_time": 0.00010221457516558692,
+        "ratio": 1.0045318819421725,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 7,
+        "iters_c": 7,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/QUADCMPC3",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0006850680290925793,
+        "candidate_time": 0.0006891330931244827,
+        "ratio": 1.0059338107447342,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 4,
+        "iters_c": 4,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/QUADCMPC4",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0009321593197769132,
+        "candidate_time": 0.0009279539808630943,
+        "ratio": 0.9954886049792161,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 6,
+        "iters_c": 6,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/WHLIPBAL10",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.00026077503355702867,
+        "candidate_time": 0.0002587036859175121,
+        "ratio": 0.9920569557167229,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 5,
+        "iters_c": 5,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "mpc_qpbenchmark/WHLIPBAL7",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0002596670894750527,
+        "candidate_time": 0.00025763286366349173,
+        "ratio": 0.9921660237511293,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 5,
+        "iters_c": 5,
+        "refinement_b": 0,
+        "refinement_c": 0,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/KB2",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.000352143664469025,
+        "candidate_time": 0.00035280413202830216,
+        "ratio": 1.0018755628055187,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 20,
+        "iters_c": 20,
+        "refinement_b": 11,
+        "refinement_c": 11,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/SC105",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0003972819719750148,
+        "candidate_time": 0.00039556088069310556,
+        "ratio": 0.9956678344266338,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 13,
+        "iters_c": 13,
+        "refinement_b": 19,
+        "refinement_c": 19,
+        "same_vectors": true
+      },
+      {
+        "problem": "netlib/SCFXM1",
+        "baseline_status": "solved",
+        "candidate_status": "solved",
+        "baseline_time": 0.0049107418395578865,
+        "candidate_time": 0.00489287506788969,
+        "ratio": 0.9963616960019619,
+        "solved_b": true,
+        "solved_c": true,
+        "iters_b": 24,
+        "iters_c": 24,
+        "refinement_b": 15,
+        "refinement_c": 15,
+        "same_vectors": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+--- a/src/linear_system.rs
++++ b/src/linear_system.rs
+@@ -389,7 +389,7 @@
+     if settings.max_refinement_steps == 0 {
+         return validate_solution(solution);
+     }
+-    let strict = settings.strict_refinement;
++    let strict = false;
+     let RefinementWorkspace {
+         residual,
+         denominator,
