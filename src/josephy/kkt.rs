@@ -46,6 +46,8 @@ pub(super) struct KktPattern {
     /// Full-system residual used for the first correction of a warm start.
     initial_residual: Vec<f64>,
     refinement: RefinementWorkspace,
+    /// Scratch storage reused by predictor/corrector reconstruction within a solve.
+    pub(super) reconstruction: Vec<f64>,
 }
 
 /// Nonnegative singleton rows of `A`, eliminated from the factorized system.
@@ -390,6 +392,7 @@ pub(super) fn build_pattern(
             bound_rows,
             initial_residual: Vec::new(),
             refinement: RefinementWorkspace::default(),
+            reconstruction: Vec::new(),
         },
     ))
 }

@@ -308,7 +308,9 @@ impl<'a> Resolvent<'a> {
             residual,
             None,
         )?;
-        let mut base = increment.clone();
+        let mut base = std::mem::take(&mut self.pattern.reconstruction);
+        base.clear();
+        base.extend_from_slice(&increment);
         let (base_x, base_y) = base.split_at_mut(n);
         crate::matrix::add_assign(base_x, self.state.x());
         crate::matrix::add_assign(base_y, self.state.y());
@@ -324,6 +326,7 @@ impl<'a> Resolvent<'a> {
                 (tau - anchor_tau, tau, true)
             }
         };
+        self.pattern.reconstruction = base;
         crate::matrix::update(&mut increment, self.direction, |increment, direction| {
             delta_tau.mul_add(direction, increment)
         });
