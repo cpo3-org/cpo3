@@ -110,7 +110,6 @@ pub(crate) struct Resolvent<'a> {
 struct TauFallback {
     q_direction: f64,
     px: Option<Vec<f64>>,
-    q_z: f64,
     x_px: f64,
     px_kinv_q: f64,
 }
@@ -395,7 +394,6 @@ impl<'a> Resolvent<'a> {
             let px = self.problem.p_mul_opt(self.state.x());
             TauFallback {
                 q_direction: q_dot(self.problem, self.direction),
-                q_z: dot(self.problem.c(), self.state.x()) + dot(self.problem.b(), self.state.y()),
                 x_px: px.as_ref().map_or(0.0, |px| dot(self.state.x(), px)),
                 px_kinv_q: px.as_ref().map_or(0.0, |px| -dot(px, &self.direction[..n])),
                 px,
@@ -404,7 +402,7 @@ impl<'a> Resolvent<'a> {
         let q_kinv_q = -cached.q_direction;
         let px_kinv_r = cached.px.as_ref().map_or(0.0, |px| dot(px, &constant[..n]));
         // Linearize x'Px at the current x but retain the quadratic in tau.
-        // Unlike the primary solve, any finite root is clamped to the bounds.
+        // Retain the lower bound on the approximate fallback step.
         let candidate = quadratic_root(
             self.shift + q_kinv_q,
             -r_tau - q_constant + 2.0 * cached.px_kinv_q,
@@ -412,22 +410,32 @@ impl<'a> Resolvent<'a> {
             0.0,
         );
         if let Some(candidate) = candidate {
-            return candidate.max(0.1 * tau).min(10.0 * tau);
+            return candidate.max(0.1 * tau);
         }
 
-        // If that quadratic fails, take CPO3's first-order correction.
-        let q_rz = q_constant - tau * q_kinv_q - cached.q_z;
-        let px_rz = px_kinv_r - tau * cached.px_kinv_q - cached.x_px;
-        // r_tau retains the caller's anchor even though we linearize at state.
-        let g = self.shift * tau * tau - r_tau * tau - tau * cached.q_z - mu - cached.x_px;
-        let num = g - tau * q_rz - 2.0 * px_rz;
-        let den =
-            2.0 * self.shift * tau - r_tau - cached.q_z + tau * q_kinv_q + 2.0 * cached.px_kinv_q;
-        let candidate = tau + if den.abs() < 1e-16 { 0.0 } else { -num / den };
+        self.newton_tau(constant, q_constant, r_tau, mu)
+    }
+
+    // One Newton step on the full point-coordinate scalar polynomial at tau_k.
+    fn newton_tau(&self, constant: &[f64], q_constant: f64, r_tau: f64, mu: f64) -> f64 {
+        let n = self.problem.variable_count();
+        let tau = self.state.tau();
+        let mut b = -r_tau - q_constant;
+        let mut theta = mu;
+        if let Some(p_constant) = self.problem.p_mul_opt(&constant[..n]) {
+            b -= 2.0 * dot(&self.direction[..n], &p_constant);
+            theta += dot(&constant[..n], &p_constant);
+        }
+        let den = 2.0 * self.alpha * tau + b;
+        let candidate = if den.abs() < 1e-16 {
+            tau
+        } else {
+            (self.alpha * tau * tau + theta) / den
+        };
         if !candidate.is_finite() {
             return tau;
         }
-        candidate.max(0.1 * tau).min(10.0 * tau)
+        candidate.max(0.1 * tau)
     }
 }
 

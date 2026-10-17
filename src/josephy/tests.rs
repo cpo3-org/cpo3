@@ -845,21 +845,53 @@ fn failed_root_uses_current_state_and_reuses_fallback_products() {
     );
 
     let lower = resolvent.solve(&[-10.0], &[], 0.0, 0.0).unwrap();
-    assert_close(lower.tau, 0.2);
-    // Negative discriminant: use the first-order correction, before clamping.
+    assert_close(lower.tau, state.tau());
+    // The forced nonfinite leading coefficient also prevents scalar Newton.
     let first_order = resolvent.solve(&[0.2], &[], 0.0, 0.0).unwrap();
-    assert_close(first_order.tau, 0.28);
+    assert_close(first_order.tau, state.tau());
     let zero_denominator = resolvent.solve(&[-10.0], &[], 5.0, 0.0).unwrap();
     assert_eq!(zero_denominator.tau, state.tau());
     let upper = resolvent.solve(&[100.0], &[], 0.0, 0.0).unwrap();
-    assert_close(upper.tau, 20.0);
+    assert_close(upper.tau, (49.0 + 2995.0_f64.sqrt()) / 3.0);
     let singular = resolvent.solve(&[1.0], &[], 5.0, 0.0).unwrap();
     assert_close(singular.tau, 3.0);
     let nonfinite = resolvent.solve(&[1.0], &[], f64::MAX, 0.0).unwrap();
-    assert_close(nonfinite.tau, 20.0);
+    assert!(nonfinite.tau.is_finite() && nonfinite.tau > 20.0);
 
     // Nonfinite fallback coefficients and correction preserve current tau.
     resolvent.fallback.get_mut().unwrap().q_direction = f64::NAN;
     let retained = resolvent.solve(&[1.0], &[], 0.0, 0.0).unwrap();
     assert_eq!(retained.tau, state.tau());
+}
+
+#[test]
+fn scalar_newton_uses_full_quadratic_and_only_a_lower_clamp() {
+    let problem = Problem::new(
+        Some(crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap()),
+        vec![1.0],
+        crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let state = State::new(vec![1.0], vec![], vec![], 2.0).unwrap();
+    let mut cache = KktCache::new();
+    let mut resolvent = Resolvent::new(
+        &problem,
+        &state,
+        &[],
+        1.0,
+        &KktSettings::new(LinearSolver::Faer),
+        &mut cache,
+    )
+    .unwrap();
+    // d=-1/2, alpha=5/4, p=1/10: F(tau)=1.25*tau^2-r_tau*tau-0.01.
+    // The quadratic-form linearization has negative discriminant at r_tau=0,
+    // so this exercises the transition to full scalar Newton, not just a helper.
+    assert_close(resolvent.linearized_tau(&[0.1], 0.1, 0.0, 0.0), 1.002);
+    assert_close(resolvent.newton_tau(&[0.1], 0.1, 4.9, 0.0), 50.1);
+    assert_close(resolvent.newton_tau(&[0.1], 0.1, 6.0, 0.0), 0.2);
+    assert_eq!(resolvent.newton_tau(&[0.1], 0.1, 5.0, 0.0), 2.0);
+    resolvent.alpha = f64::NAN;
+    assert_eq!(resolvent.newton_tau(&[0.1], 0.1, 0.0, 0.0), 2.0);
 }
