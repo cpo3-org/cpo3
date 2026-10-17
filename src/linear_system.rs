@@ -319,7 +319,7 @@ impl FactorizationInner {
 
 /// Refine `solution` against the true matrix, keeping the best iterate.
 ///
-/// Refinement that diverges (backward error growing tenfold or non-finite)
+/// Refinement that diverges (backward error exceeding 1.5 times the best or non-finite)
 /// or stalls at the pass limit returns the best iterate, or an error when
 /// `strict` is set.
 #[cfg(test)]
@@ -401,26 +401,29 @@ pub(crate) fn refine_with(
             residual_into(&solution, rhs, residual);
         }
         let backward_error = backward_error(residual, denominator);
-        // Stop on stagnation or deterioration; do not forecast future progress.
-        let improved = best_error.is_none_or(|error| backward_error < error);
-        if !backward_error.is_finite() || !improved {
-            return settle_refinement(best_error, strict, best, stats);
-        }
+        let improved = match best_error {
+            Some(error) if !backward_error.is_finite() || backward_error > 1.5 * error => {
+                return settle_refinement(best_error, strict, best, stats);
+            }
+            Some(error) => backward_error < error,
+            None => true,
+        };
         if backward_error <= settings.refinement_tolerance {
             return validate_solution(solution);
         }
-        // Every accepted refinement iterate improves the backward error.
-        // Strict mode needs only that error; best-effort mode also retains
-        // the iterate so non-convergence can return it.
-        if !strict {
-            if best_error.is_some() {
-                std::mem::swap(best, &mut solution);
-            } else {
-                best.clear();
-                best.extend_from_slice(&solution);
+        // Strict refinement needs only the best error: failure never returns
+        // a saved iterate. Best-effort mode keeps the original swap scheme.
+        if improved {
+            if !strict {
+                if best_error.is_some() {
+                    std::mem::swap(best, &mut solution);
+                } else {
+                    best.clear();
+                    best.extend_from_slice(&solution);
+                }
             }
+            best_error = Some(backward_error);
         }
-        best_error = Some(backward_error);
         if iteration == settings.max_refinement_steps {
             return settle_refinement(best_error, strict, best, stats);
         }
@@ -432,7 +435,7 @@ pub(crate) fn refine_with(
                 actual: correction.len(),
             });
         }
-        if !strict {
+        if !strict && improved {
             // After a best-effort swap, `solution` is the stale output buffer.
             crate::matrix::binary_into(&mut solution, best, correction, |base, correction| {
                 base + correction
@@ -809,7 +812,7 @@ mod tests {
     }
 
     #[test]
-    fn refinement_stops_when_the_correction_does_not_improve() {
+    fn refinement_uses_the_pass_limit_when_error_stalls() {
         let matrix: CscMatrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
         let mut correction_count = 0;
         let mut stats = LinearAlgebraStats::default();
@@ -826,10 +829,11 @@ mod tests {
         )
         .unwrap();
 
-        // An unchanged iterate cannot benefit from repeating the same correction.
+        // A flat error uses the correction budget without a convergence forecast.
+        let limit = Settings::default().max_refinement_steps;
         assert_eq!(solution, vec![0.0]);
-        assert_eq!(correction_count, 1);
-        assert_eq!(stats.refinement_solves, 1);
+        assert_eq!(correction_count, limit);
+        assert_eq!(stats.refinement_solves, limit);
         assert_eq!(stats.refinement_settled, 1);
 
         let mut stats = LinearAlgebraStats::default();
@@ -845,6 +849,7 @@ mod tests {
             Err(LinearSystemError::RefinementDiverged(_))
         ));
         assert_eq!(stats.refinement_failures, 1);
+        assert_eq!(stats.refinement_solves, limit);
     }
 
     #[test]
@@ -875,31 +880,56 @@ mod tests {
 
     #[test]
     fn refinement_keeps_the_best_iterate_when_it_diverges() {
-        let matrix: CscMatrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
-        // Corrections push the iterate away from the solution x = 1.
-        let mut stats = LinearAlgebraStats::default();
-        let solution = refine_solution(
-            &matrix,
-            &[1.0],
-            vec![0.9],
-            false,
-            |_| Ok(vec![-0.01]),
-            &mut stats,
-        )
-        .unwrap();
-        assert_eq!(solution, vec![0.9]);
-        assert_eq!(stats.refinement_solves, 1);
-        assert!(matches!(
-            refine_solution(
+        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        for strict in [false, true] {
+            // Errors are 1, 0.5, 0.75, 0.875. The last exceeds 1.5 times
+            // the best error, even though it is close to the previous error.
+            let mut corrections = [0.5, -0.25, -0.125].into_iter();
+            let mut stats = LinearAlgebraStats::default();
+            let result = refine_solution(
                 &matrix,
                 &[1.0],
-                vec![0.9],
-                true,
-                |_| Ok(vec![-0.01]),
+                vec![0.0],
+                strict,
+                |_| Ok(vec![corrections.next().expect("must stop on divergence")]),
                 &mut stats,
-            ),
-            Err(LinearSystemError::RefinementDiverged(_))
-        ));
+            );
+            if strict {
+                assert!(matches!(
+                    result,
+                    Err(LinearSystemError::RefinementDiverged(0.5))
+                ));
+                assert_eq!(stats.refinement_failures, 1);
+            } else {
+                assert_eq!(result.unwrap(), vec![0.5]);
+                assert_eq!(stats.refinement_settled, 1);
+            }
+            assert_eq!(stats.refinement_solves, 3);
+        }
+    }
+
+    #[test]
+    fn refinement_can_recover_at_the_divergence_threshold() {
+        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        for strict in [false, true] {
+            // Errors are 1, 0.5, 0.75, 0: equality at 1.5 times the best
+            // is allowed, so a temporary increase can still recover.
+            let mut corrections = [0.5, -0.25, 0.75].into_iter();
+            let mut stats = LinearAlgebraStats::default();
+            let solution = refine_solution(
+                &matrix,
+                &[1.0],
+                vec![0.0],
+                strict,
+                |_| Ok(vec![corrections.next().unwrap()]),
+                &mut stats,
+            )
+            .unwrap();
+            assert_eq!(solution, vec![1.0]);
+            assert_eq!(stats.refinement_solves, 3);
+            assert_eq!(stats.refinement_settled, 0);
+            assert_eq!(stats.refinement_failures, 0);
+        }
     }
 
     #[test]
