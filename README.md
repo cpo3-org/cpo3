@@ -47,6 +47,13 @@ print(solution.x)  # approximately [1.0, 2.0]
 Use SciPy sparse matrices for `A` and `P`; set `P=None` for a linear program.
 Options can be passed with `settings=cpo3.Settings(...)`.
 
+`initial_mu` sets the canonical cold-start complementarity beta
+(default `1e-4`, range `(0, 1]`). Inequality slacks and multipliers start at
+sqrt(beta), and tau is adjusted to preserve the embedding sphere radius.
+For example, `cpo3.Settings(initial_mu=0.01)` starts with
+inequality slacks and multipliers `0.1`. Accepted warm starts and CVXOPT starts are
+unaffected; a failed CVXOPT start falls back to this configured cold start.
+
 Work counters are available on `solution.info`:
 
 ```python

@@ -26,6 +26,7 @@ macro_rules! scalar_fields {
             // Initialization and equilibration.
             force_warm_start,
             cvxopt_init,
+            initial_mu,
             max_equilibration_passes,
             equilibration_tolerance,
             // KKT solves.

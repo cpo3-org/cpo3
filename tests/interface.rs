@@ -24,6 +24,7 @@ fn settings_use_short_names() {
     assert!(settings.kkt_bound_elimination);
     assert_eq!(settings.initial_shift_floor, 1e-10);
     assert!(!settings.cvxopt_init);
+    assert_eq!(settings.initial_mu, 1e-4);
 }
 
 fn sparse_identity(size: usize) -> CscMatrix {

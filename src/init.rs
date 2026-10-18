@@ -156,14 +156,14 @@ fn sphere_factor(embedding: &Embedding<'_>, x: &[f64], y: &[f64]) -> f64 {
     (embedding.nu() as f64 + 1.0).sqrt() / norm
 }
 
-/// A centered point on the embedding sphere with complementarity 1e-4.
-fn canonical_state(embedding: &Embedding<'_>) -> Result<State, EmbeddingError> {
+/// A point on the embedding sphere with inequality complementarity beta.
+fn canonical_state(embedding: &Embedding<'_>, beta: f64) -> Result<State, EmbeddingError> {
     let mut point = vec![0.0; embedding.problem().constraint_count()];
     embedding.geometry().canonical_identity(&mut point)?;
     for value in &mut point {
-        *value *= 1e-2;
+        *value *= beta.sqrt();
     }
-    let tau = (1.0 + embedding.nu() as f64 * (1.0 - 1e-4)).sqrt();
+    let tau = (1.0 + embedding.nu() as f64 * (1.0 - beta)).sqrt();
     State::new(
         vec![0.0; embedding.problem().variable_count()],
         point.clone(),
@@ -321,7 +321,7 @@ fn cold_state(
             }
         }
     }
-    Ok((canonical_state(embedding)?, false))
+    Ok((canonical_state(embedding, settings.initial_mu)?, false))
 }
 
 /// Choose and prepare the starting point according to the settings.
@@ -434,23 +434,30 @@ mod tests {
         )
         .unwrap();
         let embedding = Embedding::new(scaled.problem()).unwrap();
-        let (state, report) = initial_state(
-            &embedding,
-            &scaled,
-            &[false, true],
-            None,
-            &Settings::default(),
-            &KktSettings::new(LinearSolver::Faer),
-            &mut KktCache::new(),
-        )
-        .unwrap();
-        assert_eq!(state.x(), [0.0]);
-        assert_eq!(state.y(), [0.0, 1e-2]);
-        assert_eq!(state.s(), [0.0, 1e-2]);
-        assert_close(state.tau(), (2.0_f64 - 1e-4).sqrt(), 1e-12);
-        assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
-        assert_eq!(report.cvxopt_init_used, Some(false));
-        assert_ne!(scaled.unscale_s_by(state.s(), 1.0), state.s());
+        for beta in [Settings::default().initial_mu, 0.25, 1.0] {
+            let settings = Settings {
+                initial_mu: beta,
+                ..Settings::default()
+            };
+            let (state, report) = initial_state(
+                &embedding,
+                &scaled,
+                &[false, true],
+                None,
+                &settings,
+                &KktSettings::new(LinearSolver::Faer),
+                &mut KktCache::new(),
+            )
+            .unwrap();
+            assert_eq!(state.x(), [0.0]);
+            assert_eq!(state.y(), [0.0, beta.sqrt()]);
+            assert_eq!(state.s(), [0.0, beta.sqrt()]);
+            assert_close(embedding.duality_measure(&state), beta, 1e-12);
+            assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
+            embedding.ensure_domain(&state).unwrap();
+            assert_eq!(report.cvxopt_init_used, Some(false));
+            assert_ne!(scaled.unscale_s_by(state.s(), 1.0), state.s());
+        }
     }
 
     #[test]
@@ -650,6 +657,9 @@ mod tests {
         .unwrap();
         assert_eq!(report.warm_start_used, Some(false));
         assert_eq!(report.cvxopt_init_used, Some(false));
-        assert_eq!(state, canonical_state(&embedding).unwrap());
+        assert_eq!(
+            state,
+            canonical_state(&embedding, settings.initial_mu).unwrap()
+        );
     }
 }

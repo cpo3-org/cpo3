@@ -33,13 +33,19 @@ pub struct Settings {
     /// the screening threshold. No effect without a point or inequality rows.
     pub force_warm_start: bool,
     /// Start from cpo3's CVXOPT/Clarabel-style point instead of the canonical
-    /// point `(0, e, e, 1)` when no warm start is supplied or accepted: one
+    /// spherical cold start when no warm start is supplied or accepted: one
     /// solve of `[P, A'; A, -H][x; y] = [-c; b]` with `H` the identity on
     /// cone rows and zero on equality rows (two solves on one factorization
     /// for linear programs), `s = b - A x`, and cone components of `s` and
     /// `y` shifted so that their minimum is at least one. A failed solve
     /// falls back to the canonical point.
     pub cvxopt_init: bool,
+    /// Initial complementarity beta for the canonical cold start.
+    /// Defaults to 1e-4, with inequality slacks and multipliers sqrt(beta).
+    /// Must be finite and in (0, 1]. Tau is chosen to keep
+    /// ||(x, y, tau)||^2 = nu + 1. Also used after a failed CVXOPT start;
+    /// has no effect on accepted warm/CVXOPT starts or equality-only problems.
+    pub initial_mu: f64,
     pub data_equilibration: Equilibration,
     /// Maximum Ruiz sweeps on the augmented problem data (P, A, b, c).
     /// Zero leaves all problem data unscaled.
@@ -88,6 +94,7 @@ impl Default for Settings {
 
             force_warm_start: false,
             cvxopt_init: false,
+            initial_mu: 1e-4,
             data_equilibration: Equilibration::Ruiz,
             max_equilibration_passes: 2,
             equilibration_tolerance: 1e-2,
@@ -107,6 +114,12 @@ impl Default for Settings {
 impl Settings {
     /// Check numerical ranges before solving. Defaults satisfy these invariants.
     pub fn validate(&self) -> Result<(), SolveError> {
+        let beta = self.initial_mu;
+        if !beta.is_finite() || beta <= 0.0 || beta > 1.0 {
+            return Err(SolveError::InvalidSetting(
+                "initial_mu must be finite and in (0, 1]",
+            ));
+        }
         if !self.refinement_tolerance.is_finite() || self.refinement_tolerance <= 0.0 {
             return Err(SolveError::InvalidSetting(
                 "refinement_tolerance must be finite and positive",

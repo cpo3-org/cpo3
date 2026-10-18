@@ -62,6 +62,7 @@ def test_settings_use_short_names() -> None:
     assert settings.certificate_ktratio == 1e9
     assert settings.force_warm_start is False
     assert settings.cvxopt_init is False
+    assert settings.initial_mu == 1e-4
     assert settings.presolve is True
     assert not hasattr(settings, "max_iterations")
     assert not hasattr(settings, "absolute_tolerance")
@@ -446,6 +447,22 @@ def test_same_problem_can_be_solved_concurrently() -> None:
 def test_mu_floor_is_validated_at_settings_construction(value: float) -> None:
     with pytest.raises(ValueError, match="initial_shift_floor"):
         cpo3.Settings(initial_shift_floor=value)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0, 1.01, float("nan"), float("inf")])
+def test_initial_mu_is_validated(value: float) -> None:
+    with pytest.raises(ValueError, match="initial_mu"):
+        cpo3.Settings(initial_mu=value)
+
+
+@pytest.mark.parametrize("beta", [1e-3, 0.1, 1.0])
+def test_configurable_cold_start_solves(beta: float) -> None:
+    solution = cpo3.solve(
+        sparse_problem(),
+        settings=cpo3.Settings(presolve=False, initial_mu=beta),
+    )
+    assert solution.status is cpo3.SolverStatus.SOLVED
+    assert solution.info.cvxopt_init_used is False
 
 
 @pytest.mark.parametrize("name", ["A", "P"])

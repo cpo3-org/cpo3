@@ -134,6 +134,9 @@ class Settings:
     force_warm_start: bool = _SETTINGS_DEFAULTS["force_warm_start"]
     # Start from cpo3's CVXOPT-style KKT solve instead of the canonical point.
     cvxopt_init: bool = _SETTINGS_DEFAULTS["cvxopt_init"]
+    # Canonical cold-start mu_0 = beta in (0, 1]; s_i = y_i = sqrt(beta).
+    # Tau preserves the sphere radius. Ignored for accepted warm/CVXOPT starts.
+    initial_mu: float = _SETTINGS_DEFAULTS["initial_mu"]
     data_equilibration: Equilibration = _SETTINGS_DEFAULTS["data_equilibration"]
     # Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
     max_equilibration_passes: int = _SETTINGS_DEFAULTS["max_equilibration_passes"]
