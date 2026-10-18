@@ -467,3 +467,31 @@ fn owned_conversion_moves_cpo3_matrix_and_vector_buffers() {
     assert_eq!(native.p.as_ref().unwrap().values().as_ptr(), p);
     assert_eq!(native.p.unwrap().values(), [2., 1., 3.]);
 }
+
+#[test]
+fn equality_zero_target_does_not_falsely_accept_inconsistent_or_unbounded_problems() {
+    // The baseline does not generate equality-only certificates with presolve
+    // off (its certificate gate is zero). Preserve rejection as non-solutions.
+    for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for (c, b) in [(0.0, 1.0), (-1.0, 0.0)] {
+            let problem = Problem::new(
+                None,
+                vec![c],
+                common::matrix(1, 1, vec![0.0]).unwrap(),
+                vec![b],
+                vec![Cone::Zero(1)],
+            )
+            .unwrap();
+            let solution = solve(
+                &problem,
+                &Settings {
+                    presolve: false,
+                    linear_solver: solver,
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(solution.status(), SolverStatus::MaxIterations);
+        }
+    }
+}

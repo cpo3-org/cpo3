@@ -1,6 +1,7 @@
 //! Closed-form Josephy--Newton step (`subsec:josephy_newton`, `thm:resolvent`).
 //!
-//! `Resolvent::new` factors `eq:qd_system` and caches `eq:cached_data_solve`.
+//! `Resolvent::with_factor_shift` factors the preconditioner and caches the
+//! target-system solve `eq:cached_data_solve`.
 //! Each target/surrogate supplies the changing right-hand side of
 //! `eq:surrogate_rhs`. `solve_increment_rhs` evaluates the same equations in
 //! increments about the current iterate to avoid cancellation, solves the scalar
@@ -118,6 +119,7 @@ struct TauFallback {
 impl<'a> Resolvent<'a> {
     /// Factorize a diagonally clamped preconditioner for the true system
     /// `[P + shift I, A^T; A, -(H + shift I)]`, then refine its `(-c, b)` solve.
+    #[cfg(test)]
     pub(crate) fn new(
         problem: &'a Problem,
         state: &'a State,
@@ -126,21 +128,41 @@ impl<'a> Resolvent<'a> {
         kkt: &KktSettings,
         cache: &'a mut KktCache,
     ) -> Result<Self, JosephyError> {
-        if !shift.is_finite() || shift <= 0.0 {
+        Self::with_factor_shift(problem, state, h_diagonal, shift, shift, kkt, cache)
+    }
+
+    /// Target K(shift); use K(factor_shift) only for numerical correction solves.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn with_factor_shift(
+        problem: &'a Problem,
+        state: &'a State,
+        h_diagonal: &[f64],
+        shift: f64,
+        factor_shift: f64,
+        kkt: &KktSettings,
+        cache: &'a mut KktCache,
+    ) -> Result<Self, JosephyError> {
+        if !shift.is_finite()
+            || shift < 0.0
+            || !factor_shift.is_finite()
+            || factor_shift <= 0.0
+            || factor_shift < shift
+        {
             return Err(EmbeddingError::InvalidMu.into());
         }
         let d_diagonal = h_diagonal
             .iter()
             .map(|entry| entry + shift)
             .collect::<Vec<_>>();
-        let d_factor = (kkt.min_static_regularization > shift).then(|| {
-            d_diagonal
-                .iter()
-                .map(|d| d.max(kkt.min_static_regularization))
-                .collect::<Vec<_>>()
-        });
+        let d_factor =
+            (factor_shift != shift || kkt.min_static_regularization > shift).then(|| {
+                h_diagonal
+                    .iter()
+                    .map(|h| (h + factor_shift).max(kkt.min_static_regularization))
+                    .collect::<Vec<_>>()
+            });
         let factor_diagonal = d_factor.as_deref().unwrap_or(&d_diagonal);
-        factorize(problem, shift, factor_diagonal, kkt, cache)?;
+        factorize(problem, factor_shift, factor_diagonal, kkt, cache)?;
         let KktCache {
             pattern,
             factorization,
@@ -270,6 +292,11 @@ impl<'a> Resolvent<'a> {
         let mut residual = rhs.to_vec();
         crate::matrix::add_assign(&mut residual, &self.rhs_offset);
         self.solve_increment_rhs(&residual, r_tau, mu)
+    }
+
+    /// The cached mu-target solution of K z = (-c, b).
+    pub(crate) fn constant_direction(&self) -> &[f64] {
+        self.direction
     }
 
     pub(crate) fn dual_residual(&self) -> &[f64] {

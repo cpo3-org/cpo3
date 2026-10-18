@@ -29,7 +29,7 @@ pub(crate) enum MehrotraError {
 
 /// One accepted outer iterate and the scalars that produced it.
 pub(crate) struct Step {
-    /// True KKT shift used for this step.
+    /// Factorization shift used for this step; the target remains mu_before.
     pub(crate) rho: f64,
     /// Complementarity used to construct this step.
     pub(crate) mu_before: f64,
@@ -59,9 +59,9 @@ pub(crate) fn step(
     )
 }
 
-/// Retry with a larger true KKT shift, leaving factor regularization unchanged.
-/// Strict refinement protects the outer step; after bounded shift increases,
-/// allow one attempt using the best finite refinement iterate.
+/// Retry with a larger factorization shift, always targeting the same mu system.
+/// Accept the finite iterate with the smallest mu-target residual when refinement
+/// stalls. Increase the factor shift only if factorization or step formation fails.
 fn with_shift_retries<T>(
     kkt: &KktSettings,
     raw_mu: f64,
@@ -73,25 +73,27 @@ fn with_shift_retries<T>(
     let mut rho = raw_mu.max(*cache.shift_floor.get_or_insert(requested_shift_floor));
     let requested_rho = rho;
     let mut trial = *kkt;
-    trial.strict_refinement = true;
+    trial.strict_refinement = false;
+    let settled_before = cache.stats().refinement_settled;
     loop {
         let result = attempt(&trial, rho, cache);
         cache.finish_step(result.is_ok());
         match result {
             Err(error) if retryable(&error) => {
-                let next = rho * 10.0;
+                let next = (rho * 10.0).max(1e-16);
                 if next <= MAX_RETRY_SHIFT {
                     rho = next;
                     cache.shift_floor = Some(rho);
-                } else if trial.strict_refinement {
-                    trial.strict_refinement = false;
                 } else {
                     return Err(error);
                 }
             }
             Ok(step) => {
                 // Relax only after an accurate step that needed no escalation.
-                if trial.strict_refinement && rho == requested_rho && raw_mu < rho {
+                if cache.stats().refinement_settled == settled_before
+                    && rho == requested_rho
+                    && raw_mu < rho
+                {
                     cache.shift_floor = Some((rho / 10.0).max(requested_shift_floor));
                 }
                 return Ok(step);
@@ -116,10 +118,36 @@ fn step_attempt(
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
     let raw_mu = scaling.mu;
-    let mut resolvent = Resolvent::new(embedding.problem(), state, &scaling.d, rho, kkt, cache)?;
+    let mut resolvent = Resolvent::with_factor_shift(
+        embedding.problem(),
+        state,
+        &scaling.d,
+        raw_mu,
+        rho,
+        kkt,
+        cache,
+    )?;
+    if embedding.nu() == 0 {
+        // At mu=0 with only equality rows, the constant KKT column is the
+        // original primal-dual solution. Its homogeneous scale is arbitrary.
+        let point = embedding.accept_state(
+            resolvent.constant_direction().to_vec(),
+            state.x().len(),
+            vec![0.0; state.s().len()],
+            1.0,
+        )?;
+        return Ok(Step {
+            state: point,
+            rho,
+            mu_before: raw_mu,
+            sigma: 0.0,
+            alpha_affine: 1.0,
+            alpha: 1.0,
+        });
+    }
     let geometry = embedding.geometry();
-    let mut first = predictor(embedding, state, rho, scaling, &mut resolvent)?;
-    let second = corrector(state, rho, scaling, &mut first, &mut resolvent)?;
+    let mut first = predictor(embedding, state, raw_mu, scaling, &mut resolvent)?;
+    let second = corrector(state, raw_mu, scaling, &mut first, &mut resolvent)?;
     let boundary = geometry
         .step_to_boundary_toward(state.s(), &second.s_centered)?
         .min(geometry.step_to_boundary_toward(state.y(), second.centered.y())?);
@@ -213,7 +241,7 @@ pub(crate) fn predictor(
     scaling: &Scaling,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Predictor, MehrotraError> {
-    if !rho.is_finite() || rho <= 0.0 {
+    if !rho.is_finite() || rho < 0.0 {
         return Err(MehrotraError::InvalidDualityMeasure(rho));
     }
     // Current-anchor predictor RHS: (-r_dual, b tau - A x).
@@ -285,7 +313,7 @@ pub(crate) fn corrector(
     predictor: &mut Predictor,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Corrector, MehrotraError> {
-    if !rho.is_finite() || rho <= 0.0 {
+    if !rho.is_finite() || rho < 0.0 {
         return Err(MehrotraError::InvalidDualityMeasure(rho));
     }
     let mu_centered = predictor.sigma * scaling.mu;
@@ -374,7 +402,7 @@ mod tests {
     const TOLERANCE: f64 = 1e-12;
 
     #[test]
-    fn retries_increase_the_true_shift_and_decay_after_accurate_steps() {
+    fn retries_increase_the_factor_shift_and_decay_after_accurate_steps() {
         let settings = KktSettings::new(LinearSolver::Faer);
         let mut cache = KktCache::new();
         let mut shifts = Vec::new();
@@ -383,7 +411,7 @@ mod tests {
                 trial.min_static_regularization,
                 settings.min_static_regularization
             );
-            assert!(trial.strict_refinement);
+            assert!(!trial.strict_refinement);
             shifts.push(rho);
             if shifts.len() == 1 {
                 Err(JosephyError::InvalidTauPolynomial.into())
@@ -419,14 +447,14 @@ mod tests {
             assert!(
                 attempts[..attempts.len() - 1]
                     .iter()
-                    .all(|(_, strict)| *strict)
+                    .all(|(_, strict)| !*strict)
             );
             if floor == 1e-8 {
                 assert!(attempts.last().unwrap().0 <= 1e-4);
                 assert!(attempts.len() <= 7);
                 assert!(attempts.windows(2).all(|pair| pair[0].0 <= pair[1].0));
             } else {
-                assert_eq!(attempts, [(floor, true), (floor, false)]);
+                assert_eq!(attempts, [(floor, false)]);
             }
         }
         let mut cache = KktCache::new();
@@ -761,7 +789,7 @@ mod tests {
     }
 
     #[test]
-    fn predictor_rejects_a_nonpositive_duality_measure() {
+    fn predictor_rejects_a_negative_duality_measure() {
         let problem = linear_problem();
         let embedding = Embedding::new(&problem).unwrap();
         let state = interior_state(&problem);
@@ -777,8 +805,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            predictor(&embedding, &state, 0.0, &scaling, &mut resolvent).err(),
-            Some(MehrotraError::InvalidDualityMeasure(0.0))
+            predictor(&embedding, &state, -1.0, &scaling, &mut resolvent).err(),
+            Some(MehrotraError::InvalidDualityMeasure(-1.0))
         );
     }
 }

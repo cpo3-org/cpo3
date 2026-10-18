@@ -384,11 +384,8 @@ pub(crate) fn refine_with(
             actual: solution.len(),
         });
     }
-    // The initial (possibly seeded) estimate already used one back-solve.
-    // Disabling refinement bypasses its acceptance test and strict retries.
-    if settings.max_refinement_steps == 0 {
-        return validate_solution(solution);
-    }
+    // Even with no correction budget, evaluate the target residual before
+    // applying the strict or best-effort acceptance rule.
     let strict = settings.strict_refinement;
     let RefinementWorkspace {
         residual,
@@ -474,7 +471,7 @@ fn settle_refinement(
     stats: &mut LinearAlgebraStats,
 ) -> Result<Vec<f64>, LinearSystemError> {
     match best_error {
-        Some(_) if !strict => {
+        Some(error) if !strict && error.is_finite() => {
             stats.refinement_settled += 1;
             validate_solution(std::mem::take(best))
         }
@@ -864,6 +861,48 @@ mod tests {
             ),
             Err(LinearSystemError::RefinementDiverged(_))
         ));
+        assert_eq!(stats.refinement_failures, 1);
+    }
+
+    #[test]
+    fn zero_correction_budget_still_evaluates_target_residual() {
+        for strict in [false, true] {
+            let mut workspace = RefinementWorkspace::default();
+            let mut stats = LinearAlgebraStats::default();
+            let mut checked = false;
+            let result = refine_with(
+                &[1.0],
+                vec![0.5],
+                &KktSettings {
+                    strict_refinement: strict,
+                    max_refinement_steps: 0,
+                    ..KktSettings::new(LinearSolver::Faer)
+                },
+                &mut workspace,
+                |_, _, _| unreachable!(),
+                |_, _, residual, denominator| {
+                    checked = true;
+                    residual[0] = 0.5;
+                    denominator[0] = 1.5;
+                },
+                |_, _| unreachable!(),
+                &mut stats,
+            );
+            assert!(checked);
+            assert_eq!(result.is_err(), strict);
+            assert_eq!(stats.refinement_solves, 0);
+            if !strict {
+                assert_eq!(result.unwrap(), vec![0.5]);
+            }
+        }
+    }
+
+    #[test]
+    fn best_effort_requires_a_finite_target_residual_measure() {
+        let mut stats = LinearAlgebraStats::default();
+        let mut best = vec![1.0];
+        assert!(settle_refinement(Some(f64::INFINITY), false, &mut best, &mut stats).is_err());
+        assert_eq!(stats.refinement_settled, 0);
         assert_eq!(stats.refinement_failures, 1);
     }
 

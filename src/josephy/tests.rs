@@ -863,3 +863,68 @@ fn failed_root_uses_current_state_and_reuses_fallback_products() {
     let retained = resolvent.solve(&[1.0], &[], 0.0, 0.0).unwrap();
     assert_eq!(retained.tau, state.tau());
 }
+
+#[test]
+fn distinct_factor_shift_keeps_resolvent_target_and_reconstruction() {
+    let problem = problem();
+    let state = reference_state(&problem);
+    let h = [0.0, 1.0];
+    let settings = KktSettings {
+        strict_refinement: true,
+        refinement_tolerance: 1e-13,
+        max_refinement_steps: 100,
+        ..KktSettings::new(LinearSolver::Faer)
+    };
+    let rhs = [0.7, -0.2, 0.5, -0.8];
+    let mut direct_cache = KktCache::new();
+    let mut shifted_cache = KktCache::new();
+    let mut direct =
+        Resolvent::new(&problem, &state, &h, 0.3, &settings, &mut direct_cache).unwrap();
+    let mut shifted = Resolvent::with_factor_shift(
+        &problem,
+        &state,
+        &h,
+        0.3,
+        0.5,
+        &settings,
+        &mut shifted_cache,
+    )
+    .unwrap();
+    assert_eq!(shifted.shift, 0.3);
+    assert_eq!(shifted.d_diagonal, vec![0.3, 1.3]);
+    assert_eq!(shifted.d_factor, Some(vec![0.5, 1.5]));
+    for (&a, &b) in direct.direction.iter().zip(shifted.direction) {
+        assert_close(a, b);
+    }
+    let a = direct.solve_increment_rhs(&rhs, 0.4, 0.1).unwrap();
+    let b = shifted.solve_increment_rhs(&rhs, 0.4, 0.1).unwrap();
+    assert_close(a.tau, b.tau);
+    for (&a, &b) in a.xy.iter().zip(&b.xy) {
+        assert_close(a, b);
+    }
+}
+
+#[test]
+fn zero_target_equality_column_solves_original_stationarity_and_feasibility() {
+    let problem = Problem::new(
+        Some(crate::CscMatrix::identity(1).unwrap()),
+        vec![-1.0],
+        crate::CscMatrix::identity(1).unwrap(),
+        vec![2.0],
+        vec![Cone::Zero(1)],
+    )
+    .unwrap();
+    let state = State::new(vec![0.0], vec![0.0], vec![0.0], 2.0).unwrap();
+    let settings = KktSettings {
+        strict_refinement: true,
+        refinement_tolerance: 1e-13,
+        ..KktSettings::new(LinearSolver::Faer)
+    };
+    let mut cache = KktCache::new();
+    let resolvent =
+        Resolvent::with_factor_shift(&problem, &state, &[0.0], 0.0, 1e-8, &settings, &mut cache)
+            .unwrap();
+    let xy = resolvent.constant_direction();
+    assert_close(xy[0], 2.0);
+    assert_close(xy[0] + xy[1] - 1.0, 0.0);
+}
