@@ -347,7 +347,7 @@ pub(crate) fn corrector(
             predictor.affine.tau,
         ),
         mu_centered,
-        Some(&correction),
+        correction,
         resolvent,
     )?;
 
@@ -365,7 +365,7 @@ fn centered_solve(
     scaling: &Scaling,
     (anchor_x, anchor_y, anchor_tau): (&[f64], &[f64], f64),
     mu_centered: f64,
-    correction: Option<&[f64]>,
+    mut correction: Vec<f64>,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<(ResolventSolution, Vec<f64>), MehrotraError> {
     let residual_weight = rho - mu_centered;
@@ -391,17 +391,18 @@ fn centered_solve(
         resolvent.primal_rhs()[index] - rho * (anchor_y[index] - state.y()[index])
             + mu_centered * anchor_y[index]
             - mu_over_y(index)
-            - correction.map_or(0.0, |values| values[index])
+            - correction[index]
     }));
     let r_tau = residual_weight * anchor_tau;
     let centered = resolvent.solve_increment_rhs(&rhs, r_tau, mu_centered)?;
-    let s_centered: Vec<f64> = (0..m)
-        .map(|index| {
-            mu_over_y(index) - scaling.d[index] * (centered.y()[index] - state.y()[index])
-                + correction.map_or(0.0, |values| values[index])
-        })
-        .collect();
-    Ok((centered, s_centered))
+    // The second-order correction is no longer needed after the solve.
+    // Reuse its allocation for slack, preserving the scalar evaluation order.
+    for (index, value) in correction.iter_mut().enumerate() {
+        let second_order_correction = *value;
+        *value = mu_over_y(index) - scaling.d[index] * (centered.y()[index] - state.y()[index])
+            + second_order_correction;
+    }
+    Ok((centered, correction))
 }
 
 fn difference(left: &[f64], right: &[f64]) -> Vec<f64> {
@@ -696,7 +697,9 @@ mod tests {
         )
         .unwrap();
         let mut first = predictor(&embedding, &state, mu, &scaling, &mut resolvent).unwrap();
+        let correction_allocation = first.correction.as_ptr();
         let second = corrector(&state, mu, &scaling, &mut first, &mut resolvent).unwrap();
+        assert_eq!(second.s_centered.as_ptr(), correction_allocation);
         (state, mu, first, second)
     }
 

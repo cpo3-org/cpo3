@@ -443,7 +443,7 @@ pub(crate) fn refine_with(
                 if iteration > 0 {
                     diagnose_correction(residual, correction, perturbation, denominator, stats);
                 }
-                return settle_refinement(best_error, strict, best, stats);
+                return settle_refinement(best_error, strict, best, solution, stats);
             }
             Some(error) => backward_error < error,
             None => true,
@@ -456,12 +456,9 @@ pub(crate) fn refine_with(
         // a saved iterate. Best-effort mode keeps the original swap scheme.
         if improved {
             if !strict {
-                if best_error.is_some() {
-                    std::mem::swap(best, &mut solution);
-                } else {
-                    best.clear();
-                    best.extend_from_slice(&solution);
-                }
+                // Keep the iterate by ownership, including the initial one.
+                // The previous best buffer becomes the next update destination.
+                std::mem::swap(best, &mut solution);
             }
             best_error = Some(backward_error);
         }
@@ -477,7 +474,7 @@ pub(crate) fn refine_with(
                 if iteration > 0 {
                     diagnose_correction(residual, correction, perturbation, denominator, stats);
                 }
-                return settle_refinement(best_error, strict, best, stats);
+                return settle_refinement(best_error, strict, best, solution, stats);
             }
         }
         errors = [errors[1], backward_error];
@@ -486,18 +483,19 @@ pub(crate) fn refine_with(
             if iteration > 0 {
                 diagnose_correction(residual, correction, perturbation, denominator, stats);
             }
-            return settle_refinement(best_error, strict, best, stats);
+            return settle_refinement(best_error, strict, best, solution, stats);
         }
         stats.refinement_solves += 1;
         solve_correction(residual, correction)?;
-        if correction.len() != solution.len() {
+        if correction.len() != rhs.len() {
             return Err(LinearSystemError::InvalidSolutionDimension {
-                expected: solution.len(),
+                expected: rhs.len(),
                 actual: correction.len(),
             });
         }
         if !strict && improved {
             // After a best-effort swap, `solution` is the stale output buffer.
+            solution.resize(rhs.len(), 0.0);
             crate::matrix::binary_into(&mut solution, best, correction, |base, correction| {
                 base + correction
             });
@@ -509,7 +507,7 @@ pub(crate) fn refine_with(
             if iteration > 0 {
                 diagnose_correction(residual, correction, perturbation, denominator, stats);
             }
-            return settle_refinement(best_error, strict, best, stats);
+            return settle_refinement(best_error, strict, best, solution, stats);
         }
     }
     unreachable!("the refinement loop returns after its final residual check")
@@ -560,12 +558,15 @@ fn settle_refinement(
     best_error: Option<f64>,
     strict: bool,
     best: &mut Vec<f64>,
+    mut solution: Vec<f64>,
     stats: &mut LinearAlgebraStats,
 ) -> Result<Vec<f64>, LinearSystemError> {
     match best_error {
         Some(error) if !strict && error.is_finite() => {
             stats.refinement_settled += 1;
-            validate_solution(std::mem::take(best))
+            // Return the best iterate and retain the unused allocation.
+            std::mem::swap(best, &mut solution);
+            validate_solution(solution)
         }
         Some(error) => {
             stats.refinement_failures += 1;
@@ -993,7 +994,16 @@ mod tests {
     fn best_effort_requires_a_finite_target_residual_measure() {
         let mut stats = LinearAlgebraStats::default();
         let mut best = vec![1.0];
-        assert!(settle_refinement(Some(f64::INFINITY), false, &mut best, &mut stats).is_err());
+        assert!(
+            settle_refinement(
+                Some(f64::INFINITY),
+                false,
+                &mut best,
+                Vec::new(),
+                &mut stats
+            )
+            .is_err()
+        );
         assert_eq!(stats.refinement_settled, 0);
         assert_eq!(stats.refinement_failures, 1);
     }
@@ -1168,6 +1178,54 @@ mod tests {
         assert!(solution[0].is_finite());
         assert_eq!(stats.refinement_forecast, 1);
         assert_eq!(stats.refinement_solves, 2);
+    }
+
+    #[test]
+    fn best_effort_refinement_returns_owned_iterates_and_keeps_scratch() {
+        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let mut workspace = RefinementWorkspace {
+            best: vec![123.0],
+            ..RefinementWorkspace::default()
+        };
+        let scratch = workspace.best.as_ptr();
+        let initial = vec![0.0];
+        let initial_ptr = initial.as_ptr();
+        let mut stats = LinearAlgebraStats::default();
+        let mut settings = KktSettings {
+            max_refinement_steps: 0,
+            ..KktSettings::new(LinearSolver::Faer)
+        };
+        let solve = |initial,
+                     settings: &KktSettings,
+                     workspace: &mut RefinementWorkspace,
+                     stats: &mut LinearAlgebraStats| {
+            refine_with(
+                &[1.0],
+                initial,
+                settings,
+                workspace,
+                |x, b, r| residual_into(&matrix, x, b, r),
+                |x, b, r, d| residual_and_denominator_into(&matrix, x, b, r, d),
+                |r, d| {
+                    d.clear();
+                    d.push(0.5 * r[0]);
+                    Ok(())
+                },
+                stats,
+            )
+            .unwrap()
+        };
+        let returned = solve(initial, &settings, &mut workspace, &mut stats);
+        assert_eq!(returned, vec![0.0]);
+        assert_eq!(returned.as_ptr(), initial_ptr);
+        assert_eq!(workspace.best.as_ptr(), scratch);
+        settings.max_refinement_steps = 1;
+        for _ in 0..2 {
+            let returned = solve(vec![0.0], &settings, &mut workspace, &mut stats);
+            assert_eq!(returned, vec![0.5]);
+            assert_eq!(workspace.best.len(), 1);
+        }
+        assert_eq!(stats.refinement_budget, 3);
     }
 
     #[test]

@@ -48,6 +48,8 @@ pub(super) struct KktPattern {
     /// Full-system residual used for the first correction of a warm start.
     initial_residual: Vec<f64>,
     refinement: RefinementWorkspace,
+    /// The perturbation is shared by every RHS of the current factorization.
+    perturbation_ready: bool,
     /// Scratch storage reused by predictor/corrector reconstruction within a solve.
     pub(super) reconstruction: Vec<f64>,
 }
@@ -148,6 +150,9 @@ pub(super) fn factorize(
     kkt: &KktSettings,
     cache: &mut KktCache,
 ) -> Result<(), JosephyError> {
+    if let Some(pattern) = cache.pattern.as_mut() {
+        pattern.perturbation_ready = false;
+    }
     match (cache.factorization.as_mut(), cache.pattern.as_ref()) {
         (Some(factorization), Some(pattern)) => {
             factorization.set_strict_refinement(kkt.strict_refinement);
@@ -288,20 +293,23 @@ impl KktPattern {
         };
         let mut stats = LinearAlgebraStats::default();
         let mut workspace = std::mem::take(&mut self.refinement);
-        workspace.perturbation.clear();
-        let floor = factorization.settings().diagonal_floor;
-        if floor > shift {
-            workspace.perturbation.extend(
-                self.p_diagonal
-                    .iter()
-                    .map(|p| (floor - (p + shift)).max(0.0)),
-            );
-            workspace.perturbation.extend(
-                d_diagonal
-                    .iter()
-                    .zip(d_factor)
-                    .map(|(target, factor)| target - factor),
-            );
+        if !self.perturbation_ready {
+            workspace.perturbation.clear();
+            let floor = factorization.settings().diagonal_floor;
+            if floor > shift {
+                workspace.perturbation.extend(
+                    self.p_diagonal
+                        .iter()
+                        .map(|p| (floor - (p + shift)).max(0.0)),
+                );
+                workspace.perturbation.extend(
+                    d_diagonal
+                        .iter()
+                        .zip(d_factor)
+                        .map(|(target, factor)| target - factor),
+                );
+            }
+            self.perturbation_ready = true;
         }
         let result = refine_with(
             rhs,
@@ -421,6 +429,7 @@ pub(super) fn build_pattern(
             bound_rows,
             initial_residual: Vec::new(),
             refinement: RefinementWorkspace::default(),
+            perturbation_ready: false,
             reconstruction: Vec::new(),
         },
     ))
@@ -579,4 +588,52 @@ pub(super) fn full_residual_and_denominator(
 
 pub(super) fn matrix_value(matrix: &CscMatrix, row: usize, column: usize) -> f64 {
     matrix.get(row.min(column), row.max(column)).unwrap_or(0.0)
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use crate::LinearSolver;
+
+    #[test]
+    fn perturbation_is_reused_and_invalidated_after_refactorization() {
+        let problem = Problem::new(
+            Some(CscMatrix::identity(1).unwrap()),
+            vec![0.0],
+            CscMatrix::identity(1).unwrap(),
+            vec![0.0],
+            vec![Cone::Nonnegative(1)],
+        )
+        .unwrap();
+        let shift = 0.1;
+        let target = [0.15_f64];
+        let mut cache = KktCache::new();
+        for floor in [0.5, 0.3, 1e-12] {
+            let settings = KktSettings {
+                diagonal_floor: floor,
+                ..KktSettings::new(LinearSolver::Faer)
+            };
+            let factor = [target[0].max(floor)];
+            factorize(&problem, shift, &factor, &settings, &mut cache).unwrap();
+            let pattern = cache.pattern.as_mut().unwrap();
+            let factorization = cache.factorization.as_mut().unwrap();
+            assert!(!pattern.perturbation_ready);
+            for rhs in [[1.0, 2.0], [-3.0, 1.0]] {
+                let result = pattern
+                    .solve(&problem, factorization, shift, &target, &factor, &rhs, None)
+                    .unwrap();
+                assert!((1.1 * result[0] + result[1] - rhs[0]).abs() < 1e-5);
+                assert!((result[0] - 0.15 * result[1] - rhs[1]).abs() < 1e-5);
+                assert!(pattern.perturbation_ready);
+                if floor > shift {
+                    assert_eq!(
+                        pattern.refinement.perturbation,
+                        vec![0.0, target[0] - factor[0]]
+                    );
+                } else {
+                    assert!(pattern.refinement.perturbation.is_empty());
+                }
+            }
+        }
+    }
 }
