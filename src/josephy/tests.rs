@@ -521,7 +521,7 @@ fn failed_step_restores_the_previous_constant_column_without_copying() {
     assert_eq!(cache.direction.as_ptr(), original);
     assert_close(cache.direction[0], 1.0);
     // Failure before solving the column must not discard the accepted seed.
-    assert!(Resolvent::new(&problem, &state, &[], 0.0, &settings, &mut cache).is_err());
+    assert!(Resolvent::new(&problem, &state, &[], -1.0, &settings, &mut cache).is_err());
     cache.finish_step(false);
     assert_eq!(cache.direction.as_ptr(), original);
     Resolvent::new(&problem, &state, &[], 2.0, &settings, &mut cache).unwrap();
@@ -687,7 +687,7 @@ fn resolvent_rejects_bad_inputs() {
             &problem,
             &state,
             &[0.0, 1.0],
-            0.0,
+            -1.0,
             &KktSettings::new(LinearSolver::Faer),
             &mut KktCache::new()
         ),
@@ -927,4 +927,53 @@ fn zero_target_equality_column_solves_original_stationarity_and_feasibility() {
     let xy = resolvent.constant_direction();
     assert_close(xy[0], 2.0);
     assert_close(xy[0] + xy[1] - 1.0, 0.0);
+}
+
+#[test]
+fn fixed_floor_at_zero_mu_refines_the_unclamped_equality_system() {
+    let problem = Problem::new(
+        Some(crate::CscMatrix::identity(1).unwrap()),
+        vec![-1.0],
+        crate::CscMatrix::identity(1).unwrap(),
+        vec![2.0],
+        vec![Cone::Zero(1)],
+    )
+    .unwrap();
+    let state = State::new(vec![0.0], vec![0.0], vec![0.0], 1.0).unwrap();
+    for floor in [1e-12, 1e-10, 1e-8, 0.1] {
+        let settings = KktSettings {
+            min_static_regularization: floor,
+            strict_refinement: true,
+            refinement_tolerance: 1e-13,
+            ..KktSettings::new(LinearSolver::Faer)
+        };
+        let mut cache = KktCache::new();
+        let resolvent =
+            Resolvent::with_factor_shift(&problem, &state, &[0.0], 0.0, 0.0, &settings, &mut cache)
+                .unwrap();
+        assert_eq!(resolvent.shift, 0.0);
+        assert_eq!(resolvent.d_diagonal, vec![0.0]);
+        assert_eq!(resolvent.d_factor, Some(vec![floor]));
+        let xy = resolvent.constant_direction();
+        assert_close(xy[0], 2.0);
+        assert_close(xy[0] + xy[1] - 1.0, 0.0);
+    }
+}
+
+#[test]
+fn nonbinding_floor_bound_accounts_for_the_actual_primal_diagonal() {
+    for p in [0.0, 2.0, -0.5] {
+        let problem = Problem::new(
+            Some(crate::matrix::test_matrix(1, 1, vec![p]).unwrap()),
+            vec![0.0],
+            crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let mut cache = KktCache::new();
+        assert_eq!(cache.nonbinding_floor_limit(1.0), 0.0);
+        assemble_preconditioner(&problem, 1.0, &[], 1e-12, true, &mut cache).unwrap();
+        assert_eq!(cache.nonbinding_floor_limit(1.0), 1.0_f64.min(1.0 + p));
+    }
 }

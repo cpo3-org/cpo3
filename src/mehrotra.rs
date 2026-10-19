@@ -50,7 +50,7 @@ pub(crate) fn step(
 ) -> Result<Step, MehrotraError> {
     let scaling = Scaling::new(embedding, state)?;
     let raw_mu = scaling.mu;
-    with_shift_retries(
+    with_clamp_retries(
         kkt,
         raw_mu,
         requested_shift_floor,
@@ -59,42 +59,68 @@ pub(crate) fn step(
     )
 }
 
-/// Retry with a larger factorization shift, always targeting the same mu system.
-/// Accept the finite iterate with the smallest mu-target residual when refinement
-/// stalls. Increase the factor shift only if factorization or step formation fails.
-fn with_shift_retries<T>(
+/// Retry numerical failures with a larger diagonal clamp, keeping K(mu)
+/// as the target. Accepted steps adjust the clamp using refinement diagnostics;
+/// a numerical retry prevents immediate relaxation.
+fn with_clamp_retries<T>(
     kkt: &KktSettings,
     raw_mu: f64,
-    requested_shift_floor: f64,
+    _requested_shift_floor: f64,
     cache: &mut KktCache,
     mut attempt: impl FnMut(&KktSettings, f64, &mut KktCache) -> Result<T, MehrotraError>,
 ) -> Result<T, MehrotraError> {
-    const MAX_RETRY_SHIFT: f64 = 1e-4;
-    let mut rho = raw_mu.max(*cache.shift_floor.get_or_insert(requested_shift_floor));
-    let requested_rho = rho;
+    const MAX_CLAMP: f64 = 1e-4;
+    let minimum = 1e-20;
+    let mut floor = cache
+        .clamp_floor
+        .unwrap_or(kkt.min_static_regularization)
+        .max(minimum);
+    cache.clamp_floor = Some(floor);
+    let starting_floor = floor;
+    let before = cache.stats();
+    let settled_before = before.refinement_settled;
     let mut trial = *kkt;
     trial.strict_refinement = false;
-    let settled_before = cache.stats().refinement_settled;
     loop {
-        let result = attempt(&trial, rho, cache);
+        trial.min_static_regularization = floor;
+        // The factor is K(mu) with clamped diagonals, never K(rho).
+        let result = attempt(&trial, raw_mu, cache);
         cache.finish_step(result.is_ok());
         match result {
-            Err(error) if retryable(&error) => {
-                let next = (rho * 10.0).max(1e-16);
-                if next <= MAX_RETRY_SHIFT {
-                    rho = next;
-                    cache.shift_floor = Some(rho);
-                } else {
+            Err(error) if retryable(&error) && floor < MAX_CLAMP => {
+                // h_i is nonnegative at an interior point. Also account for
+                // negative primal diagonals rather than assuming convex input.
+                let limit = cache.nonbinding_floor_limit(raw_mu);
+                // Preserve the x10 grid while skipping identical matrices.
+                loop {
+                    floor = (floor * 10.0).min(MAX_CLAMP);
+                    cache.clamp_increases += 1;
+                    if floor > limit || floor >= MAX_CLAMP {
+                        break;
+                    }
+                }
+                cache.clamp_floor = Some(floor);
+                if floor <= limit {
                     return Err(error);
                 }
             }
             Ok(step) => {
-                // Relax only after an accurate step that needed no escalation.
-                if cache.stats().refinement_settled == settled_before
-                    && rho == requested_rho
-                    && raw_mu < rho
+                let after = cache.stats();
+                let clamp_limited =
+                    after.refinement_clamp_limited > before.refinement_clamp_limited;
+                let solve_limited =
+                    after.refinement_solve_limited > before.refinement_solve_limited;
+                if solve_limited && !clamp_limited {
+                    let next = (floor * 10.0).min(MAX_CLAMP);
+                    cache.clamp_increases += usize::from(next > floor);
+                    cache.clamp_floor = Some(next);
+                } else if floor == starting_floor
+                    && ((clamp_limited && !solve_limited)
+                        || after.refinement_settled == settled_before)
                 {
-                    cache.shift_floor = Some((rho / 10.0).max(requested_shift_floor));
+                    let next = (floor / 10.0).max(minimum);
+                    cache.clamp_decreases += usize::from(next < floor);
+                    cache.clamp_floor = Some(next);
                 }
                 return Ok(step);
             }
@@ -402,76 +428,101 @@ mod tests {
     const TOLERANCE: f64 = 1e-12;
 
     #[test]
-    fn retries_increase_the_factor_shift_and_decay_after_accurate_steps() {
-        let settings = KktSettings::new(LinearSolver::Faer);
-        let mut cache = KktCache::new();
-        let mut shifts = Vec::new();
-        with_shift_retries(&settings, 1e-12, 1e-8, &mut cache, |trial, rho, _| {
-            assert_eq!(
-                trial.min_static_regularization,
-                settings.min_static_regularization
-            );
-            assert!(!trial.strict_refinement);
-            shifts.push(rho);
-            if shifts.len() == 1 {
-                Err(JosephyError::InvalidTauPolynomial.into())
-            } else {
+    fn adaptive_clamp_retries_then_relaxes_without_changing_mu() {
+        for mu in [0.0, 1e-14, 1e-3] {
+            let settings = KktSettings::new(LinearSolver::Faer);
+            let mut cache = KktCache::new();
+            let mut floors = Vec::new();
+            with_clamp_retries(&settings, mu, 1e-1, &mut cache, |trial, rho, _| {
+                assert_eq!(rho, mu);
+                assert!(!trial.strict_refinement);
+                floors.push(trial.min_static_regularization);
+                if floors.len() < 3 {
+                    Err(JosephyError::InvalidTauPolynomial.into())
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
+            assert_eq!(floors.len(), 3);
+            assert!((floors[0] - 1e-12).abs() < 1e-25);
+            assert!((floors[2] - 1e-10).abs() < 1e-23);
+            assert_eq!(cache.clamp_floor, Some(floors[2]));
+            with_clamp_retries(&settings, mu, 1e-1, &mut cache, |trial, rho, _| {
+                assert_eq!(rho, mu);
+                assert_eq!(trial.min_static_regularization, floors[2]);
                 Ok(())
-            }
-        })
-        .unwrap();
-        assert_eq!(shifts, [1e-8, 1e-7]);
-        assert_eq!(cache.shift_floor, Some(1e-7));
-        with_shift_retries(&settings, 1e-12, 1e-8, &mut cache, |_, rho, _| {
-            assert_eq!(rho, 1e-7);
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(cache.shift_floor, Some(1e-8));
+            })
+            .unwrap();
+            assert_eq!(cache.clamp_floor, Some(floors[2] / 10.0));
+            let mut fresh = KktCache::new();
+            with_clamp_retries(&settings, mu, 0.0, &mut fresh, |trial, _, _| {
+                assert_eq!(trial.min_static_regularization, 1e-12);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(fresh.clamp_floor, Some(1e-13));
+        }
     }
 
     #[test]
-    fn retries_are_bounded_and_skip_nonnumerical_failures() {
-        for floor in [1e-8, 1e-3] {
-            let settings = KktSettings::new(LinearSolver::Faer);
-            let mut cache = KktCache::new();
-            let mut attempts = Vec::new();
-            let error = MehrotraError::Josephy(LinearSystemError::Singular.into());
-            let result: Result<(), _> =
-                with_shift_retries(&settings, 0.0, floor, &mut cache, |trial, rho, _| {
-                    attempts.push((rho, trial.strict_refinement));
-                    Err(error.clone())
-                });
-            assert_eq!(result, Err(error));
-            assert!(!attempts.last().unwrap().1);
-            assert!(
-                attempts[..attempts.len() - 1]
-                    .iter()
-                    .all(|(_, strict)| !*strict)
-            );
-            if floor == 1e-8 {
-                assert!(attempts.last().unwrap().0 <= 1e-4);
-                assert!(attempts.len() <= 7);
-                assert!(attempts.windows(2).all(|pair| pair[0].0 <= pair[1].0));
-            } else {
-                assert_eq!(attempts, [(floor, false)]);
-            }
-        }
-        let mut cache = KktCache::new();
+    fn adaptive_clamp_is_bounded_and_skips_nonnumerical_failures() {
         let settings = KktSettings::new(LinearSolver::Faer);
-        let mut calls = 0;
+        let mut cache = KktCache::new();
+        let error = MehrotraError::Josephy(LinearSystemError::Singular.into());
+        let mut floors = Vec::new();
+        let result: Result<(), _> =
+            with_clamp_retries(&settings, 1e-14, 0.0, &mut cache, |trial, _, _| {
+                floors.push(trial.min_static_regularization);
+                Err(error.clone())
+            });
+        assert_eq!(result, Err(error));
+        assert_eq!(*floors.last().unwrap(), 1e-4);
+        assert!(floors.len() <= 10);
+        assert!(floors.windows(2).all(|w| w[1] > w[0]));
         let error = MehrotraError::Josephy(JosephyError::IncorrectRhsLength {
             argument: "test",
             expected: 2,
             actual: 1,
         });
+        let mut count = 0;
         let result: Result<(), _> =
-            with_shift_retries(&settings, 0.0, 1e-8, &mut cache, |_, _, _| {
-                calls += 1;
+            with_clamp_retries(&settings, 1e-14, 0.0, &mut KktCache::new(), |_, _, _| {
+                count += 1;
                 Err(error.clone())
             });
+        assert_eq!(count, 1);
         assert_eq!(result, Err(error));
+    }
+
+    #[test]
+    fn finite_inaccurate_refinement_retains_clamp_without_retry() {
+        let problem = Problem::new(
+            None,
+            vec![-1.0],
+            crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let state = State::new(vec![0.0], vec![], vec![], 1.0).unwrap();
+        let settings = KktSettings {
+            max_refinement_steps: 0,
+            ..KktSettings::new(LinearSolver::Faer)
+        };
+        let mut cache = KktCache::new();
+        cache.clamp_floor = Some(1e-8);
+        let mut calls = 0;
+        with_clamp_retries(&settings, 1e-14, 0.0, &mut cache, |trial, rho, cache| {
+            calls += 1;
+            let _resolvent =
+                Resolvent::with_factor_shift(&problem, &state, &[], 1e-14, rho, trial, cache)?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(cache.stats().refinement_settled > 0);
         assert_eq!(calls, 1);
+        assert_eq!(cache.clamp_floor, Some(1e-8));
     }
 
     #[test]
@@ -808,5 +859,22 @@ mod tests {
             predictor(&embedding, &state, -1.0, &scaling, &mut resolvent).err(),
             Some(MehrotraError::InvalidDualityMeasure(-1.0))
         );
+    }
+    #[test]
+    fn accurate_steps_relax_to_a_positive_nonbinding_floor() {
+        let settings = KktSettings::new(LinearSolver::Faer);
+        let mut cache = KktCache::new();
+        for _ in 0..30 {
+            with_clamp_retries(&settings, 1e-3, 0.0, &mut cache, |trial, target, _| {
+                assert_eq!(target, 1e-3);
+                assert!(trial.min_static_regularization > 0.0);
+                assert!(trial.min_static_regularization < target);
+                Ok(())
+            })
+            .unwrap();
+        }
+        assert_eq!(cache.clamp_floor, Some(1e-20));
+        assert_eq!(cache.clamp_increases, 0);
+        assert!(cache.clamp_decreases >= 8);
     }
 }

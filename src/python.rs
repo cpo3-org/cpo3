@@ -240,6 +240,61 @@ impl PySolutionInfo {
     }
 
     #[getter]
+    fn refinement_accurate(&self) -> usize {
+        self.inner.linear_algebra.refinement_accurate
+    }
+
+    #[getter]
+    fn refinement_forecast(&self) -> usize {
+        self.inner.linear_algebra.refinement_forecast
+    }
+
+    #[getter]
+    fn refinement_stagnation(&self) -> usize {
+        self.inner.linear_algebra.refinement_stagnation
+    }
+
+    #[getter]
+    fn refinement_divergence(&self) -> usize {
+        self.inner.linear_algebra.refinement_divergence
+    }
+
+    #[getter]
+    fn refinement_budget(&self) -> usize {
+        self.inner.linear_algebra.refinement_budget
+    }
+
+    #[getter]
+    fn refinement_nonfinite(&self) -> usize {
+        self.inner.linear_algebra.refinement_nonfinite
+    }
+
+    #[getter]
+    fn clamp_increases(&self) -> usize {
+        self.inner.linear_algebra.clamp_increases
+    }
+
+    #[getter]
+    fn clamp_decreases(&self) -> usize {
+        self.inner.linear_algebra.clamp_decreases
+    }
+
+    #[getter]
+    fn refinement_clamp_limited(&self) -> usize {
+        self.inner.linear_algebra.refinement_clamp_limited
+    }
+
+    #[getter]
+    fn refinement_solve_limited(&self) -> usize {
+        self.inner.linear_algebra.refinement_solve_limited
+    }
+
+    #[getter]
+    fn refinement_ambiguous(&self) -> usize {
+        self.inner.linear_algebra.refinement_ambiguous
+    }
+
+    #[getter]
     fn refinement_solves(&self) -> usize {
         self.inner.linear_algebra.refinement_solves
     }

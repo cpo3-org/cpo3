@@ -48,11 +48,27 @@ Use SciPy sparse matrices for `A` and `P`; set `P=None` for a linear program.
 Options can be passed with `settings=cpo3.Settings(...)`.
 
 `initial_mu` sets the canonical cold-start complementarity beta
-(default `1e-4`, range `(0, 1]`). Inequality slacks and multipliers start at
+(default `1e-3`, range `(0, 1]`). Inequality slacks and multipliers start at
 sqrt(beta), and tau is adjusted to preserve the embedding sphere radius.
 For example, `cpo3.Settings(initial_mu=0.01)` starts with
 inequality slacks and multipliers `0.1`. Accepted warm starts and CVXOPT starts are
 unaffected; a failed CVXOPT start falls back to this configured cold start.
+
+The default `step_fraction` is `0.999`. KKT solves use an adaptive diagonal
+floor, initially `min_static_regularization=1e-12`, applied before singleton
+elimination. Refinement always targets the original system at the current
+complementarity. Numerical failures increase the floor and retry; accepted
+steps increase or decrease it according to the dominant source of refinement
+error. Accurate steps relax it, and a retry prevents immediate relaxation.
+Faer pivot replacement is disabled. The legacy `initial_shift_floor` option
+is retained for compatibility and has no effect on this policy.
+
+Refinement allows up to `max_refinement_steps=30` corrections, with tolerance
+`1e-7`. It retains the best finite iterate when it cannot reach tolerance.
+The existing forecast can stop earlier: after two corrections, it projects
+whether the recent contraction rate can reach tolerance within the remaining
+budget. It stops when this projection misses tolerance and the per-correction
+rate exceeds `1/sqrt(2)`.
 
 Work counters are available on `solution.info`:
 

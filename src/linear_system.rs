@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{CscMatrix, LinearSolver, Settings};
 
-// Per-pass contraction below which refinement counts as stalled (no halving
+// Per-pass contraction factor above which refinement may stop (no halving
 // over two passes).
 const STALL_RATE: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
@@ -52,6 +52,19 @@ impl From<&Settings> for KktSettings {
 /// Linear-algebra counters accumulated over one solve.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LinearAlgebraStats {
+    pub refinement_clamp_limited: usize,
+    pub refinement_solve_limited: usize,
+    pub refinement_ambiguous: usize,
+
+    pub refinement_accurate: usize,
+    pub refinement_forecast: usize,
+    pub refinement_stagnation: usize,
+    pub refinement_divergence: usize,
+    pub refinement_budget: usize,
+    pub refinement_nonfinite: usize,
+    pub clamp_increases: usize,
+    pub clamp_decreases: usize,
+
     /// Numeric factorization attempts, including failures.
     pub factorizations: usize,
     /// Initial linear solves attempted for KKT right-hand sides, including failures.
@@ -81,6 +94,19 @@ pub(crate) struct PivotReport {
 
 impl LinearAlgebraStats {
     pub(crate) fn absorb(&mut self, other: Self) {
+        self.refinement_clamp_limited += other.refinement_clamp_limited;
+        self.refinement_solve_limited += other.refinement_solve_limited;
+        self.refinement_ambiguous += other.refinement_ambiguous;
+
+        self.refinement_accurate += other.refinement_accurate;
+        self.refinement_forecast += other.refinement_forecast;
+        self.refinement_stagnation += other.refinement_stagnation;
+        self.refinement_divergence += other.refinement_divergence;
+        self.refinement_budget += other.refinement_budget;
+        self.refinement_nonfinite += other.refinement_nonfinite;
+        self.clamp_increases += other.clamp_increases;
+        self.clamp_decreases += other.clamp_decreases;
+
         self.factorizations += other.factorizations;
         self.primary_solves += other.primary_solves;
         self.refinement_solves += other.refinement_solves;
@@ -213,6 +239,10 @@ impl Factorization {
 
     pub(crate) fn stats_mut(&mut self) -> &mut LinearAlgebraStats {
         &mut self.stats
+    }
+
+    pub(crate) fn set_clamp_floor(&mut self, floor: f64) {
+        self.settings.min_static_regularization = floor;
     }
 
     pub(crate) fn set_strict_refinement(&mut self, strict: bool) {
@@ -359,6 +389,7 @@ fn refine_solution(
 /// Reused by all right-hand sides and correction passes of a solve.
 #[derive(Default)]
 pub(crate) struct RefinementWorkspace {
+    pub(crate) perturbation: Vec<f64>,
     residual: Vec<f64>,
     denominator: Vec<f64>,
     correction: Vec<f64>,
@@ -388,6 +419,7 @@ pub(crate) fn refine_with(
     // applying the strict or best-effort acceptance rule.
     let strict = settings.strict_refinement;
     let RefinementWorkspace {
+        perturbation,
         residual,
         denominator,
         correction,
@@ -405,12 +437,21 @@ pub(crate) fn refine_with(
         let backward_error = backward_error(residual, denominator);
         let improved = match best_error {
             Some(error) if !backward_error.is_finite() || backward_error > 10.0 * error => {
+                if backward_error.is_finite() {
+                    stats.refinement_divergence += 1;
+                } else {
+                    stats.refinement_nonfinite += 1;
+                }
+                if iteration > 0 {
+                    diagnose_correction(residual, correction, perturbation, denominator, stats);
+                }
                 return settle_refinement(best_error, strict, best, stats);
             }
             Some(error) => backward_error < error,
             None => true,
         };
         if backward_error <= settings.refinement_tolerance {
+            stats.refinement_accurate += 1;
             return validate_solution(solution);
         }
         // Strict refinement needs only the best error: failure never returns
@@ -434,11 +475,19 @@ pub(crate) fn refine_with(
                 || (rate > STALL_RATE
                     && backward_error * rate.powi(remaining) > settings.refinement_tolerance)
             {
+                stats.refinement_forecast += 1;
+                if iteration > 0 {
+                    diagnose_correction(residual, correction, perturbation, denominator, stats);
+                }
                 return settle_refinement(best_error, strict, best, stats);
             }
         }
         errors = [errors[1], backward_error];
         if iteration == settings.max_refinement_steps {
+            stats.refinement_budget += 1;
+            if iteration > 0 {
+                diagnose_correction(residual, correction, perturbation, denominator, stats);
+            }
             return settle_refinement(best_error, strict, best, stats);
         }
         stats.refinement_solves += 1;
@@ -458,10 +507,55 @@ pub(crate) fn refine_with(
             crate::matrix::add_assign(&mut solution, correction);
         }
         if !solution.iter().all(|value| value.is_finite()) {
+            stats.refinement_nonfinite += 1;
+            if iteration > 0 {
+                diagnose_correction(residual, correction, perturbation, denominator, stats);
+            }
             return settle_refinement(best_error, strict, best, stats);
         }
     }
     unreachable!("the refinement loop returns after its final residual check")
+}
+
+// Evaluated only on an inaccurate refinement exit. With the last correction d,
+// q = r_new - (M-K)d also includes rounding in the solution update/residual.
+fn diagnose_correction(
+    r: &[f64],
+    d: &[f64],
+    diagonal: &[f64],
+    scale: &[f64],
+    stats: &mut LinearAlgebraStats,
+) {
+    let mut target: f64 = 0.0;
+    let mut solve: f64 = 0.0;
+    let mut regularization: f64 = 0.0;
+    if d.len() != r.len() {
+        return;
+    }
+    for i in 0..r.len() {
+        let term = diagonal.get(i).copied().unwrap_or(0.0) * d[i];
+        let q = r[i] - term;
+        if !r[i].is_finite() || !q.is_finite() {
+            return;
+        }
+        if scale[i] > 0.0 {
+            target = target.max(r[i].abs() / scale[i]);
+            solve = solve.max(q.abs() / scale[i]);
+            regularization = regularization.max(term.abs() / scale[i]);
+        } else if r[i] != 0.0 || q != 0.0 {
+            return;
+        }
+    }
+    if !target.is_finite() || !solve.is_finite() || !regularization.is_finite() || target == 0.0 {
+        return;
+    }
+    if solve < regularization {
+        stats.refinement_clamp_limited += 1;
+    } else if solve > regularization {
+        stats.refinement_solve_limited += 1;
+    } else {
+        stats.refinement_ambiguous += 1;
+    }
 }
 
 fn settle_refinement(
@@ -1047,5 +1141,55 @@ mod tests {
             })
         ));
         assert_eq!(factorization.stats().inertia_failures, 1);
+    }
+    #[test]
+    fn slowly_contracting_refinement_uses_the_selected_stop_rule() {
+        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let mut stats = LinearAlgebraStats::default();
+        let mut workspace = RefinementWorkspace::default();
+        let settings = KktSettings {
+            max_refinement_steps: 100,
+            refinement_tolerance: 1e-7,
+            ..KktSettings::new(LinearSolver::Faer)
+        };
+        let solution = refine_with(
+            &[1.0],
+            vec![0.0],
+            &settings,
+            &mut workspace,
+            |x, b, r| residual_into(&matrix, x, b, r),
+            |x, b, r, d| residual_and_denominator_into(&matrix, x, b, r, d),
+            |r, d| {
+                d.clear();
+                d.push(0.1 * r[0]);
+                Ok(())
+            },
+            &mut stats,
+        )
+        .unwrap();
+        assert!(solution[0].is_finite());
+        assert_eq!(stats.refinement_forecast, 1);
+        assert_eq!(stats.refinement_solves, 2);
+    }
+
+    #[test]
+    fn correction_diagnostic_separates_exact_regularized_solves_from_solve_error() {
+        let mut stats = LinearAlgebraStats::default();
+        // K=1, M=10, rhs=1, correction=.1: r_new=.9, q=0.
+        diagnose_correction(&[0.9], &[0.1], &[9.0], &[1.0], &mut stats);
+        assert_eq!(stats.refinement_clamp_limited, 1);
+        // Same ineffective correction without regularization: q=.9.
+        diagnose_correction(&[0.9], &[0.1], &[], &[1.0], &mut stats);
+        assert_eq!(stats.refinement_solve_limited, 1);
+    }
+
+    #[test]
+    fn equally_large_residual_sources_do_not_choose_a_clamp_direction() {
+        let mut stats = LinearAlgebraStats::default();
+        // r_new=1, (M-K)d=.5, q=.5: neither source dominates.
+        diagnose_correction(&[1.0], &[1.0], &[0.5], &[1.0], &mut stats);
+        assert_eq!(stats.refinement_ambiguous, 1);
+        assert_eq!(stats.refinement_solve_limited, 0);
+        assert_eq!(stats.refinement_clamp_limited, 0);
     }
 }

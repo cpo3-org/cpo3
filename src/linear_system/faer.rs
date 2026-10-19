@@ -21,8 +21,6 @@ const FAER_REGULARIZATION_DELTA: f64 = 0.0;
 pub(super) struct FaerFactorization {
     dim: usize,
     pattern: SymbolicSparseColMat<usize>,
-    /// Expected pivot signs in factor order.
-    signs: Vec<i8>,
     /// Source position of each entry in the permuted triangle.
     source: TriangleSource,
     values: Vec<f64>,
@@ -85,7 +83,6 @@ impl FaerFactorization {
         let mut factorization = Self {
             dim,
             pattern,
-            signs: Vec::new(),
             source,
             values: Vec::new(),
             symbolic,
@@ -93,7 +90,6 @@ impl FaerFactorization {
             scratch,
             parallelism,
         };
-        factorization.signs = factorization.diagonal_signs(&values);
         let values = factorization.permute_input(values);
         factorization.factor(&values, factorizations)?;
         factorization.values = values;
@@ -144,27 +140,11 @@ impl FaerFactorization {
         result
     }
 
-    fn diagonal_signs(&self, values: &[f64]) -> Vec<i8> {
-        let mut signs = vec![0_i8; self.dim];
-        for (column, sign) in signs.iter_mut().enumerate() {
-            let range = self.pattern.col_ptr()[column]..self.pattern.col_ptr()[column + 1];
-            for (row, value) in self.pattern.row_idx()[range.clone()]
-                .iter()
-                .zip(&values[range])
-            {
-                if *row == column {
-                    *sign = if *value >= 0.0 { 1 } else { -1 };
-                }
-            }
-        }
-        signs
-    }
-
     /// Cache the input layout expected by Faer's numeric kernel. Preserve the
     /// entry order of its unsorted permutation to preserve floating-point sums.
     fn permute_input(&mut self, values: Vec<f64>) -> Vec<f64> {
         let perm = self.symbolic.perm().expect("AMD supplies a permutation");
-        let (forward, inverse) = perm.arrays();
+        let (_forward, inverse) = perm.arrays();
         let upper = matches!(
             self.symbolic.raw(),
             sparse_cholesky::SymbolicCholeskyRaw::Simplicial(_)
@@ -214,7 +194,6 @@ impl FaerFactorization {
                 }
             }
         }
-        self.signs = forward.iter().map(|&old| self.signs[old]).collect();
         self.pattern =
             SymbolicSparseColMat::new_unsorted_checked(self.dim, self.dim, pointers, None, rows);
         self.source = source;
@@ -229,7 +208,7 @@ impl FaerFactorization {
         let matrix = SparseColMatRef::new(self.pattern.as_ref(), values);
         let stack = MemStack::new(&mut self.scratch);
         let regularization = LdltRegularization {
-            dynamic_regularization_signs: Some(&self.signs),
+            dynamic_regularization_signs: None,
             dynamic_regularization_delta: FAER_REGULARIZATION_DELTA,
             dynamic_regularization_epsilon: FAER_REGULARIZATION_EPSILON,
         };
@@ -264,6 +243,17 @@ impl FaerFactorization {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_pivot_replacement_preserves_tiny_signed_pivots() {
+        let matrix =
+            CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![1e-20, -1e-20]).unwrap();
+        let mut factor = FaerFactorization::new(matrix, &mut 0).unwrap();
+        let mut rhs = vec![1e-20, 1e-20];
+        factor.solve_in_place(&mut rhs).unwrap();
+        assert!((rhs[0] - 1.0).abs() < 1e-12);
+        assert!((rhs[1] + 1.0).abs() < 1e-12);
+    }
 
     #[test]
     fn cached_permutation_matches_faer_for_both_numeric_kernels() {
@@ -312,7 +302,7 @@ mod tests {
                     SparseColMatRef::new(pattern.as_ref(), &values),
                     Side::Upper,
                     LdltRegularization {
-                        dynamic_regularization_signs: Some(&signs),
+                        dynamic_regularization_signs: None,
                         dynamic_regularization_delta: FAER_REGULARIZATION_DELTA,
                         dynamic_regularization_epsilon: FAER_REGULARIZATION_EPSILON,
                     },

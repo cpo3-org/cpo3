@@ -633,22 +633,7 @@ fn solve_core(
         ));
     }
 
-    // Positive-barrier problems use complementarity directly as the shift,
-    // with only the numerical-retry floor retained. Barrier-free problems
-    // require a positive shift and may relax its requested floor.
-    let mut requested_floor = if embedding.nu() > 0 {
-        0.0
-    } else {
-        settings.initial_shift_floor
-    };
-    let minimum_floor = if embedding.nu() > 0 {
-        0.0
-    } else {
-        // With no barrier, retain a positive shift for the resolvent.
-        settings.initial_shift_floor * 0.01
-    };
-    let mut previous_progress = f64::INFINITY;
-    let mut stalled_progress = 0;
+    let requested_floor = 0.0; // Adaptive clamping is the only regularization.
     for iteration in 1..=settings.max_iters {
         if time_limit_reached(started, settings.time_limit) {
             let elapsed = started.elapsed();
@@ -696,7 +681,6 @@ fn solve_core(
                 return Err(error);
             }
         };
-        let raw_mu_before_step = next_diagnostics.mu_before;
         state = next;
         diagnostics = next_diagnostics;
         recover_into(
@@ -709,27 +693,6 @@ fn solve_core(
             &mut recovered,
             &mut recovery,
         );
-        let progress = recovered.stopping_score(settings);
-        // Compare in the same coordinates as the KKT solve.
-        let floor_active =
-            diagnostics.rho.expect("an accepted step has a KKT shift") > raw_mu_before_step;
-        if embedding.nu() == 0
-            && floor_active
-            && recovered.ktratio < 1.0
-            && progress.is_finite()
-            && progress > 1.0
-            && progress >= 0.9 * previous_progress
-        {
-            stalled_progress += 1;
-        } else {
-            stalled_progress = 0;
-        }
-        if stalled_progress >= 5 && requested_floor > minimum_floor {
-            requested_floor = (requested_floor * 0.1).max(minimum_floor);
-            stalled_progress = 0;
-        }
-        previous_progress = progress;
-
         // The ray is only examined past the kappa / tau gate.
         let ray = (recovered.ktratio > settings.certificate_ktratio)
             .then(|| Ray::new(problem, &equilibrated, state.x(), state.y(), state.s()));
@@ -824,6 +787,7 @@ fn predictor_corrector_step(
     } else {
         dot(step.state.s(), step.state.y())
     };
+    debug_assert_eq!(step.rho, step.mu_before);
     let diagnostics = StepDiagnostics {
         sy,
         mu: if embedding.nu() == 0 {
@@ -831,7 +795,6 @@ fn predictor_corrector_step(
         } else {
             sy / embedding.nu() as f64
         },
-        mu_before: step.mu_before,
         tau: step.state.tau(),
         sigma: Some(step.sigma),
         alpha_aff: Some(step.alpha_affine),
@@ -854,7 +817,6 @@ struct RecoveredSolution {
 struct StepDiagnostics {
     /// Keep the numerator to preserve recovery's division order.
     sy: f64,
-    mu_before: f64,
     rho: Option<f64>,
     mu: f64,
     tau: f64,
@@ -877,7 +839,6 @@ impl StepDiagnostics {
             } else {
                 sy / embedding.nu() as f64
             },
-            mu_before: 0.0,
             rho: None,
             tau: state.tau(),
             sigma: None,

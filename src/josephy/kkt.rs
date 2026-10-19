@@ -28,8 +28,10 @@ pub(crate) struct KktCache {
     pub(super) direction: Vec<f64>,
     /// Retain ownership of the preceding seed until the outer step succeeds.
     pub(super) direction_before_step: Option<Vec<f64>>,
-    /// Adaptive true-shift floor, distinct from factorization regularization.
-    pub(crate) shift_floor: Option<f64>,
+    /// Adaptive diagonal clamp, applied only to the preconditioner.
+    pub(crate) clamp_floor: Option<f64>,
+    pub(crate) clamp_increases: usize,
+    pub(crate) clamp_decreases: usize,
     /// Numeric dispatches, including failed initial factorizations.
     pub(super) factorizations: usize,
 }
@@ -115,12 +117,23 @@ impl KktCache {
         }
     }
 
+    pub(crate) fn nonbinding_floor_limit(&self, mu: f64) -> f64 {
+        self.pattern.as_ref().map_or(0.0, |pattern| {
+            pattern
+                .p_diagonal
+                .iter()
+                .fold(mu, |bound, p| bound.min(p + mu))
+        })
+    }
+
     pub(crate) fn stats(&self) -> LinearAlgebraStats {
         let mut stats = self
             .factorization
             .as_ref()
             .map_or_else(LinearAlgebraStats::default, Factorization::stats);
         stats.factorizations = self.factorizations;
+        stats.clamp_increases = self.clamp_increases;
+        stats.clamp_decreases = self.clamp_decreases;
         stats
     }
 }
@@ -138,6 +151,7 @@ pub(super) fn factorize(
     match (cache.factorization.as_mut(), cache.pattern.as_ref()) {
         (Some(factorization), Some(pattern)) => {
             factorization.set_strict_refinement(kkt.strict_refinement);
+            factorization.set_clamp_floor(kkt.min_static_regularization);
             factorization.update_diagonal_and_refactor(&mut cache.factorizations, |values| {
                 pattern.write_diagonal(
                     values,
@@ -274,6 +288,21 @@ impl KktPattern {
         };
         let mut stats = LinearAlgebraStats::default();
         let mut workspace = std::mem::take(&mut self.refinement);
+        workspace.perturbation.clear();
+        let floor = factorization.settings().min_static_regularization;
+        if floor > shift {
+            workspace.perturbation.extend(
+                self.p_diagonal
+                    .iter()
+                    .map(|p| (floor - (p + shift)).max(0.0)),
+            );
+            workspace.perturbation.extend(
+                d_diagonal
+                    .iter()
+                    .zip(d_factor)
+                    .map(|(target, factor)| target - factor),
+            );
+        }
         let result = refine_with(
             rhs,
             initial,

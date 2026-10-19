@@ -54,7 +54,7 @@ def test_settings_use_short_names() -> None:
     assert settings.data_equilibration is cpo3.Equilibration.RUIZ
     assert settings.kkt_bound_elimination is True
     assert settings.initial_shift_floor == 1e-10
-    assert settings.min_static_regularization == 0.0
+    assert settings.min_static_regularization == 1e-12
     assert not hasattr(settings, "shift_floor")
     assert not hasattr(settings, "initial_scale")
     assert settings.tol_infeas_abs == 1e-8
@@ -62,7 +62,8 @@ def test_settings_use_short_names() -> None:
     assert settings.certificate_ktratio == 1e9
     assert settings.force_warm_start is False
     assert settings.cvxopt_init is False
-    assert settings.initial_mu == 1e-4
+    assert settings.initial_mu == 1e-3
+    assert settings.step_fraction == 0.999
     assert settings.presolve is True
     assert not hasattr(settings, "max_iterations")
     assert not hasattr(settings, "absolute_tolerance")

@@ -145,7 +145,8 @@ impl<'a> Resolvent<'a> {
         if !shift.is_finite()
             || shift < 0.0
             || !factor_shift.is_finite()
-            || factor_shift <= 0.0
+            || factor_shift < 0.0
+            || (factor_shift == 0.0 && kkt.min_static_regularization <= 0.0)
             || factor_shift < shift
         {
             return Err(EmbeddingError::InvalidMu.into());

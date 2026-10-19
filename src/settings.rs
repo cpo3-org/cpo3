@@ -41,7 +41,7 @@ pub struct Settings {
     /// falls back to the canonical point.
     pub cvxopt_init: bool,
     /// Initial complementarity beta for the canonical cold start.
-    /// Defaults to 1e-4, with inequality slacks and multipliers sqrt(beta).
+    /// Defaults to 1e-3, with inequality slacks and multipliers sqrt(beta).
     /// Must be finite and in (0, 1]. Tau is chosen to keep
     /// ||(x, y, tau)||^2 = nu + 1. Also used after a failed CVXOPT start;
     /// has no effect on accepted warm/CVXOPT starts or equality-only problems.
@@ -57,9 +57,9 @@ pub struct Settings {
     pub linear_solver: LinearSolver,
     /// Eliminate singleton nonnegative-cone rows from the KKT factorization.
     pub kkt_bound_elimination: bool,
-    /// Minimum magnitude of full-system factor diagonals; refinement targets
-    /// the true shifted KKT system. Zero disables static regularization;
-    /// the backend can still regularize pivots dynamically.
+    /// Initial adaptive floor for full-system factor diagonal magnitudes.
+    /// Outer steps adjust this floor; zero starts at the positive lower bound
+    /// 1e-20. Refinement always targets the original K(mu) system.
     pub min_static_regularization: f64,
     /// Additional correction solves per KKT solve; zero returns the initial solve without refinement.
     pub max_refinement_steps: usize,
@@ -67,13 +67,11 @@ pub struct Settings {
     pub refinement_tolerance: f64,
 
     // Outer iterations.
-    /// Initial requested KKT shift floor for problems with no barrier. Numerical failures raise
-    /// the shift; accurate steps relax the numerical-retry floor. Stalled outer
-    /// progress can also relax the requested floor for barrier-free problems.
-    /// Centering targets use complementarity in the current spherical coordinates.
+    /// Retained for API compatibility; unused by adaptive diagonal clamping.
+    /// The KKT target always uses the current complementarity.
     pub initial_shift_floor: f64,
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
-    /// The default leaves a relative margin of sqrt(machine epsilon).
+    /// The default is 0.999, leaving a relative margin of 1e-3.
     pub step_fraction: f64,
 }
 
@@ -94,19 +92,19 @@ impl Default for Settings {
 
             force_warm_start: false,
             cvxopt_init: false,
-            initial_mu: 1e-4,
+            initial_mu: 1e-3,
             data_equilibration: Equilibration::Ruiz,
             max_equilibration_passes: 2,
             equilibration_tolerance: 1e-2,
 
             linear_solver: LinearSolver::Faer,
             kkt_bound_elimination: true,
-            min_static_regularization: 0.0,
+            min_static_regularization: 1e-12,
             max_refinement_steps: 30,
             refinement_tolerance: 1e-7,
 
             initial_shift_floor: 1e-10,
-            step_fraction: 1.0 - f64::EPSILON.sqrt(),
+            step_fraction: 0.999,
         }
     }
 }
