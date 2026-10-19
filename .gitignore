@@ -28,3 +28,4 @@ experiments/
 .env.*
 .envrc
 /benchmarks/.cache/
+/benchmarks/refactor/

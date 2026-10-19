@@ -156,9 +156,6 @@ best warm candidate (`None` if no finite candidate was screened). The former
 best-level initialization diagnostics and governor/MCC settings and counters
 have been removed from both the Rust and Python interfaces.
 
-The [paired 618-problem comparison](benchmarks/refactor/results/report.md)
-records numerical equivalence checks and Dolan–Moré profiles for this refactor.
-
 ## Authors and license
 
 Matteo Santamaria, Michael Cummins, and Brendan O'Donoghue.
