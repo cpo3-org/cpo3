@@ -451,7 +451,7 @@ fn refinement_warm_start_preserves_weak_components_and_corrects_the_rest() {
         for eliminate in [false, true] {
             let mut cache = KktCache::new();
             let mut settings = KktSettings::new(solver);
-            settings.min_static_regularization = 1e-8;
+            settings.diagonal_floor = 1e-8;
             // Resolve the corrected components to the asserted accuracy,
             // rather than stopping at the production tolerance of 1e-8.
             settings.refinement_tolerance = 1e-12;
@@ -459,7 +459,7 @@ fn refinement_warm_start_preserves_weak_components_and_corrects_the_rest() {
                 &problem,
                 shift,
                 &d,
-                settings.min_static_regularization,
+                settings.diagonal_floor,
                 eliminate,
                 &mut cache,
             )
@@ -544,13 +544,13 @@ fn constant_column_warm_start_survives_refactorization_only_within_its_cache() {
     let mut settings = KktSettings::new(LinearSolver::Feral);
     let mut cache = KktCache::new();
     // First compute an accurate column with an unclamped factorization.
-    settings.min_static_regularization = 0.0;
+    settings.diagonal_floor = 0.0;
     let first = Resolvent::new(&problem, &state, &[], 1e-14, &settings, &mut cache)
         .unwrap()
         .direction[0];
     assert_close(first, 1.0);
     // Clamping the next factor cannot erase the retained solution.
-    settings.min_static_regularization = 1e-8;
+    settings.diagonal_floor = 1e-8;
     let next = Resolvent::new(&problem, &state, &[], 1e-14, &settings, &mut cache)
         .unwrap()
         .direction[0];
@@ -942,7 +942,7 @@ fn fixed_floor_at_zero_mu_refines_the_unclamped_equality_system() {
     let state = State::new(vec![0.0], vec![0.0], vec![0.0], 1.0).unwrap();
     for floor in [1e-12, 1e-10, 1e-8, 0.1] {
         let settings = KktSettings {
-            min_static_regularization: floor,
+            diagonal_floor: floor,
             strict_refinement: true,
             refinement_tolerance: 1e-13,
             ..KktSettings::new(LinearSolver::Faer)

@@ -149,15 +149,13 @@ class Settings:
     ]
     kkt_bound_elimination: bool = _SETTINGS_DEFAULTS["kkt_bound_elimination"]
     # Initial adaptive diagonal floor; refinement targets the original K(mu).
-    min_static_regularization: float = _SETTINGS_DEFAULTS["min_static_regularization"]
+    initial_diagonal_floor: float = _SETTINGS_DEFAULTS["initial_diagonal_floor"]
     # Additional correction solves per KKT solve; zero returns the initial solve without refinement.
     max_refinement_steps: int = _SETTINGS_DEFAULTS["max_refinement_steps"]
     # Positive componentwise backward-error target for iterative refinement.
     refinement_tolerance: float = _SETTINGS_DEFAULTS["refinement_tolerance"]
 
     # Outer iterations.
-    # Retained for compatibility; unused by adaptive diagonal clamping.
-    initial_shift_floor: float = _SETTINGS_DEFAULTS["initial_shift_floor"]
     # Fraction of the cone-boundary step to take, strictly between zero and one.
     step_fraction: float = _SETTINGS_DEFAULTS["step_fraction"]
 

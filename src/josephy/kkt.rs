@@ -151,7 +151,7 @@ pub(super) fn factorize(
     match (cache.factorization.as_mut(), cache.pattern.as_ref()) {
         (Some(factorization), Some(pattern)) => {
             factorization.set_strict_refinement(kkt.strict_refinement);
-            factorization.set_clamp_floor(kkt.min_static_regularization);
+            factorization.set_clamp_floor(kkt.diagonal_floor);
             factorization.update_diagonal_and_refactor(&mut cache.factorizations, |values| {
                 pattern.write_diagonal(
                     values,
@@ -159,7 +159,7 @@ pub(super) fn factorize(
                     problem.variable_count(),
                     shift,
                     factor_diagonal,
-                    kkt.min_static_regularization,
+                    kkt.diagonal_floor,
                 )
             })?;
         }
@@ -168,7 +168,7 @@ pub(super) fn factorize(
                 problem,
                 shift,
                 factor_diagonal,
-                kkt.min_static_regularization,
+                kkt.diagonal_floor,
                 kkt.eliminate_bound_rows,
                 cache,
             )?;
@@ -195,7 +195,7 @@ pub(crate) fn assemble_preconditioner(
     problem: &Problem,
     shift: f64,
     d_diagonal: &[f64],
-    min_static_regularization: f64,
+    diagonal_floor: f64,
     eliminate_bound_rows: bool,
     cache: &mut KktCache,
 ) -> Result<CscMatrix, JosephyError> {
@@ -217,7 +217,7 @@ pub(crate) fn assemble_preconditioner(
         problem.variable_count(),
         shift,
         d_diagonal,
-        min_static_regularization,
+        diagonal_floor,
     );
     cache.pattern = Some(pattern);
     Ok(matrix)
@@ -289,7 +289,7 @@ impl KktPattern {
         let mut stats = LinearAlgebraStats::default();
         let mut workspace = std::mem::take(&mut self.refinement);
         workspace.perturbation.clear();
-        let floor = factorization.settings().min_static_regularization;
+        let floor = factorization.settings().diagonal_floor;
         if floor > shift {
             workspace.perturbation.extend(
                 self.p_diagonal

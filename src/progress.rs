@@ -84,10 +84,9 @@ impl ProgressReporter {
         eprintln!("  data scaling   {}", settings.data_equilibration);
         eprintln!("  cvxopt init    {}", settings.cvxopt_init);
         eprintln!("  KKT bound elimination {}", settings.kkt_bound_elimination);
-        eprintln!("  shift floor    {:.1e}", settings.initial_shift_floor);
         eprintln!(
-            "  factor floor   {:.1e}",
-            settings.min_static_regularization
+            "  initial diagonal floor {:.1e}",
+            settings.initial_diagonal_floor
         );
         eprintln!("  force warm start {}", settings.force_warm_start);
         eprintln!(

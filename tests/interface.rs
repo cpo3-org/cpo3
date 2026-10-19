@@ -22,7 +22,7 @@ fn settings_use_short_names() {
     assert_eq!(LinearSolver::default(), LinearSolver::Faer);
     assert_eq!(settings.data_equilibration, Equilibration::Ruiz);
     assert!(settings.kkt_bound_elimination);
-    assert_eq!(settings.initial_shift_floor, 1e-10);
+    assert_eq!(settings.initial_diagonal_floor, 1e-12);
     assert!(!settings.cvxopt_init);
     assert_eq!(settings.initial_mu, 1e-3);
     assert_eq!(settings.step_fraction, 0.999);

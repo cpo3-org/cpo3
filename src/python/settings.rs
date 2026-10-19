@@ -31,11 +31,10 @@ macro_rules! scalar_fields {
             equilibration_tolerance,
             // KKT solves.
             kkt_bound_elimination,
-            min_static_regularization,
+            initial_diagonal_floor,
             max_refinement_steps,
             refinement_tolerance,
             // Outer iterations.
-            initial_shift_floor,
             step_fraction,
         }
     };

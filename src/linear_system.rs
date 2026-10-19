@@ -21,7 +21,7 @@ pub(crate) struct KktSettings {
     pub(crate) strict_refinement: bool,
     /// Fold nonnegative singleton rows of `A` into the `(1,1)` block.
     pub(crate) eliminate_bound_rows: bool,
-    pub(crate) min_static_regularization: f64,
+    pub(crate) diagonal_floor: f64,
     pub(crate) max_refinement_steps: usize,
     pub(crate) refinement_tolerance: f64,
 }
@@ -42,7 +42,7 @@ impl From<&Settings> for KktSettings {
             linear_solver: settings.linear_solver,
             strict_refinement: false,
             eliminate_bound_rows: settings.kkt_bound_elimination,
-            min_static_regularization: settings.min_static_regularization,
+            diagonal_floor: settings.initial_diagonal_floor,
             max_refinement_steps: settings.max_refinement_steps,
             refinement_tolerance: settings.refinement_tolerance,
         }
@@ -58,7 +58,6 @@ pub struct LinearAlgebraStats {
 
     pub refinement_accurate: usize,
     pub refinement_forecast: usize,
-    pub refinement_stagnation: usize,
     pub refinement_divergence: usize,
     pub refinement_budget: usize,
     pub refinement_nonfinite: usize,
@@ -100,7 +99,6 @@ impl LinearAlgebraStats {
 
         self.refinement_accurate += other.refinement_accurate;
         self.refinement_forecast += other.refinement_forecast;
-        self.refinement_stagnation += other.refinement_stagnation;
         self.refinement_divergence += other.refinement_divergence;
         self.refinement_budget += other.refinement_budget;
         self.refinement_nonfinite += other.refinement_nonfinite;
@@ -242,7 +240,7 @@ impl Factorization {
     }
 
     pub(crate) fn set_clamp_floor(&mut self, floor: f64) {
-        self.settings.min_static_regularization = floor;
+        self.settings.diagonal_floor = floor;
     }
 
     pub(crate) fn set_strict_refinement(&mut self, strict: bool) {

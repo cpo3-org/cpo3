@@ -53,8 +53,7 @@ def test_settings_use_short_names() -> None:
     assert settings.linear_solver is cpo3.LinearSolver.FAER
     assert settings.data_equilibration is cpo3.Equilibration.RUIZ
     assert settings.kkt_bound_elimination is True
-    assert settings.initial_shift_floor == 1e-10
-    assert settings.min_static_regularization == 1e-12
+    assert settings.initial_diagonal_floor == 1e-12
     assert not hasattr(settings, "shift_floor")
     assert not hasattr(settings, "initial_scale")
     assert settings.tol_infeas_abs == 1e-8
@@ -444,12 +443,6 @@ def test_same_problem_can_be_solved_concurrently() -> None:
             np.testing.assert_array_equal(actual, reference)
 
 
-@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
-def test_mu_floor_is_validated_at_settings_construction(value: float) -> None:
-    with pytest.raises(ValueError, match="initial_shift_floor"):
-        cpo3.Settings(initial_shift_floor=value)
-
-
 @pytest.mark.parametrize("value", [0.0, -1.0, 1.01, float("nan"), float("inf")])
 def test_initial_mu_is_validated(value: float) -> None:
     with pytest.raises(ValueError, match="initial_mu"):
@@ -531,9 +524,16 @@ def test_sparse_only_api_has_no_backend_or_auto_solver() -> None:
 
 
 @pytest.mark.parametrize("value", [-1.0, math.inf, math.nan])
-def test_static_regularization_is_finite_and_nonnegative(value: float) -> None:
-    with pytest.raises(ValueError, match="min_static_regularization"):
-        cpo3.Settings(min_static_regularization=value)
+def test_initial_diagonal_floor_is_finite_and_nonnegative(value: float) -> None:
+    with pytest.raises(ValueError, match="initial_diagonal_floor"):
+        cpo3.Settings(initial_diagonal_floor=value)
+
+
+@pytest.mark.parametrize("name", ["initial_shift_floor", "min_static_regularization"])
+def test_removed_regularization_settings_are_rejected(name: str) -> None:
+    assert not hasattr(cpo3.Settings(), name)
+    with pytest.raises(TypeError, match=name):
+        cpo3.Settings(**{name: 1e-12})  # ty: ignore[invalid-argument-type]
 
 
 def test_predictor_corrector_work_counts() -> None:
@@ -541,23 +541,6 @@ def test_predictor_corrector_work_counts() -> None:
     assert solution.status is cpo3.SolverStatus.SOLVED
     assert solution.info.factorizations == solution.info.iters
     assert solution.info.primary_solves == 3 * solution.info.iters
-
-
-def test_barrier_problem_uses_complementarity_instead_of_initial_floor() -> None:
-    # A requested barrier-free floor must not change a positive-barrier solve.
-    settings = cpo3.Settings(
-        presolve=False,
-        initial_shift_floor=100.0,
-        max_iters=100,
-    )
-    solution = cpo3.solve(sparse_problem(), settings=settings)
-    assert solution.status is cpo3.SolverStatus.SOLVED
-    assert solution.info.factorizations == solution.info.iters < 100
-    assert solution.info.primary_solves == 3 * solution.info.iters
-    assert settings.initial_shift_floor == 100.0
-    baseline = cpo3.solve(sparse_problem(), settings=cpo3.Settings(presolve=False))
-    assert solution.info.iters == baseline.info.iters
-    np.testing.assert_array_equal(solution.x, baseline.x)
 
 
 @pytest.mark.parametrize("limit", ["iterations", "time"])
@@ -584,7 +567,7 @@ def test_initial_and_refinement_solves_are_separate(backend: Any) -> None:
         settings=cpo3.Settings(
             presolve=False,
             linear_solver=backend,
-            min_static_regularization=1e-4,
+            initial_diagonal_floor=1e-4,
             refinement_tolerance=1e-14,
             max_iters=1000,
         ),

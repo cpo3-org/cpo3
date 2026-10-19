@@ -44,19 +44,14 @@ pub(crate) fn step(
     embedding: &Embedding<'_>,
     state: &State,
     kkt: &KktSettings,
-    requested_shift_floor: f64,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
     let scaling = Scaling::new(embedding, state)?;
     let raw_mu = scaling.mu;
-    with_clamp_retries(
-        kkt,
-        raw_mu,
-        requested_shift_floor,
-        cache,
-        |trial, rho, cache| step_attempt(embedding, state, trial, rho, &scaling, settings, cache),
-    )
+    with_clamp_retries(kkt, raw_mu, cache, |trial, rho, cache| {
+        step_attempt(embedding, state, trial, rho, &scaling, settings, cache)
+    })
 }
 
 /// Retry numerical failures with a larger diagonal clamp, keeping K(mu)
@@ -65,16 +60,12 @@ pub(crate) fn step(
 fn with_clamp_retries<T>(
     kkt: &KktSettings,
     raw_mu: f64,
-    _requested_shift_floor: f64,
     cache: &mut KktCache,
     mut attempt: impl FnMut(&KktSettings, f64, &mut KktCache) -> Result<T, MehrotraError>,
 ) -> Result<T, MehrotraError> {
     const MAX_CLAMP: f64 = 1e-4;
     let minimum = 1e-20;
-    let mut floor = cache
-        .clamp_floor
-        .unwrap_or(kkt.min_static_regularization)
-        .max(minimum);
+    let mut floor = cache.clamp_floor.unwrap_or(kkt.diagonal_floor).max(minimum);
     cache.clamp_floor = Some(floor);
     let starting_floor = floor;
     let before = cache.stats();
@@ -82,7 +73,7 @@ fn with_clamp_retries<T>(
     let mut trial = *kkt;
     trial.strict_refinement = false;
     loop {
-        trial.min_static_regularization = floor;
+        trial.diagonal_floor = floor;
         // The factor is K(mu) with clamped diagonals, never K(rho).
         let result = attempt(&trial, raw_mu, cache);
         cache.finish_step(result.is_ok());
@@ -433,10 +424,10 @@ mod tests {
             let settings = KktSettings::new(LinearSolver::Faer);
             let mut cache = KktCache::new();
             let mut floors = Vec::new();
-            with_clamp_retries(&settings, mu, 1e-1, &mut cache, |trial, rho, _| {
+            with_clamp_retries(&settings, mu, &mut cache, |trial, rho, _| {
                 assert_eq!(rho, mu);
                 assert!(!trial.strict_refinement);
-                floors.push(trial.min_static_regularization);
+                floors.push(trial.diagonal_floor);
                 if floors.len() < 3 {
                     Err(JosephyError::InvalidTauPolynomial.into())
                 } else {
@@ -448,16 +439,16 @@ mod tests {
             assert!((floors[0] - 1e-12).abs() < 1e-25);
             assert!((floors[2] - 1e-10).abs() < 1e-23);
             assert_eq!(cache.clamp_floor, Some(floors[2]));
-            with_clamp_retries(&settings, mu, 1e-1, &mut cache, |trial, rho, _| {
+            with_clamp_retries(&settings, mu, &mut cache, |trial, rho, _| {
                 assert_eq!(rho, mu);
-                assert_eq!(trial.min_static_regularization, floors[2]);
+                assert_eq!(trial.diagonal_floor, floors[2]);
                 Ok(())
             })
             .unwrap();
             assert_eq!(cache.clamp_floor, Some(floors[2] / 10.0));
             let mut fresh = KktCache::new();
-            with_clamp_retries(&settings, mu, 0.0, &mut fresh, |trial, _, _| {
-                assert_eq!(trial.min_static_regularization, 1e-12);
+            with_clamp_retries(&settings, mu, &mut fresh, |trial, _, _| {
+                assert_eq!(trial.diagonal_floor, 1e-12);
                 Ok(())
             })
             .unwrap();
@@ -472,8 +463,8 @@ mod tests {
         let error = MehrotraError::Josephy(LinearSystemError::Singular.into());
         let mut floors = Vec::new();
         let result: Result<(), _> =
-            with_clamp_retries(&settings, 1e-14, 0.0, &mut cache, |trial, _, _| {
-                floors.push(trial.min_static_regularization);
+            with_clamp_retries(&settings, 1e-14, &mut cache, |trial, _, _| {
+                floors.push(trial.diagonal_floor);
                 Err(error.clone())
             });
         assert_eq!(result, Err(error));
@@ -487,7 +478,7 @@ mod tests {
         });
         let mut count = 0;
         let result: Result<(), _> =
-            with_clamp_retries(&settings, 1e-14, 0.0, &mut KktCache::new(), |_, _, _| {
+            with_clamp_retries(&settings, 1e-14, &mut KktCache::new(), |_, _, _| {
                 count += 1;
                 Err(error.clone())
             });
@@ -513,7 +504,7 @@ mod tests {
         let mut cache = KktCache::new();
         cache.clamp_floor = Some(1e-8);
         let mut calls = 0;
-        with_clamp_retries(&settings, 1e-14, 0.0, &mut cache, |trial, rho, cache| {
+        with_clamp_retries(&settings, 1e-14, &mut cache, |trial, rho, cache| {
             calls += 1;
             let _resolvent =
                 Resolvent::with_factor_shift(&problem, &state, &[], 1e-14, rho, trial, cache)?;
@@ -599,7 +590,6 @@ mod tests {
             &embedding,
             &state,
             &KktSettings::new(LinearSolver::Faer),
-            1e-14,
             &Settings::default(),
             &mut cache,
         )
@@ -816,7 +806,6 @@ mod tests {
                     &embedding,
                     &state,
                     &KktSettings::new(LinearSolver::Faer),
-                    1e-14,
                     &Settings::default(),
                     &mut cache,
                 )
@@ -865,10 +854,10 @@ mod tests {
         let settings = KktSettings::new(LinearSolver::Faer);
         let mut cache = KktCache::new();
         for _ in 0..30 {
-            with_clamp_retries(&settings, 1e-3, 0.0, &mut cache, |trial, target, _| {
+            with_clamp_retries(&settings, 1e-3, &mut cache, |trial, target, _| {
                 assert_eq!(target, 1e-3);
-                assert!(trial.min_static_regularization > 0.0);
-                assert!(trial.min_static_regularization < target);
+                assert!(trial.diagonal_floor > 0.0);
+                assert!(trial.diagonal_floor < target);
                 Ok(())
             })
             .unwrap();

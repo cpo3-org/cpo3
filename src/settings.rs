@@ -60,16 +60,13 @@ pub struct Settings {
     /// Initial adaptive floor for full-system factor diagonal magnitudes.
     /// Outer steps adjust this floor; zero starts at the positive lower bound
     /// 1e-20. Refinement always targets the original K(mu) system.
-    pub min_static_regularization: f64,
+    pub initial_diagonal_floor: f64,
     /// Additional correction solves per KKT solve; zero returns the initial solve without refinement.
     pub max_refinement_steps: usize,
     /// Positive componentwise backward-error target for iterative refinement.
     pub refinement_tolerance: f64,
 
     // Outer iterations.
-    /// Retained for API compatibility; unused by adaptive diagonal clamping.
-    /// The KKT target always uses the current complementarity.
-    pub initial_shift_floor: f64,
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
     /// The default is 0.999, leaving a relative margin of 1e-3.
     pub step_fraction: f64,
@@ -99,11 +96,10 @@ impl Default for Settings {
 
             linear_solver: LinearSolver::Faer,
             kkt_bound_elimination: true,
-            min_static_regularization: 1e-12,
+            initial_diagonal_floor: 1e-12,
             max_refinement_steps: 30,
             refinement_tolerance: 1e-7,
 
-            initial_shift_floor: 1e-10,
             step_fraction: 0.999,
         }
     }
@@ -154,14 +150,9 @@ impl Settings {
                 "tol_gap_rel must be finite and positive",
             ));
         }
-        if !self.min_static_regularization.is_finite() || self.min_static_regularization < 0.0 {
+        if !self.initial_diagonal_floor.is_finite() || self.initial_diagonal_floor < 0.0 {
             return Err(SolveError::InvalidSetting(
-                "min_static_regularization must be finite and nonnegative",
-            ));
-        }
-        if !self.initial_shift_floor.is_finite() || self.initial_shift_floor <= 0.0 {
-            return Err(SolveError::InvalidSetting(
-                "initial_shift_floor must be finite and positive",
+                "initial_diagonal_floor must be finite and nonnegative",
             ));
         }
         if !self.tol_infeas_abs.is_finite() || self.tol_infeas_abs < 0.0 {

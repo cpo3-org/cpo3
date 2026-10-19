@@ -88,7 +88,7 @@ pub(crate) struct Resolvent<'a> {
     factorization: &'a mut Factorization,
     shift: f64,
     d_diagonal: Vec<f64>,
-    /// Present only when static regularization modifies the true diagonal.
+    /// Present only when the preconditioner modifies the true diagonal.
     d_factor: Option<Vec<f64>>,
     /// `(x2, y2)`, the solution of the `(-c, b)` column.
     direction: &'a [f64],
@@ -146,7 +146,7 @@ impl<'a> Resolvent<'a> {
             || shift < 0.0
             || !factor_shift.is_finite()
             || factor_shift < 0.0
-            || (factor_shift == 0.0 && kkt.min_static_regularization <= 0.0)
+            || (factor_shift == 0.0 && kkt.diagonal_floor <= 0.0)
             || factor_shift < shift
         {
             return Err(EmbeddingError::InvalidMu.into());
@@ -155,13 +155,12 @@ impl<'a> Resolvent<'a> {
             .iter()
             .map(|entry| entry + shift)
             .collect::<Vec<_>>();
-        let d_factor =
-            (factor_shift != shift || kkt.min_static_regularization > shift).then(|| {
-                h_diagonal
-                    .iter()
-                    .map(|h| (h + factor_shift).max(kkt.min_static_regularization))
-                    .collect::<Vec<_>>()
-            });
+        let d_factor = (factor_shift != shift || kkt.diagonal_floor > shift).then(|| {
+            h_diagonal
+                .iter()
+                .map(|h| (h + factor_shift).max(kkt.diagonal_floor))
+                .collect::<Vec<_>>()
+        });
         let factor_diagonal = d_factor.as_deref().unwrap_or(&d_diagonal);
         factorize(problem, factor_shift, factor_diagonal, kkt, cache)?;
         let KktCache {
@@ -487,7 +486,7 @@ pub(crate) fn solve_shifted_systems(
         .collect::<Vec<_>>();
     let d_factor = h_diagonal
         .iter()
-        .map(|entry| (entry + shift + regularization).max(kkt.min_static_regularization))
+        .map(|entry| (entry + shift + regularization).max(kkt.diagonal_floor))
         .collect::<Vec<_>>();
     factorize(problem, shift + regularization, &d_factor, kkt, cache)?;
     let KktCache {

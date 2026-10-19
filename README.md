@@ -55,13 +55,12 @@ inequality slacks and multipliers `0.1`. Accepted warm starts and CVXOPT starts 
 unaffected; a failed CVXOPT start falls back to this configured cold start.
 
 The default `step_fraction` is `0.999`. KKT solves use an adaptive diagonal
-floor, initially `min_static_regularization=1e-12`, applied before singleton
+floor, initially `initial_diagonal_floor=1e-12`, applied before singleton
 elimination. Refinement always targets the original system at the current
 complementarity. Numerical failures increase the floor and retry; accepted
 steps increase or decrease it according to the dominant source of refinement
 error. Accurate steps relax it, and a retry prevents immediate relaxation.
-Faer pivot replacement is disabled. The legacy `initial_shift_floor` option
-is retained for compatibility and has no effect on this policy.
+Faer pivot replacement is disabled.
 
 Refinement allows up to `max_refinement_steps=30` corrections, with tolerance
 `1e-7`. It retains the best finite iterate when it cannot reach tolerance.

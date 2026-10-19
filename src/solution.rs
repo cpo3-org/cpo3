@@ -633,7 +633,6 @@ fn solve_core(
         ));
     }
 
-    let requested_floor = 0.0; // Adaptive clamping is the only regularization.
     for iteration in 1..=settings.max_iters {
         if time_limit_reached(started, settings.time_limit) {
             let elapsed = started.elapsed();
@@ -662,25 +661,19 @@ fn solve_core(
         // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
         // complementarity, scaling s by the same factor.
         state.normalize_sphere(embedding.nu())?;
-        let (next, next_diagnostics) = match predictor_corrector_step(
-            &embedding,
-            &state,
-            &kkt,
-            requested_floor,
-            settings,
-            &mut cache,
-        ) {
-            Ok(step) => step,
-            Err(error) => {
-                let error = SolveError::from(error);
-                reporter.iteration(
-                    recovered.iteration_record(iteration - 1, started.elapsed(), diagnostics),
-                    true,
-                );
-                reporter.failure(iteration, &error.to_string());
-                return Err(error);
-            }
-        };
+        let (next, next_diagnostics) =
+            match predictor_corrector_step(&embedding, &state, &kkt, settings, &mut cache) {
+                Ok(step) => step,
+                Err(error) => {
+                    let error = SolveError::from(error);
+                    reporter.iteration(
+                        recovered.iteration_record(iteration - 1, started.elapsed(), diagnostics),
+                        true,
+                    );
+                    reporter.failure(iteration, &error.to_string());
+                    return Err(error);
+                }
+            };
         state = next;
         diagnostics = next_diagnostics;
         recover_into(
@@ -770,18 +763,10 @@ fn predictor_corrector_step(
     embedding: &Embedding<'_>,
     state: &State,
     kkt: &KktSettings,
-    requested_shift_floor: f64,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<(State, StepDiagnostics), MehrotraError> {
-    let step = mehrotra::step(
-        embedding,
-        state,
-        kkt,
-        requested_shift_floor,
-        settings,
-        cache,
-    )?;
+    let step = mehrotra::step(embedding, state, kkt, settings, cache)?;
     let sy = if embedding.nu() == 0 {
         0.0
     } else {

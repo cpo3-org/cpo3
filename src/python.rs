@@ -250,11 +250,6 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn refinement_stagnation(&self) -> usize {
-        self.inner.linear_algebra.refinement_stagnation
-    }
-
-    #[getter]
     fn refinement_divergence(&self) -> usize {
         self.inner.linear_algebra.refinement_divergence
     }
