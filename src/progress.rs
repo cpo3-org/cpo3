@@ -81,13 +81,10 @@ impl ProgressReporter {
             None => eprintln!("  presolve       off"),
         }
         eprintln!("  linear solver  {linear_solver}");
-        eprintln!("  data scaling   {}", settings.data_equilibration);
+        eprintln!("  scaling passes {}", settings.ruiz_iters);
         eprintln!("  cvxopt init    {}", settings.cvxopt_init);
-        eprintln!("  KKT bound elimination {}", settings.kkt_bound_elimination);
-        eprintln!(
-            "  initial diagonal floor {:.1e}",
-            settings.initial_diagonal_floor
-        );
+        eprintln!("  KKT bound elimination {}", settings.eliminate_bounds);
+        eprintln!("  initial diagonal floor {:.1e}", settings.refine_init_reg);
         eprintln!("  force warm start {}", settings.force_warm_start);
         eprintln!(
             "  tolerances     feas {:.1e} {} gap abs {:.1e} {} gap rel {:.1e}",

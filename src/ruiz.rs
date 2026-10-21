@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use thiserror::Error;
 
-use crate::{Cone, CscMatrix, Equilibration, MatrixError, Problem, ProblemError, Settings};
+use crate::{Cone, CscMatrix, MatrixError, Problem, ProblemError, Settings};
 
 #[derive(Clone, Debug, Error, PartialEq)]
 pub(crate) enum DataEquilibrationError {
@@ -25,16 +25,6 @@ pub(crate) struct EquilibratedProblem<'a> {
 }
 
 impl<'a> EquilibratedProblem<'a> {
-    pub(crate) fn new(
-        problem: &'a Problem,
-        settings: &Settings,
-    ) -> Result<Self, DataEquilibrationError> {
-        match settings.data_equilibration {
-            Equilibration::None => Ok(Self::unscaled(problem)),
-            Equilibration::Ruiz => Self::ruiz(problem, settings),
-        }
-    }
-
     fn unscaled(problem: &'a Problem) -> Self {
         Self {
             problem: Cow::Borrowed(problem),
@@ -125,8 +115,11 @@ impl<'a> EquilibratedProblem<'a> {
         );
     }
 
-    fn ruiz(problem: &'a Problem, settings: &Settings) -> Result<Self, DataEquilibrationError> {
-        if settings.max_equilibration_passes == 0 {
+    pub(crate) fn new(
+        problem: &'a Problem,
+        settings: &Settings,
+    ) -> Result<Self, DataEquilibrationError> {
+        if settings.ruiz_iters == 0 {
             return Ok(Self::unscaled(problem));
         }
         let n = problem.variable_count();
@@ -134,7 +127,7 @@ impl<'a> EquilibratedProblem<'a> {
         let mut scaling = vec![1.0; n + m + 1];
 
         let mut norms = vec![0.0_f64; scaling.len()];
-        for _ in 0..settings.max_equilibration_passes {
+        for _ in 0..settings.ruiz_iters {
             norms.fill(0.0);
             accumulate_augmented_norms(problem, &scaling, &mut norms);
             cone_compatible_norms(problem.cones(), &mut norms[n..n + m]);
@@ -143,7 +136,7 @@ impl<'a> EquilibratedProblem<'a> {
                 .filter(|norm| **norm > 0.0)
                 .map(|norm| (norm - 1.0).abs())
                 .fold(0.0_f64, f64::max);
-            if deviation <= settings.equilibration_tolerance {
+            if deviation <= settings.ruiz_tol {
                 break;
             }
             for (scale, norm) in scaling.iter_mut().zip(&norms) {
@@ -296,12 +289,12 @@ mod tests {
     }
 
     #[test]
-    fn none_borrows_the_original_problem_and_uses_identity_maps() {
+    fn zero_passes_borrows_the_original_problem_and_uses_identity_maps() {
         let problem = problem();
         let equilibrated = EquilibratedProblem::new(
             &problem,
             &crate::Settings {
-                data_equilibration: Equilibration::None,
+                ruiz_iters: 0,
                 ..crate::Settings::default()
             },
         )
@@ -325,14 +318,8 @@ mod tests {
                 vec![Cone::Zero(2)],
             )
             .unwrap();
-            let equilibrated = EquilibratedProblem::new(
-                &problem,
-                &crate::Settings {
-                    data_equilibration: Equilibration::Ruiz,
-                    ..crate::Settings::default()
-                },
-            )
-            .unwrap();
+            let equilibrated =
+                EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
             assert!(std::ptr::eq(equilibrated.problem(), &problem));
             assert_eq!(equilibrated.scale_x(&[2.0, -3.0]), [2.0, -3.0]);
             assert_eq!(equilibrated.unscale_y(&[4.0, -5.0]), [4.0, -5.0]);
@@ -343,14 +330,8 @@ mod tests {
     fn homogeneous_ruiz_preserves_the_qp_under_coordinate_mapping() {
         {
             let original = problem();
-            let equilibrated = EquilibratedProblem::new(
-                &original,
-                &crate::Settings {
-                    data_equilibration: Equilibration::Ruiz,
-                    ..crate::Settings::default()
-                },
-            )
-            .unwrap();
+            let equilibrated =
+                EquilibratedProblem::new(&original, &crate::Settings::default()).unwrap();
             let scaled = equilibrated.problem();
             let scaled_x = [0.75, -1.25];
             let scaled_y = [-0.5, 2.0];
@@ -400,8 +381,7 @@ mod tests {
         let equilibrated = EquilibratedProblem::new(
             &original,
             &crate::Settings {
-                data_equilibration: Equilibration::Ruiz,
-                max_equilibration_passes: 20,
+                ruiz_iters: 20,
                 ..crate::Settings::default()
             },
         )
@@ -413,7 +393,7 @@ mod tests {
 
         for norm in norms {
             assert!(
-                (norm - 1.0).abs() <= Settings::default().equilibration_tolerance,
+                (norm - 1.0).abs() <= Settings::default().ruiz_tol,
                 "row norm is {norm}"
             );
         }

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use super::{parse_equilibration, parse_linear_solver};
+use super::parse_linear_solver;
 use crate::Settings;
 
 pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
@@ -20,8 +20,6 @@ pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
         .transpose()?;
     let linear_solver = values.getattr("linear_solver")?.extract::<String>()?;
     let linear_solver = parse_linear_solver(&linear_solver)?;
-    let data_equilibration = values.getattr("data_equilibration")?.extract::<String>()?;
-    let data_equilibration = parse_equilibration(&data_equilibration)?;
     let settings = Settings {
         max_iters: values.getattr("max_iters")?.extract()?,
         time_limit,
@@ -38,15 +36,14 @@ pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
         force_warm_start: values.getattr("force_warm_start")?.extract()?,
         cvxopt_init: values.getattr("cvxopt_init")?.extract()?,
         initial_mu: values.getattr("initial_mu")?.extract()?,
-        data_equilibration,
-        max_equilibration_passes: values.getattr("max_equilibration_passes")?.extract()?,
-        equilibration_tolerance: values.getattr("equilibration_tolerance")?.extract()?,
+        ruiz_iters: values.getattr("ruiz_iters")?.extract()?,
+        ruiz_tol: values.getattr("ruiz_tol")?.extract()?,
 
         linear_solver,
-        kkt_bound_elimination: values.getattr("kkt_bound_elimination")?.extract()?,
-        initial_diagonal_floor: values.getattr("initial_diagonal_floor")?.extract()?,
-        max_refinement_steps: values.getattr("max_refinement_steps")?.extract()?,
-        refinement_tolerance: values.getattr("refinement_tolerance")?.extract()?,
+        eliminate_bounds: values.getattr("eliminate_bounds")?.extract()?,
+        refine_init_reg: values.getattr("refine_init_reg")?.extract()?,
+        refine_iters: values.getattr("refine_iters")?.extract()?,
+        refine_tol: values.getattr("refine_tol")?.extract()?,
 
         step_fraction: values.getattr("step_fraction")?.extract()?,
     };

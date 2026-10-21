@@ -13,8 +13,8 @@ use pyo3::{
 };
 
 use crate::{
-    Cone, CscMatrix, Equilibration, LinearSolver, Problem, Solution, SolutionInfo, SolveError,
-    WarmStart, solve_from,
+    Cone, CscMatrix, LinearSolver, Problem, Solution, SolutionInfo, SolveError, WarmStart,
+    solve_from,
 };
 
 type PyCscParts<'py> = (
@@ -133,16 +133,6 @@ fn parse_linear_solver(value: &str) -> PyResult<LinearSolver> {
         "feral" => Ok(LinearSolver::Feral),
         _ => Err(PyValueError::new_err(format!(
             "unknown linear solver {value:?}"
-        ))),
-    }
-}
-
-fn parse_equilibration(value: &str) -> PyResult<Equilibration> {
-    match value {
-        "none" => Ok(Equilibration::None),
-        "ruiz" => Ok(Equilibration::Ruiz),
-        _ => Err(PyValueError::new_err(format!(
-            "unknown equilibration method {value:?}"
         ))),
     }
 }
@@ -320,13 +310,8 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn data_equilibration(&self) -> &'static str {
-        self.inner.data_equilibration.as_str()
-    }
-
-    #[getter]
-    fn kkt_bound_elimination(&self) -> bool {
-        self.inner.kkt_bound_elimination
+    fn eliminate_bounds(&self) -> bool {
+        self.inner.eliminate_bounds
     }
 }
 

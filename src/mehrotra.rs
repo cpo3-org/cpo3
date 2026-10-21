@@ -499,7 +499,7 @@ mod tests {
         .unwrap();
         let state = State::new(vec![0.0], vec![], vec![], 1.0).unwrap();
         let settings = KktSettings {
-            max_refinement_steps: 0,
+            refine_iters: 0,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let mut cache = KktCache::new();

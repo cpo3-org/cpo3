@@ -1,9 +1,7 @@
 //! Public interface for the `cpo3` conic quadratic solver.
 
 mod cone;
-mod data_equilibration;
 mod embedding;
-mod equilibration;
 mod init;
 mod josephy;
 mod linear_solver;
@@ -15,6 +13,7 @@ pub mod mps;
 mod presolve;
 mod problem;
 mod progress;
+mod ruiz;
 mod settings;
 mod solution;
 
@@ -22,7 +21,6 @@ mod solution;
 mod python;
 
 pub use cone::Cone;
-pub use equilibration::Equilibration;
 pub use init::WarmStart;
 pub use linear_solver::LinearSolver;
 pub use linear_system::LinearAlgebraStats;

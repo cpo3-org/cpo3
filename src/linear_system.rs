@@ -22,8 +22,8 @@ pub(crate) struct KktSettings {
     /// Fold nonnegative singleton rows of `A` into the `(1,1)` block.
     pub(crate) eliminate_bound_rows: bool,
     pub(crate) diagonal_floor: f64,
-    pub(crate) max_refinement_steps: usize,
-    pub(crate) refinement_tolerance: f64,
+    pub(crate) refine_iters: usize,
+    pub(crate) refine_tol: f64,
 }
 
 impl KktSettings {
@@ -41,10 +41,10 @@ impl From<&Settings> for KktSettings {
         Self {
             linear_solver: settings.linear_solver,
             strict_refinement: false,
-            eliminate_bound_rows: settings.kkt_bound_elimination,
-            diagonal_floor: settings.initial_diagonal_floor,
-            max_refinement_steps: settings.max_refinement_steps,
-            refinement_tolerance: settings.refinement_tolerance,
+            eliminate_bound_rows: settings.eliminate_bounds,
+            diagonal_floor: settings.refine_init_reg,
+            refine_iters: settings.refine_iters,
+            refine_tol: settings.refine_tol,
         }
     }
 }
@@ -428,7 +428,7 @@ pub(crate) fn refine_with(
     initialize(&solution, rhs, residual, denominator);
     let mut best_error: Option<f64> = None;
     let mut errors = [f64::INFINITY; 2];
-    for iteration in 0..=settings.max_refinement_steps {
+    for iteration in 0..=settings.refine_iters {
         if iteration != 0 {
             residual_into(&solution, rhs, residual);
         }
@@ -448,7 +448,7 @@ pub(crate) fn refine_with(
             Some(error) => backward_error < error,
             None => true,
         };
-        if backward_error <= settings.refinement_tolerance {
+        if backward_error <= settings.refine_tol {
             stats.refinement_accurate += 1;
             return validate_solution(solution);
         }
@@ -464,11 +464,10 @@ pub(crate) fn refine_with(
         }
         if iteration >= 2 {
             let rate = (backward_error / errors[0]).sqrt();
-            let remaining =
-                i32::try_from(settings.max_refinement_steps - iteration).unwrap_or(i32::MAX);
+            let remaining = i32::try_from(settings.refine_iters - iteration).unwrap_or(i32::MAX);
             if rate.is_nan()
                 || (rate > STALL_RATE
-                    && backward_error * rate.powi(remaining) > settings.refinement_tolerance)
+                    && backward_error * rate.powi(remaining) > settings.refine_tol)
             {
                 stats.refinement_forecast += 1;
                 if iteration > 0 {
@@ -478,7 +477,7 @@ pub(crate) fn refine_with(
             }
         }
         errors = [errors[1], backward_error];
-        if iteration == settings.max_refinement_steps {
+        if iteration == settings.refine_iters {
             stats.refinement_budget += 1;
             if iteration > 0 {
                 diagnose_correction(residual, correction, perturbation, denominator, stats);
@@ -968,7 +967,7 @@ mod tests {
                 vec![0.5],
                 &KktSettings {
                     strict_refinement: strict,
-                    max_refinement_steps: 0,
+                    refine_iters: 0,
                     ..KktSettings::new(LinearSolver::Faer)
                 },
                 &mut workspace,
@@ -1156,8 +1155,8 @@ mod tests {
         let mut stats = LinearAlgebraStats::default();
         let mut workspace = RefinementWorkspace::default();
         let settings = KktSettings {
-            max_refinement_steps: 100,
-            refinement_tolerance: 1e-7,
+            refine_iters: 100,
+            refine_tol: 1e-7,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let solution = refine_with(
@@ -1192,7 +1191,7 @@ mod tests {
         let initial_ptr = initial.as_ptr();
         let mut stats = LinearAlgebraStats::default();
         let mut settings = KktSettings {
-            max_refinement_steps: 0,
+            refine_iters: 0,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let solve = |initial,
@@ -1219,7 +1218,7 @@ mod tests {
         assert_eq!(returned, vec![0.0]);
         assert_eq!(returned.as_ptr(), initial_ptr);
         assert_eq!(workspace.best.as_ptr(), scratch);
-        settings.max_refinement_steps = 1;
+        settings.refine_iters = 1;
         for _ in 0..2 {
             let returned = solve(vec![0.0], &settings, &mut workspace, &mut stats);
             assert_eq!(returned, vec![0.5]);

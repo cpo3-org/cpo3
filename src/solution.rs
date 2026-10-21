@@ -4,8 +4,7 @@ use std::time::Instant;
 use thiserror::Error;
 
 use crate::{
-    Equilibration, LinearSolver, Problem, Settings,
-    data_equilibration::EquilibratedProblem,
+    LinearSolver, Problem, Settings,
     embedding::{Embedding, EmbeddingError, State},
     init::{self, WarmStart},
     josephy::KktCache,
@@ -14,6 +13,7 @@ use crate::{
     mehrotra::{self, MehrotraError},
     presolve::{self, PresolveOutcome, Presolved},
     progress::{IterationRecord, ProgressReporter},
+    ruiz::EquilibratedProblem,
 };
 
 // CPO3's floor when recovering homogeneous iterates and measuring rays.
@@ -53,8 +53,7 @@ pub struct SolutionInfo {
     pub dres: f64,
     pub comp: f64,
     pub linear_solver: LinearSolver,
-    pub data_equilibration: Equilibration,
-    pub kkt_bound_elimination: bool,
+    pub eliminate_bounds: bool,
     /// Whether a supplied warm start was used; `None` when none was supplied.
     pub warm_start_used: Option<bool>,
     /// Score used to screen the best warm candidate; `None` without one.
@@ -96,8 +95,7 @@ impl SolutionInfo {
             dres: measures.dres,
             comp: measures.comp,
             linear_solver,
-            data_equilibration: settings.data_equilibration,
-            kkt_bound_elimination: settings.kkt_bound_elimination,
+            eliminate_bounds: settings.eliminate_bounds,
             warm_start_used: init.warm_start_used,
             warm_start_score: init.warm_start_score,
             cvxopt_init_used: init.cvxopt_init_used,
@@ -1283,7 +1281,7 @@ mod tests {
         let equilibrated = EquilibratedProblem::new(
             &problem,
             &crate::Settings {
-                data_equilibration: Equilibration::None,
+                ruiz_iters: 0,
                 ..crate::Settings::default()
             },
         )
@@ -1430,7 +1428,7 @@ mod tests {
         let equilibrated = EquilibratedProblem::new(
             &problem,
             &crate::Settings {
-                data_equilibration: Equilibration::None,
+                ruiz_iters: 0,
                 ..crate::Settings::default()
             },
         )

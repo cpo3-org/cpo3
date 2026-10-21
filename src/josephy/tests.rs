@@ -336,7 +336,7 @@ fn clamped_preconditioner_is_identical_with_or_without_bound_elimination() {
             let mut settings = KktSettings::new(solver);
             // Request accuracy tighter than the solution assertions below;
             // the production backward-error tolerance is only 1e-8.
-            settings.refinement_tolerance = 1e-12;
+            settings.refine_tol = 1e-12;
             let mut factor =
                 Factorization::new_counted(matrix, &settings, &mut cache.factorizations).unwrap();
             let pattern = cache.pattern.as_mut().unwrap();
@@ -454,7 +454,7 @@ fn refinement_warm_start_preserves_weak_components_and_corrects_the_rest() {
             settings.diagonal_floor = 1e-8;
             // Resolve the corrected components to the asserted accuracy,
             // rather than stopping at the production tolerance of 1e-8.
-            settings.refinement_tolerance = 1e-12;
+            settings.refine_tol = 1e-12;
             let matrix = assemble_preconditioner(
                 &problem,
                 shift,
@@ -871,8 +871,8 @@ fn distinct_factor_shift_keeps_resolvent_target_and_reconstruction() {
     let h = [0.0, 1.0];
     let settings = KktSettings {
         strict_refinement: true,
-        refinement_tolerance: 1e-13,
-        max_refinement_steps: 100,
+        refine_tol: 1e-13,
+        refine_iters: 100,
         ..KktSettings::new(LinearSolver::Faer)
     };
     let rhs = [0.7, -0.2, 0.5, -0.8];
@@ -917,7 +917,7 @@ fn zero_target_equality_column_solves_original_stationarity_and_feasibility() {
     let state = State::new(vec![0.0], vec![0.0], vec![0.0], 2.0).unwrap();
     let settings = KktSettings {
         strict_refinement: true,
-        refinement_tolerance: 1e-13,
+        refine_tol: 1e-13,
         ..KktSettings::new(LinearSolver::Faer)
     };
     let mut cache = KktCache::new();
@@ -944,7 +944,7 @@ fn fixed_floor_at_zero_mu_refines_the_unclamped_equality_system() {
         let settings = KktSettings {
             diagonal_floor: floor,
             strict_refinement: true,
-            refinement_tolerance: 1e-13,
+            refine_tol: 1e-13,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let mut cache = KktCache::new();

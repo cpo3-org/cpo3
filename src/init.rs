@@ -3,11 +3,11 @@
 
 use crate::{
     Settings,
-    data_equilibration::EquilibratedProblem,
     embedding::{Embedding, EmbeddingError, State},
     josephy::{KktCache, solve_shifted_systems},
     linear_system::KktSettings,
     matrix::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
+    ruiz::EquilibratedProblem,
 };
 
 /// A caller-supplied starting point in original units.
@@ -369,7 +369,7 @@ pub(crate) fn initial_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cone, Equilibration, LinearSolver, Problem};
+    use crate::{Cone, LinearSolver, Problem};
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -392,7 +392,7 @@ mod tests {
 
     fn cvxopt_settings() -> Settings {
         Settings {
-            data_equilibration: Equilibration::None,
+            ruiz_iters: 0,
             cvxopt_init: true,
             ..Settings::default()
         }
@@ -425,14 +425,7 @@ mod tests {
             vec![Cone::Zero(1), Cone::Nonnegative(1)],
         )
         .unwrap();
-        let scaled = EquilibratedProblem::new(
-            &problem,
-            &crate::Settings {
-                data_equilibration: Equilibration::Ruiz,
-                ..crate::Settings::default()
-            },
-        )
-        .unwrap();
+        let scaled = EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
         let embedding = Embedding::new(scaled.problem()).unwrap();
         for beta in [Settings::default().initial_mu, 0.25, 1.0] {
             let settings = Settings {
@@ -599,7 +592,7 @@ mod tests {
             let equilibrated = EquilibratedProblem::new(
                 &problem,
                 &crate::Settings {
-                    data_equilibration: Equilibration::None,
+                    ruiz_iters: 0,
                     ..crate::Settings::default()
                 },
             )
@@ -630,7 +623,7 @@ mod tests {
         let equilibrated = EquilibratedProblem::new(
             &problem,
             &crate::Settings {
-                data_equilibration: Equilibration::None,
+                ruiz_iters: 0,
                 ..crate::Settings::default()
             },
         )

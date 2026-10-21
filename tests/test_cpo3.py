@@ -93,7 +93,6 @@ def test_solves_a_toy_quadratic() -> None:
     )
 
     assert solution.status is cpo3.SolverStatus.SOLVED
-    assert solution.info.data_equilibration is cpo3.Equilibration.RUIZ
     np.testing.assert_allclose(solution.x, [1.0], atol=2e-6)
     np.testing.assert_allclose(solution.y, [1.0], atol=2e-6)
     np.testing.assert_allclose(solution.s, [0.0], atol=2e-6)
