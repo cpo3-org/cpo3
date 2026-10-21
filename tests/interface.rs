@@ -3,9 +3,10 @@ use cpo3::{Cone, CscMatrix, LinearSolver, Problem, ProblemError, Settings, Solve
 
 #[test]
 fn cones_report_their_vector_dim() {
-    assert_eq!(Cone::Nonnegative(4).vector_dim(), Some(4));
-    assert_eq!(Cone::SecondOrder(3).vector_dim(), Some(3));
-    assert_eq!(Cone::PositiveSemidefinite(3).vector_dim(), Some(6));
+    assert_eq!(Cone::Zero(2).vector_dim(), 2);
+    assert_eq!(Cone::Nonnegative(4).vector_dim(), 4);
+    assert_eq!(Cone::SecondOrder(3).vector_dim(), 3);
+    assert_eq!(Cone::PositiveSemidefinite(3).vector_dim(), 6);
 }
 
 #[test]

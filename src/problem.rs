@@ -19,8 +19,6 @@ pub enum ProblemError {
     EmptyCone,
     #[error("a second-order cone must have dimension at least two")]
     InvalidSecondOrderCone,
-    #[error("cone dimension overflow")]
-    ConeDimensionOverflow,
     #[error("cone dimensions sum to {actual}, but A and b have {expected} rows")]
     ConeDimensionMismatch { expected: usize, actual: usize },
 }
@@ -96,12 +94,7 @@ impl Problem {
             if matches!(cone, Cone::SecondOrder(dim) if *dim < 2) {
                 return Err(ProblemError::InvalidSecondOrderCone);
             }
-            cone_dim = cone_dim
-                .checked_add(
-                    cone.vector_dim()
-                        .ok_or(ProblemError::ConeDimensionOverflow)?,
-                )
-                .ok_or(ProblemError::ConeDimensionOverflow)?;
+            cone_dim = cone_dim.strict_add(cone.vector_dim());
         }
         if cone_dim != b.len() {
             return Err(ProblemError::ConeDimensionMismatch {
@@ -140,6 +133,10 @@ impl Problem {
 
     pub fn constraint_count(&self) -> usize {
         self.b.len()
+    }
+
+    pub fn dims(&self) -> (usize, usize) {
+        (self.b.len(), self.c.len())
     }
 }
 

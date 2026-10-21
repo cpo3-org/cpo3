@@ -82,7 +82,7 @@ impl BoundRows {
             });
             let mut offset = 0;
             for cone in problem.cones() {
-                let dim = cone.vector_dim().unwrap_or(0);
+                let dim = cone.vector_dim();
                 if !matches!(cone, Cone::Nonnegative(_)) {
                     counts[offset..offset + dim].fill(0);
                 }

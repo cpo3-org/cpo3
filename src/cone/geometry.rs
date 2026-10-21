@@ -63,9 +63,7 @@ impl ConeGeometry {
         let mut barrier_parameter = 0usize;
 
         for (block, cone) in cones.iter().enumerate() {
-            let dim = cone
-                .vector_dim()
-                .ok_or(ConeGeometryError::DimensionOverflow)?;
+            let dim = cone.vector_dim();
             if dim == 0 {
                 return Err(ConeGeometryError::EmptyBlock { block });
             }

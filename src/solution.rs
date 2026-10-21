@@ -174,6 +174,15 @@ pub fn solve_from(
     warm_start: Option<&WarmStart>,
 ) -> Result<Solution, SolveError> {
     settings.validate()?;
+    if problem.a().values().iter().any(|value| !value.is_finite())
+        || problem
+            .p()
+            .is_some_and(|p| p.values().iter().any(|value| !value.is_finite()))
+    {
+        return Err(SolveError::Numerical(
+            crate::MatrixError::NonFiniteValue.to_string(),
+        ));
+    }
     validate_warm_start(problem, warm_start)?;
     // Presolve's direct exits must respect the same cone support as the
     // embedding, even when fixing variables would bypass its construction.
@@ -202,7 +211,7 @@ pub fn solve_from(
             let mut s: Vec<_> = problem.b().iter().zip(ax).map(|(b, ax)| b - ax).collect();
             let mut offset = 0;
             for cone in problem.cones() {
-                let dim = cone.vector_dim().unwrap();
+                let dim = cone.vector_dim();
                 match cone {
                     crate::Cone::Zero(_) => s[offset..offset + dim].fill(0.0),
                     crate::Cone::Nonnegative(_) => {
@@ -577,8 +586,7 @@ fn solve_core(
     let linear_solver = settings.linear_solver;
     let kkt = KktSettings::from(settings);
     let mut cache = KktCache::new();
-    let equilibrated = EquilibratedProblem::new(problem, settings)
-        .map_err(|error| SolveError::Numerical(error.to_string()))?;
+    let equilibrated = EquilibratedProblem::new(problem, settings)?;
     let embedding = Embedding::new(equilibrated.problem())?;
     let mut identity = vec![0.0; problem.constraint_count()];
     embedding
@@ -1129,6 +1137,37 @@ fn two_norm(vector: &[f64]) -> f64 {
 mod tests {
     use super::*;
     use crate::{Cone, CscMatrix};
+
+    #[test]
+    fn solve_rejects_nonfinite_matrices_before_presolve_or_equilibration() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for invalid_p in [false, true] {
+                // Raw CSC construction checks structure but permits nonfinite values.
+                let invalid = CscMatrix::from_parts(1, 1, vec![0, 1], vec![0], vec![value]);
+                let (p, a) = if invalid_p {
+                    (Some(invalid), CscMatrix::identity(1).unwrap())
+                } else {
+                    (None, invalid)
+                };
+                let problem =
+                    Problem::from_upper_triangle(p, vec![0.0], a, vec![0.0], vec![Cone::Zero(1)])
+                        .unwrap();
+                for presolve in [false, true] {
+                    for ruiz_iters in [0, 2] {
+                        let settings = Settings {
+                            presolve,
+                            ruiz_iters,
+                            ..Settings::default()
+                        };
+                        assert_eq!(
+                            solve(&problem, &settings).unwrap_err(),
+                            SolveError::Numerical(crate::MatrixError::NonFiniteValue.to_string()),
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn the_core_keeps_time_already_spent_in_presolve() {

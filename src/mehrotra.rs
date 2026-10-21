@@ -641,7 +641,7 @@ mod tests {
             .iter()
             .flat_map(|cone| match cone {
                 Cone::Zero(dim) => vec![0.0; *dim],
-                _ => (0..cone.vector_dim().unwrap())
+                _ => (0..cone.vector_dim())
                     .map(|index| 0.5 + 0.25 * index as f64)
                     .collect(),
             })
