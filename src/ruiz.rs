@@ -121,24 +121,24 @@ impl<'a> EquilibratedProblem<'a> {
         let mut dy = vec![1.0_f64; m];
         let mut dt = 1.0_f64;
 
-        let mut nx = Col::zeros(n);
-        let mut ny = Col::zeros(m);
+        let mut max_x = Col::zeros(n);
+        let mut max_y = Col::zeros(m);
         for i in 0..settings.ruiz_iters {
-            let nt = if i == 0 {
-                row_norms::<true>(problem, &dx, &dy, dt, &mut nx, &mut ny)
+            let max_t = if i == 0 {
+                row_norms::<true>(problem, &dx, &dy, dt, &mut max_x, &mut max_y)
             } else {
-                row_norms::<false>(problem, &dx, &dy, dt, &mut nx, &mut ny)
+                row_norms::<false>(problem, &dx, &dy, dt, &mut max_x, &mut max_y)
             };
-            equalize_cone_norms(problem.cones(), ny.as_mut());
+            equalize_cone_norms(problem.cones(), max_y.as_mut());
 
-            if converged(&nx, &ny, nt, settings.ruiz_tol) {
+            if converged(&max_x, &max_y, max_t, settings.ruiz_tol) {
                 break;
             }
 
-            update_scales(&mut dx, &nx);
-            update_scales(&mut dy, &ny);
-            if nt > 0.0 {
-                dt /= nt.sqrt();
+            update_scales(&mut dx, &max_x);
+            update_scales(&mut dy, &max_y);
+            if max_t > 0.0 {
+                dt /= max_t.sqrt();
             }
         }
 
@@ -179,10 +179,11 @@ fn update_scales(scales: &mut [f64], norms: &Col<f64>) {
 }
 
 #[inline]
-fn converged(nx: &Col<f64>, ny: &Col<f64>, nt: f64, tol: f64) -> bool {
-    nx.iter()
-        .chain(ny.iter())
-        .chain(std::iter::once(&nt))
+fn converged(max_x: &Col<f64>, max_y: &Col<f64>, max_t: f64, tol: f64) -> bool {
+    max_x
+        .iter()
+        .chain(max_y.iter())
+        .chain(std::iter::once(&max_t))
         .all(|&norm| norm == 0.0 || (norm - 1.0).abs() <= tol)
 }
 
@@ -252,34 +253,34 @@ fn scale_matrix(matrix: &CscMatrix, rows: &[f64], cols: &[f64]) -> Result<CscMat
 }
 
 /// Row infinity norms of the cumulatively scaled [P Aᵀ c; A 0 b; cᵀ bᵀ 0].
-/// Overwrites `nx` and `ny` and returns `nt`, without changing the original data.
+/// Overwrites `max_x` and `max_y` and returns `max_t`, without changing the original data.
 /// The first iteration uses unit factors and skips their multiplications.
 fn row_norms<const UNIT_SCALING: bool>(
     problem: &Problem,
     dx: &[f64],
     dy: &[f64],
     dt: f64,
-    nx: &mut Col<f64>,
-    ny: &mut Col<f64>,
+    max_x: &mut Col<f64>,
+    max_y: &mut Col<f64>,
 ) -> f64 {
-    let mut nt = 0.0_f64;
-    for ((norm, &scale), &value) in nx.iter_mut().zip(dx).zip(problem.c()) {
+    let mut max_t = 0.0_f64;
+    for ((norm, &scale), &value) in max_x.iter_mut().zip(dx).zip(problem.c()) {
         let magnitude = if UNIT_SCALING {
             value.abs()
         } else {
             value.abs() * scale * dt
         };
         *norm = magnitude;
-        nt = nt.max(magnitude);
+        max_t = max_t.max(magnitude);
     }
-    for ((norm, &scale), &value) in ny.iter_mut().zip(dy).zip(problem.b()) {
+    for ((norm, &scale), &value) in max_y.iter_mut().zip(dy).zip(problem.b()) {
         let magnitude = if UNIT_SCALING {
             value.abs()
         } else {
             value.abs() * scale * dt
         };
         *norm = magnitude;
-        nt = nt.max(magnitude);
+        max_t = max_t.max(magnitude);
     }
     let (m, n) = problem.dims();
     faer::with_dim!(m, m);
@@ -287,43 +288,43 @@ fn row_norms<const UNIT_SCALING: bool>(
     {
         let dx = ColRef::from_slice(dx).as_row_shape(n);
         let dy = ColRef::from_slice(dy).as_row_shape(m);
-        let mut nx = nx.as_row_shape_mut(n);
-        let mut ny = ny.as_row_shape_mut(m);
+        let mut max_x = max_x.as_row_shape_mut(n);
+        let mut max_y = max_y.as_row_shape_mut(m);
         // P stores only its upper triangle, so each entry contributes to both rows.
         if let Some(p) = problem.p() {
             let p = p.as_faer().as_shape(n, n);
             for j in n.indices() {
                 let col_scale = dx[j];
-                let mut col_max = nx[j];
+                let mut col_max = max_x[j];
                 for (&i, &value) in p.row_idx_of_col_raw(j).iter().zip(p.val_of_col(j)) {
                     let magnitude = if UNIT_SCALING {
                         value.abs()
                     } else {
                         value.abs() * dx[i] * col_scale
                     };
-                    nx[i] = nx[i].max(magnitude);
+                    max_x[i] = max_x[i].max(magnitude);
                     col_max = col_max.max(magnitude);
                 }
-                nx[j] = col_max;
+                max_x[j] = col_max;
             }
         }
         let a = problem.a().as_faer().as_shape(m, n);
         for j in n.indices() {
             let col_scale = dx[j];
-            let mut col_max = nx[j];
+            let mut col_max = max_x[j];
             for (&i, &value) in a.row_idx_of_col_raw(j).iter().zip(a.val_of_col(j)) {
                 let magnitude = if UNIT_SCALING {
                     value.abs()
                 } else {
                     value.abs() * col_scale * dy[i]
                 };
-                ny[i] = ny[i].max(magnitude);
+                max_y[i] = max_y[i].max(magnitude);
                 col_max = col_max.max(magnitude);
             }
-            nx[j] = col_max;
+            max_x[j] = col_max;
         }
     }
-    nt
+    max_t
 }
 
 fn equalize_cone_norms(cones: &[Cone], mut norms: ColMut<'_, f64>) {

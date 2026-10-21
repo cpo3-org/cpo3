@@ -16,7 +16,7 @@ the API and solver behavior may change between releases.
 
 ## Install from source
 
-Requires Rust 1.89 or later, Python 3.10 or later, and [uv](https://docs.astral.sh/uv/).
+Requires Rust 1.91 or later, Python 3.10 or later, and [uv](https://docs.astral.sh/uv/).
 From the repository root:
 
 ```console

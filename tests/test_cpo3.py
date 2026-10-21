@@ -1,8 +1,4 @@
-import inspect
-import dataclasses
-import math
 from pathlib import Path
-from typing import Any
 
 import cpo3
 import numpy as np
@@ -134,6 +130,7 @@ def test_solves_mixed_equality_and_inequality_constraints() -> None:
     np.testing.assert_allclose(solution.s, [0.0, 3.0], atol=2e-6)
     assert solution.info.pobj == pytest.approx(4.5, abs=2e-6)
     assert solution.info.dobj == pytest.approx(4.5, abs=2e-6)
+
 
 def test_default_settings_match_in_rust_and_python() -> None:
     py_settings = cpo3.Settings()
