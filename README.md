@@ -102,6 +102,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Progress output
+
+Set `verbose=True` in Python or `verbose: true` in Rust to print the problem
+summary, iteration table, and termination status to stderr. Nonzero counts and
+fill percentages are reported separately for `P` and `A`;
+`P` counts and fill refer to the full symmetric matrix. Set the environment
+variable `CPO3_PROGRESS_DETAILS=1` to also show `mu`, `tau`, `sigma`, and
+the affine step. Detailed output still requires `verbose` to be enabled.
+
 ## Development
 
 Run the Rust and Python tests:

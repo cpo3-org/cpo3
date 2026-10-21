@@ -778,7 +778,6 @@ fn predictor_corrector_step(
         tau: step.state.tau(),
         sigma: Some(step.sigma),
         alpha_aff: Some(step.alpha_affine),
-        rho: Some(step.rho),
         alpha: Some(step.alpha),
     };
     Ok((step.state, diagnostics))
@@ -797,7 +796,6 @@ struct RecoveredSolution {
 struct StepDiagnostics {
     /// Keep the numerator to preserve recovery's division order.
     sy: f64,
-    rho: Option<f64>,
     mu: f64,
     tau: f64,
     sigma: Option<f64>,
@@ -819,7 +817,6 @@ impl StepDiagnostics {
             } else {
                 sy / embedding.nu() as f64
             },
-            rho: None,
             tau: state.tau(),
             sigma: None,
             alpha_aff: None,
@@ -867,7 +864,6 @@ impl RecoveredSolution {
             iteration,
             elapsed,
             mu: diagnostics.mu,
-            rho: diagnostics.rho,
             tau: Some(diagnostics.tau),
             sigma: diagnostics.sigma,
             alpha_aff: diagnostics.alpha_aff,
