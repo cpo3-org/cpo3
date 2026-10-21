@@ -60,7 +60,7 @@ impl Problem {
         if let Some(p) = &problem.p {
             validate_symmetry(p)?;
         }
-        problem.p = problem.p.map(crate::matrix::take_upper_triangle);
+        problem.p = problem.p.map(crate::linear_algebra::take_upper_triangle);
         Ok(problem)
     }
 
@@ -170,7 +170,7 @@ impl Problem {
     pub(crate) fn p_mul_opt(&self, vector: &[f64]) -> Option<Vec<f64>> {
         self.p().map(|p| {
             let mut product = Vec::new();
-            crate::matrix::symmetric_mul_into(p, vector, &mut product);
+            crate::linear_algebra::symmetric_mul_into(p, vector, &mut product);
             product
         })
     }

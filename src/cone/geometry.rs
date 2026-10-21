@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::matrix::binary_into;
+use crate::linear_algebra::binary_into;
 use faer::{ColMut, ColRef};
 
 use thiserror::Error;

@@ -133,9 +133,9 @@ Equation labels below refer to the paper source, `mpc_main.tex`.
 | `src/embedding.rs` | Homogeneous state, complementarity, and spherical normalization (`eq:iterate_normalisation`). |
 | `src/init.rs` | Canonical or CVXOPT cold starts and local-norm warm-start screening (`subsec:warm-start`). |
 | `src/mehrotra.rs` | Predictor, centering, second-order corrector, and damped boundary step (`subsec:mehrotra`). |
-| `src/josephy.rs` | Surrogate right-hand sides, cached data solve, scalar quadratic, and reconstruction (`eq:surrogate_rhs`, `eq:cached_data_solve`, `thm:resolvent`). |
+| `src/josephy/mod.rs` | Surrogate right-hand sides, cached data solve, scalar quadratic, and reconstruction (`eq:surrogate_rhs`, `eq:cached_data_solve`, `thm:resolvent`). |
 | `src/josephy/kkt.rs` | Sparse quasi-definite system (`eq:qd_system`), singleton Schur complement, and full-system refinement. |
-| `src/linear_system/` | Faer and Feral factorization adapters. |
+| `src/linear_solvers/` | Faer and Feral factorization adapters. |
 | `src/solution.rs` | Preparation, outer loop, original-unit stopping tests, certificates, and recovery (`subsec:termination`). |
 
 The implemented centering rule is `sigma = (1 - alpha_affine)^3`; the paper's

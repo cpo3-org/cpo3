@@ -389,10 +389,10 @@ fn solve_py(
 #[pyfunction(name = "_read_mps")]
 #[pyo3(signature = (path, *, first_named_set = false))]
 fn read_mps_py(py: Python<'_>, path: PathBuf, first_named_set: bool) -> PyResult<PyProblem> {
-    let options = crate::mps::MpsOptions { first_named_set };
-    match py.detach(move || crate::mps::read_with(path, options)) {
+    let options = crate::io::mps::MpsOptions { first_named_set };
+    match py.detach(move || crate::io::mps::read_with(path, options)) {
         Ok(inner) => Ok(PyProblem { inner }),
-        Err(error @ crate::mps::MpsError::Read { .. }) => {
+        Err(error @ crate::io::mps::MpsError::Read { .. }) => {
             Err(PyOSError::new_err(error.to_string()))
         }
         Err(error) => Err(PyValueError::new_err(error.to_string())),

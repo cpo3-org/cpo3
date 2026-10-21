@@ -7,7 +7,7 @@
 use super::JosephyError;
 use crate::{
     Cone, CscMatrix, MatrixError, Problem,
-    linear_system::{
+    linear_solvers::{
         Factorization, KktSettings, LinearAlgebraStats, LinearSystemError, RefinementWorkspace,
         refine_with,
     },
@@ -74,7 +74,7 @@ impl BoundRows {
         let mut singleton = vec![None; m];
         let mut counts = vec![0usize; m];
         if enabled {
-            crate::matrix::visit_entries(problem.a(), |row, column, value| {
+            crate::linear_algebra::visit_entries(problem.a(), |row, column, value| {
                 if value != 0.0 {
                     counts[row] += 1;
                     singleton[row] = Some((column, value));
@@ -285,8 +285,8 @@ impl KktPattern {
                 let mut solution =
                     self.solve_preconditioner(factorization, d_factor, &self.initial_residual)?;
                 let (solution_x, solution_y) = solution.split_at_mut(x.len());
-                crate::matrix::add_assign(solution_x, x);
-                crate::matrix::add_assign(solution_y, y);
+                crate::linear_algebra::add_assign(solution_x, x);
+                crate::linear_algebra::add_assign(solution_y, y);
                 solution
             }
             None => self.solve_preconditioner(factorization, d_factor, rhs)?,
@@ -461,7 +461,7 @@ fn assemble_sparse_k(
     for (row, &source) in bound_rows.kept.iter().enumerate() {
         reduced_rows[source] = n + row;
     }
-    crate::matrix::visit_entries(problem.a(), |source, _, value| {
+    crate::linear_algebra::visit_entries(problem.a(), |source, _, value| {
         let column = reduced_rows[source];
         if column != usize::MAX && value != 0.0 {
             pointers[column + 1] += 1;
@@ -495,7 +495,7 @@ fn assemble_sparse_k(
         next[column] += 1;
     }
     // A is visited in primal-column order, so each column of A^T is sorted.
-    crate::matrix::visit_entries(problem.a(), |source, row, value| {
+    crate::linear_algebra::visit_entries(problem.a(), |source, row, value| {
         let column = reduced_rows[source];
         if column != usize::MAX && value != 0.0 {
             rows[next[column]] = row;
@@ -525,10 +525,10 @@ pub(super) fn apply_full_system(
     let (out_x, out_y) = out.split_at_mut(n);
     let sign = |value: f64| if magnitudes { value.abs() } else { -value };
     if let Some(p) = problem.p() {
-        crate::matrix::symmetric_accumulate(p, x, [out_x], |product| [sign(product)]);
+        crate::linear_algebra::symmetric_accumulate(p, x, [out_x], |product| [sign(product)]);
     }
-    crate::matrix::update(out_x, x, |out, x| out + sign(shift * x));
-    crate::matrix::constraint_accumulate(problem.a(), x, y, [out_x], [out_y], |product| {
+    crate::linear_algebra::update(out_x, x, |out, x| out + sign(shift * x));
+    crate::linear_algebra::constraint_accumulate(problem.a(), x, y, [out_x], [out_y], |product| {
         [sign(product)]
     });
     faer::zip!(
@@ -557,7 +557,7 @@ pub(super) fn full_residual_and_denominator(
     let n = problem.variable_count();
     let (x, y) = u.split_at(n);
     if let Some(p) = problem.p() {
-        crate::matrix::symmetric_accumulate(
+        crate::linear_algebra::symmetric_accumulate(
             p,
             x,
             [&mut residual[..n], &mut denominator[..n]],
@@ -571,7 +571,7 @@ pub(super) fn full_residual_and_denominator(
     }
     let (residual_x, residual_y) = residual.split_at_mut(n);
     let (denominator_x, denominator_y) = denominator.split_at_mut(n);
-    crate::matrix::constraint_accumulate(
+    crate::linear_algebra::constraint_accumulate(
         problem.a(),
         x,
         y,

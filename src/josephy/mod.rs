@@ -15,13 +15,13 @@ use kkt::{KktPattern, factorize};
 
 use std::cell::OnceCell;
 
-use crate::matrix::dot;
+use crate::linear_algebra::dot;
 use thiserror::Error;
 
 use crate::{
     MatrixError, Problem,
     embedding::{EmbeddingError, State},
-    linear_system::{Factorization, KktSettings, LinearSystemError},
+    linear_solvers::{Factorization, KktSettings, LinearSystemError},
 };
 
 /// Failures while constructing a Josephy--Newton solve.
@@ -205,7 +205,7 @@ impl<'a> Resolvent<'a> {
             *out += state.tau() * c;
         }
         let mut primal_rhs: Vec<f64> = problem.b().iter().map(|b| -state.tau() * b).collect();
-        crate::matrix::constraint_accumulate(
+        crate::linear_algebra::constraint_accumulate(
             problem.a(),
             state.x(),
             state.y(),
@@ -213,7 +213,7 @@ impl<'a> Resolvent<'a> {
             [&mut primal_rhs[..]],
             |product| [product],
         );
-        crate::matrix::scale(&mut primal_rhs, -1.0);
+        crate::linear_algebra::scale(&mut primal_rhs, -1.0);
         #[cfg(test)]
         let rhs_offset = {
             let mut rhs = Vec::with_capacity(n + problem.constraint_count());
@@ -290,7 +290,7 @@ impl<'a> Resolvent<'a> {
         }
 
         let mut residual = rhs.to_vec();
-        crate::matrix::add_assign(&mut residual, &self.rhs_offset);
+        crate::linear_algebra::add_assign(&mut residual, &self.rhs_offset);
         self.solve_increment_rhs(&residual, r_tau, mu)
     }
 
@@ -339,13 +339,13 @@ impl<'a> Resolvent<'a> {
         base.clear();
         base.extend_from_slice(&increment);
         let (base_x, base_y) = base.split_at_mut(n);
-        crate::matrix::add_assign(base_x, self.state.x());
-        crate::matrix::add_assign(base_y, self.state.y());
+        crate::linear_algebra::add_assign(base_x, self.state.x());
+        crate::linear_algebra::add_assign(base_y, self.state.y());
         let (delta_tau, tau, used_tau_fallback) = match self.solve_tau_increment(&base, r_tau, mu) {
             Some((delta_tau, tau)) => (delta_tau, tau, false),
             None => {
                 // The fallback expects the point-coordinate particular solution.
-                crate::matrix::update(&mut base, self.direction, |base, direction| {
+                crate::linear_algebra::update(&mut base, self.direction, |base, direction| {
                     (-anchor_tau).mul_add(direction, base)
                 });
                 let q_constant = q_dot(self.problem, &base);
@@ -354,12 +354,12 @@ impl<'a> Resolvent<'a> {
             }
         };
         self.pattern.reconstruction = base;
-        crate::matrix::update(&mut increment, self.direction, |increment, direction| {
+        crate::linear_algebra::update(&mut increment, self.direction, |increment, direction| {
             delta_tau.mul_add(direction, increment)
         });
         let (x, y) = increment.split_at_mut(n);
-        crate::matrix::add_assign(x, self.state.x());
-        crate::matrix::add_assign(y, self.state.y());
+        crate::linear_algebra::add_assign(x, self.state.x());
+        crate::linear_algebra::add_assign(y, self.state.y());
         Ok(ResolventSolution {
             xy: increment,
             primal_len: n,

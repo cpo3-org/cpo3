@@ -343,7 +343,7 @@ impl Presolved {
         };
         let p = self.postsolve.reduce_warm_start(original.as_ref());
         let mut y = self.map.warm_dual(&p);
-        let ax = crate::matrix::matrix_mul(self.problem.a(), &p.x);
+        let ax = crate::linear_algebra::matrix_mul(self.problem.a(), &p.x);
         let mut s: Vec<_> = self
             .problem
             .b()

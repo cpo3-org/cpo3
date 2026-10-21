@@ -258,7 +258,7 @@ mod arithmetic_tests {
     #[test]
     fn rectangular_products_handle_explicit_sparse_zeros() {
         let canonical: CscMatrix =
-            crate::matrix::test_matrix(2, 3, vec![2.0, 0.0, -1.0, 0.0, 3.0, 4.0]).unwrap();
+            crate::linear_algebra::test_matrix(2, 3, vec![2.0, 0.0, -1.0, 0.0, 3.0, 4.0]).unwrap();
         let sparse: CscMatrix = CscMatrix::new(
             2,
             3,

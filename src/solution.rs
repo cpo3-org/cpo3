@@ -7,12 +7,12 @@ use crate::{
     LinearSolver, Problem, Settings,
     embedding::{Embedding, EmbeddingError, State},
     init::{self, WarmStart},
+    io::progress::{IterationRecord, ProgressReporter},
     josephy::KktCache,
-    linear_system::{KktSettings, LinearAlgebraStats},
-    matrix::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
+    linear_algebra::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
+    linear_solvers::{KktSettings, LinearAlgebraStats},
     mehrotra::{self, MehrotraError},
     presolve::{self, PresolveOutcome, Presolved},
-    progress::{IterationRecord, ProgressReporter},
     ruiz::EquilibratedProblem,
 };
 
@@ -406,7 +406,7 @@ impl Products {
     fn update(&mut self, problem: &Problem, x: &[f64], y: &[f64]) {
         matrix_products_into(problem.a(), x, y, &mut self.ax, &mut self.aty);
         if let Some(p) = problem.p() {
-            crate::matrix::symmetric_mul_into(p, x, &mut self.px);
+            crate::linear_algebra::symmetric_mul_into(p, x, &mut self.px);
         } else {
             self.px.resize(problem.variable_count(), 0.0);
             self.px.fill(0.0);
@@ -911,7 +911,7 @@ impl Ray {
         let px = problem.p_mul(&x);
         let (norm_x, norm_y) = (two_norm(&x), two_norm(&y));
         let pinfeas = two_norm(&aty) / bty.abs().max(norm_y).max(RECOVERY_EPS);
-        crate::matrix::add_assign(&mut ax, &s);
+        crate::linear_algebra::add_assign(&mut ax, &s);
         let violation = two_norm(&ax);
         let dinfeas = (violation / ctx.abs().max(norm_x + two_norm(&s)).max(RECOVERY_EPS))
             .max(two_norm(&px) / ctx.abs().max(norm_x).max(RECOVERY_EPS));
@@ -1144,9 +1144,9 @@ mod tests {
     #[test]
     fn measures_use_infinity_norms_and_equation_scales() {
         let problem = Problem::new(
-            Some(crate::matrix::test_matrix(2, 2, vec![2.0, 0.0, 0.0, 4.0]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.0, 0.0, 4.0]).unwrap()),
             vec![-3.0, 2.0],
-            crate::matrix::test_matrix(2, 2, vec![1.0, 2.0, -3.0, 1.0]).unwrap(),
+            crate::linear_algebra::test_matrix(2, 2, vec![1.0, 2.0, -3.0, 1.0]).unwrap(),
             vec![1.0, -2.0],
             vec![Cone::Nonnegative(2)],
         )
@@ -1181,11 +1181,15 @@ mod tests {
         // from 1 to 1e6. A stationarity defect of 1e-4 must not be hidden by it.
         let problem = Problem::new(
             Some(
-                crate::matrix::test_matrix(3, 3, vec![0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 1.0, 2.0])
-                    .unwrap(),
+                crate::linear_algebra::test_matrix(
+                    3,
+                    3,
+                    vec![0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 1.0, 2.0],
+                )
+                .unwrap(),
             ),
             vec![1.0, 0.0, 0.0],
-            crate::matrix::test_matrix(
+            crate::linear_algebra::test_matrix(
                 4,
                 3,
                 vec![1.0, 1e6, 0.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0],
@@ -1304,7 +1308,7 @@ mod tests {
         Problem::new(
             None,
             c,
-            crate::matrix::test_matrix(rows, columns, a).unwrap(),
+            crate::linear_algebra::test_matrix(rows, columns, a).unwrap(),
             b,
             vec![Cone::Nonnegative(rows)],
         )

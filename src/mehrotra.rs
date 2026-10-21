@@ -11,7 +11,7 @@ use crate::{
     cone::ConeGeometryError,
     embedding::{Embedding, EmbeddingError, State},
     josephy::{JosephyError, KktCache, Resolvent, ResolventSolution},
-    linear_system::KktSettings,
+    linear_solvers::KktSettings,
     settings::Settings,
 };
 
@@ -174,7 +174,7 @@ fn step_attempt(
 
     // `base + alpha (target - base)`, overwriting the corrector's buffers.
     let step_toward = |base: &[f64], target: &mut [f64]| {
-        crate::matrix::update(target, base, |target, base| {
+        crate::linear_algebra::update(target, base, |target, base| {
             alpha.mul_add(target - base, base)
         });
     };
@@ -415,7 +415,7 @@ fn difference(left: &[f64], right: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cone, LinearSolver, Problem, linear_system::LinearSystemError};
+    use crate::{Cone, LinearSolver, Problem, linear_solvers::LinearSystemError};
 
     const TOLERANCE: f64 = 1e-12;
 
@@ -492,7 +492,7 @@ mod tests {
         let problem = Problem::new(
             None,
             vec![-1.0],
-            crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+            crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
             vec![],
             vec![],
         )
@@ -615,9 +615,10 @@ mod tests {
 
     fn quadratic_problem() -> Problem {
         Problem::new(
-            Some(crate::matrix::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
             vec![0.5, -1.0],
-            crate::matrix::test_matrix(3, 2, vec![1.0, -2.0, 3.0, 0.25, -1.0, 1.0]).unwrap(),
+            crate::linear_algebra::test_matrix(3, 2, vec![1.0, -2.0, 3.0, 0.25, -1.0, 1.0])
+                .unwrap(),
             vec![1.5, -0.75, 2.0],
             vec![Cone::Zero(1), Cone::Nonnegative(2)],
         )
@@ -628,7 +629,7 @@ mod tests {
         Problem::new(
             None,
             vec![1.0, 2.0],
-            crate::matrix::test_matrix(2, 2, vec![1.0, 1.0, -1.0, 2.0]).unwrap(),
+            crate::linear_algebra::test_matrix(2, 2, vec![1.0, 1.0, -1.0, 2.0]).unwrap(),
             vec![1.0, 0.5],
             vec![Cone::Nonnegative(2)],
         )

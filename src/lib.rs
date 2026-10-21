@@ -3,16 +3,13 @@
 mod cone;
 mod embedding;
 mod init;
+mod io;
 mod josephy;
-mod linear_solver;
-mod linear_system;
-mod matrix;
+mod linear_algebra;
+mod linear_solvers;
 mod mehrotra;
-#[cfg(feature = "mps")]
-pub mod mps;
 mod presolve;
 mod problem;
-mod progress;
 mod ruiz;
 mod settings;
 mod solution;
@@ -22,9 +19,10 @@ mod python;
 
 pub use cone::Cone;
 pub use init::WarmStart;
-pub use linear_solver::LinearSolver;
-pub use linear_system::LinearAlgebraStats;
-pub use matrix::{CscMatrix, MatrixError};
+#[cfg(feature = "mps")]
+pub use io::mps;
+pub use linear_algebra::{CscMatrix, MatrixError};
+pub use linear_solvers::{LinearAlgebraStats, LinearSolver};
 pub use problem::{Problem, ProblemError};
 pub use settings::Settings;
 pub use solution::{Solution, SolutionInfo, SolveError, SolverStatus, solve, solve_from};
