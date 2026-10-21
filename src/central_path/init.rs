@@ -79,11 +79,7 @@ fn warm_state(
             continue;
         };
         if candidate.normalize_sphere(embedding.nu()).is_err()
-            || embedding.ensure_domain(&candidate).is_err()
-            || !embedding
-                .geometry()
-                .is_dual_interior(candidate.y())
-                .unwrap_or(false)
+            || embedding.validate_state(&candidate).is_err()
         {
             continue;
         }
@@ -237,15 +233,8 @@ fn cvxopt_state(
     crate::linear_algebra::scale(&mut y, scale);
     let state = State::new(x, s, y, scale).map_err(|error| error.to_string())?;
     embedding
-        .ensure_domain(&state)
+        .validate_state(&state)
         .map_err(|error| error.to_string())?;
-    if !embedding
-        .geometry()
-        .is_dual_interior(state.y())
-        .map_err(|error| error.to_string())?
-    {
-        return Err(EmbeddingError::NonInteriorPoint.to_string());
-    }
     Ok(state)
 }
 
@@ -450,7 +439,7 @@ mod tests {
             assert_eq!(state.s(), [0.0, beta.sqrt()]);
             assert_close(embedding.duality_measure(&state), beta, 1e-12);
             assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
-            embedding.ensure_domain(&state).unwrap();
+            embedding.validate_state(&state).unwrap();
             assert_eq!(report.cvxopt_init_used, Some(false));
             assert_ne!(scaled.unscale_s(state.s()), state.s());
         }

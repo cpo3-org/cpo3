@@ -178,13 +178,13 @@ fn step_attempt(
             alpha.mul_add(target - base, base)
         });
     };
-    let (x, y) = centered.xy.split_at_mut(centered.primal_len);
+    let (x, y) = centered.xy.split_at_mut(centered.x_len);
     step_toward(state.x(), x);
     step_toward(state.s(), &mut slack);
     step_toward(state.y(), y);
     let next = embedding.accept_state(
         centered.xy,
-        centered.primal_len,
+        centered.x_len,
         slack,
         accepted_tau(state.tau(), centered.tau, alpha)?,
     )?;
@@ -225,7 +225,7 @@ impl Scaling {
         }
         // Initialization and acceptance establish the interior invariant;
         // checked sphere normalization preserves it between iterations.
-        debug_assert!(embedding.ensure_domain(state).is_ok());
+        debug_assert!(embedding.validate_state(state).is_ok());
         let mut d = vec![0.0; state.s().len()];
         let mut y_inverse = vec![0.0; state.y().len()];
         embedding
@@ -772,7 +772,7 @@ mod tests {
         let mut pure = Predictor {
             affine: ResolventSolution {
                 xy: state.x().iter().chain(state.y()).copied().collect(),
-                primal_len: state.x().len(),
+                x_len: state.x().len(),
                 tau: state.tau(),
                 used_tau_fallback: false,
             },
@@ -817,7 +817,7 @@ mod tests {
                 assert!(result.alpha > 0.0 && result.alpha <= 1.0);
                 assert!(result.alpha_affine > 0.0 && result.alpha_affine <= 1.0);
                 assert!((0.0..=1.0).contains(&result.sigma));
-                embedding.ensure_domain(&result.state).unwrap();
+                embedding.validate_state(&result.state).unwrap();
                 assert!(
                     embedding
                         .geometry()

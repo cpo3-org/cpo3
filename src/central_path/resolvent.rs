@@ -65,7 +65,7 @@ impl ResolventError {
 pub(crate) struct ResolventSolution {
     /// Contiguous primal/dual result, moved directly into an accepted State.
     pub(crate) xy: Vec<f64>,
-    pub(crate) primal_len: usize,
+    pub(crate) x_len: usize,
     /// Nonnegative subproblem candidate; the accepted iterate stays positive.
     pub(crate) tau: f64,
     pub(crate) used_tau_fallback: bool,
@@ -73,11 +73,11 @@ pub(crate) struct ResolventSolution {
 
 impl ResolventSolution {
     pub(crate) fn x(&self) -> &[f64] {
-        &self.xy[..self.primal_len]
+        &self.xy[..self.x_len]
     }
 
     pub(crate) fn y(&self) -> &[f64] {
-        &self.xy[self.primal_len..]
+        &self.xy[self.x_len..]
     }
 }
 
@@ -362,7 +362,7 @@ impl<'a> Resolvent<'a> {
         crate::linear_algebra::add_assign(y, self.state.y());
         Ok(ResolventSolution {
             xy: increment,
-            primal_len: n,
+            x_len: n,
             tau,
             used_tau_fallback,
         })
