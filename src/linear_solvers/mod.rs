@@ -195,11 +195,6 @@ impl Factorization {
     }
 
     #[cfg(test)]
-    pub(crate) fn dim(&self) -> usize {
-        self.diagonal.len()
-    }
-
-    #[cfg(test)]
     pub(crate) fn solve(
         &mut self,
         matrix: &CscMatrix,

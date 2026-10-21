@@ -7,13 +7,13 @@
 
 use thiserror::Error;
 
-use crate::{
-    cone::ConeGeometryError,
+use super::{
     embedding::{Embedding, EmbeddingError, State},
-    josephy::{JosephyError, KktCache, Resolvent, ResolventSolution},
-    linear_solvers::KktSettings,
-    settings::Settings,
+    kkt::KktCache,
+    resolvent::{Resolvent, ResolventError, ResolventSolution},
 };
+
+use crate::{cone::ConeGeometryError, linear_solvers::KktSettings, settings::Settings};
 
 #[derive(Clone, Debug, Error, PartialEq)]
 pub(crate) enum MehrotraError {
@@ -22,7 +22,7 @@ pub(crate) enum MehrotraError {
     #[error(transparent)]
     ConeGeometry(#[from] ConeGeometryError),
     #[error(transparent)]
-    Josephy(#[from] JosephyError),
+    Resolvent(#[from] ResolventError),
     #[error("the duality measure {0} must be finite and strictly positive")]
     InvalidDualityMeasure(f64),
 }
@@ -121,7 +121,7 @@ fn with_clamp_retries<T>(
 }
 
 fn retryable(error: &MehrotraError) -> bool {
-    matches!(error, MehrotraError::Josephy(inner) if inner.is_numerical())
+    matches!(error, MehrotraError::Resolvent(inner) if inner.is_numerical())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -430,7 +430,7 @@ mod tests {
                 assert!(!trial.strict_refinement);
                 floors.push(trial.diagonal_floor);
                 if floors.len() < 3 {
-                    Err(JosephyError::InvalidTauPolynomial.into())
+                    Err(ResolventError::InvalidTauPolynomial.into())
                 } else {
                     Ok(())
                 }
@@ -461,7 +461,7 @@ mod tests {
     fn adaptive_clamp_is_bounded_and_skips_nonnumerical_failures() {
         let settings = KktSettings::new(LinearSolver::Faer);
         let mut cache = KktCache::new();
-        let error = MehrotraError::Josephy(LinearSystemError::Singular.into());
+        let error = MehrotraError::Resolvent(LinearSystemError::Singular.into());
         let mut floors = Vec::new();
         let result: Result<(), _> =
             with_clamp_retries(&settings, 1e-14, &mut cache, |trial, _, _| {
@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(*floors.last().unwrap(), 1e-4);
         assert!(floors.len() <= 10);
         assert!(floors.windows(2).all(|w| w[1] > w[0]));
-        let error = MehrotraError::Josephy(JosephyError::IncorrectRhsLength {
+        let error = MehrotraError::Resolvent(ResolventError::IncorrectRhsLength {
             argument: "test",
             expected: 2,
             actual: 1,

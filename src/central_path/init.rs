@@ -1,10 +1,13 @@
 //! Initial points: canonical and CVXOPT-style cold starts, and cpo3-style
 //! warm screening.
 
+use super::{
+    embedding::{Embedding, EmbeddingError, State},
+    kkt::{KktCache, solve_shifted_systems},
+};
+
 use crate::{
     Settings,
-    embedding::{Embedding, EmbeddingError, State},
-    josephy::{KktCache, solve_shifted_systems},
     linear_algebra::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
     linear_solvers::KktSettings,
     ruiz::EquilibratedProblem,

@@ -2,9 +2,8 @@
 //!
 //! Singleton elimination implements the Schur complement in "Reduction of KKT
 //! system". Refinement evaluates the full shifted system, including recovered
-//! duals. These transformations leave the Josephy equations unchanged.
+//! duals. Shared by initialization and the resolvent.
 
-use super::JosephyError;
 use crate::{
     Cone, CscMatrix, MatrixError, Problem,
     linear_solvers::{
@@ -12,6 +11,38 @@ use crate::{
         refine_with,
     },
 };
+use thiserror::Error;
+
+/// Failures while assembling or solving a shifted KKT system.
+#[derive(Clone, Debug, Error, PartialEq)]
+pub(crate) enum KktError {
+    #[error(transparent)]
+    LinearSystem(#[from] LinearSystemError),
+    #[error(transparent)]
+    Matrix(#[from] MatrixError),
+    #[error("invalid KKT shift, regularization, or diagonal dimension")]
+    InvalidParameters,
+    #[error("the KKT diagonal must be finite and strictly positive")]
+    InvalidDiagonal,
+    #[error("KKT right-hand side has length {actual}, expected {expected}")]
+    IncorrectRhsLength { expected: usize, actual: usize },
+}
+
+impl KktError {
+    pub(crate) fn is_numerical(&self) -> bool {
+        matches!(
+            self,
+            Self::InvalidDiagonal
+                | Self::LinearSystem(
+                    LinearSystemError::Singular
+                        | LinearSystemError::WrongInertia { .. }
+                        | LinearSystemError::RefinementDiverged(_)
+                        | LinearSystemError::Factorization(_)
+                        | LinearSystemError::NonFiniteRightHandSide
+                )
+        )
+    }
+}
 
 /// Per-solve cache: the KKT sparsity pattern and a reusable factorization.
 ///
@@ -20,38 +51,38 @@ use crate::{
 /// reused through `refactor`.
 #[derive(Default)]
 pub(crate) struct KktCache {
-    pub(super) pattern: Option<KktPattern>,
-    pub(super) factorization: Option<Factorization>,
+    pub(crate) pattern: Option<KktPattern>,
+    pub(crate) factorization: Option<Factorization>,
     /// The constant `(-c, b)` right-hand side, built on first use.
-    pub(super) constant_rhs: Vec<f64>,
+    pub(crate) constant_rhs: Vec<f64>,
     /// Its latest solution, retained across outer iterations of this solve.
-    pub(super) direction: Vec<f64>,
+    pub(crate) direction: Vec<f64>,
     /// Retain ownership of the preceding seed until the outer step succeeds.
-    pub(super) direction_before_step: Option<Vec<f64>>,
+    pub(crate) direction_before_step: Option<Vec<f64>>,
     /// Adaptive diagonal clamp, applied only to the preconditioner.
     pub(crate) clamp_floor: Option<f64>,
     pub(crate) clamp_increases: usize,
     pub(crate) clamp_decreases: usize,
     /// Numeric dispatches, including failed initial factorizations.
-    pub(super) factorizations: usize,
+    pub(crate) factorizations: usize,
 }
 
 /// The reduced KKT matrix pattern: bound rows are eliminated by Schur
 /// complement, so the matrix has `n + kept` rows.
-pub(super) struct KktPattern {
+pub(crate) struct KktPattern {
     variable_count: usize,
     /// Position of each diagonal entry in the matrix's value storage.
-    pub(super) diagonal_positions: Vec<usize>,
+    pub(crate) diagonal_positions: Vec<usize>,
     /// Diagonal of `P`.
     p_diagonal: Vec<f64>,
-    pub(super) bound_rows: BoundRows,
+    pub(crate) bound_rows: BoundRows,
     /// Full-system residual used for the first correction of a warm start.
     initial_residual: Vec<f64>,
     refinement: RefinementWorkspace,
     /// The perturbation is shared by every RHS of the current factorization.
     perturbation_ready: bool,
     /// Scratch storage reused by predictor/corrector reconstruction within a solve.
-    pub(super) reconstruction: Vec<f64>,
+    pub(crate) reconstruction: Vec<f64>,
 }
 
 /// Nonnegative singleton rows of `A`, eliminated from the factorized system.
@@ -61,11 +92,11 @@ pub(super) struct KktPattern {
 /// `a^2 / d_i` to the `(j, j)` diagonal and `a r_i / d_i` to the `x_j`
 /// right-hand side.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct BoundRows {
+pub(crate) struct BoundRows {
     /// `(row, column, coefficient)` of each eliminated row.
-    pub(super) eliminated: Vec<(usize, usize, f64)>,
+    pub(crate) eliminated: Vec<(usize, usize, f64)>,
     /// Original row index of each kept row.
-    pub(super) kept: Vec<usize>,
+    pub(crate) kept: Vec<usize>,
 }
 
 impl BoundRows {
@@ -140,16 +171,82 @@ impl KktCache {
     }
 }
 
+/// Solve `[P + shift I, A^T; A, -(H + shift I)] z = rhs` for each stacked
+/// right-hand side on one factorization. The factor adds `regularization`
+/// to both diagonals so that a zero (1,1) block or zero rows of `H` stay
+/// quasi-definite; refinement targets the unregularized shifted system.
+/// The factorization stays cached for later resolvents to update in place.
+pub(crate) fn solve_shifted_systems(
+    problem: &Problem,
+    h_diagonal: &[f64],
+    shift: f64,
+    regularization: f64,
+    kkt: &KktSettings,
+    cache: &mut KktCache,
+    right_hand_sides: &[Vec<f64>],
+) -> Result<Vec<Vec<f64>>, KktError> {
+    if !shift.is_finite()
+        || shift < 0.0
+        || !regularization.is_finite()
+        || regularization <= 0.0
+        || h_diagonal.len() != problem.constraint_count()
+    {
+        return Err(KktError::InvalidParameters);
+    }
+    let d_diagonal = h_diagonal
+        .iter()
+        .map(|entry| entry + shift)
+        .collect::<Vec<_>>();
+    let d_factor = h_diagonal
+        .iter()
+        .map(|entry| (entry + shift + regularization).max(kkt.diagonal_floor))
+        .collect::<Vec<_>>();
+    factorize(problem, shift + regularization, &d_factor, kkt, cache)?;
+    let KktCache {
+        pattern,
+        factorization,
+        ..
+    } = cache;
+    let pattern = pattern.as_mut().expect("the pattern was just stored");
+    let factorization = factorization
+        .as_mut()
+        .expect("the factorization was just stored");
+    right_hand_sides
+        .iter()
+        .map(|rhs| {
+            let expected = problem.variable_count() + problem.constraint_count();
+            if rhs.len() != expected {
+                return Err(KktError::IncorrectRhsLength {
+                    expected,
+                    actual: rhs.len(),
+                });
+            }
+            if !rhs.iter().all(|value| value.is_finite()) {
+                return Err(LinearSystemError::NonFiniteRightHandSide.into());
+            }
+            Ok(pattern.solve(
+                problem,
+                factorization,
+                shift,
+                &d_diagonal,
+                &d_factor,
+                rhs,
+                None,
+            )?)
+        })
+        .collect()
+}
+
 /// Factorize the clamped preconditioner `[P + shift I, A^T; A, -diag(d)]`
 /// with `d = factor_diagonal`, reusing the cached pattern and symbolic
 /// analysis when present, and reject factors with the wrong inertia.
-pub(super) fn factorize(
+pub(crate) fn factorize(
     problem: &Problem,
     shift: f64,
     factor_diagonal: &[f64],
     kkt: &KktSettings,
     cache: &mut KktCache,
-) -> Result<(), JosephyError> {
+) -> Result<(), KktError> {
     if let Some(pattern) = cache.pattern.as_mut() {
         pattern.perturbation_ready = false;
     }
@@ -189,7 +286,7 @@ pub(super) fn factorize(
         .as_mut()
         .expect("the factorization was just stored")
         .check_inertia(problem.variable_count())
-        .map_err(JosephyError::from)
+        .map_err(KktError::from)
 }
 
 /// Assemble the clamped preconditioner with bound rows folded into the
@@ -203,13 +300,13 @@ pub(crate) fn assemble_preconditioner(
     diagonal_floor: f64,
     eliminate_bound_rows: bool,
     cache: &mut KktCache,
-) -> Result<CscMatrix, JosephyError> {
+) -> Result<CscMatrix, KktError> {
     if d_diagonal.len() != problem.constraint_count()
         || !d_diagonal
             .iter()
             .all(|value| value.is_finite() && *value > 0.0)
     {
-        return Err(JosephyError::InvalidTauPolynomial);
+        return Err(KktError::InvalidDiagonal);
     }
     // Assembly owns the only full CSC matrix; the cache retains just the
     // metadata needed for diagonal updates and bound-row reconstruction.
@@ -231,7 +328,7 @@ pub(crate) fn assemble_preconditioner(
 impl KktPattern {
     /// Clamp the full primal diagonal before adding singleton Schur terms.
     /// `d_diagonal` contains the already clamped factor dual diagonal.
-    pub(super) fn write_diagonal(
+    pub(crate) fn write_diagonal(
         &self,
         values: &mut [f64],
         position: impl Fn(usize) -> usize,
@@ -255,7 +352,7 @@ impl KktPattern {
     /// Refine against the full true system while applying the clamped
     /// preconditioner, with or without singleton elimination.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn solve(
+    pub(crate) fn solve(
         &mut self,
         problem: &Problem,
         factorization: &mut Factorization,
@@ -348,7 +445,7 @@ impl KktPattern {
 
     /// One reduced solve: fold the bound-row right-hand sides into `x`, solve
     /// `n + kept` rows, and recover the eliminated duals.
-    pub(super) fn solve_preconditioner(
+    pub(crate) fn solve_preconditioner(
         &self,
         factorization: &mut Factorization,
         d_diagonal: &[f64],
@@ -394,12 +491,12 @@ impl KktPattern {
     }
 }
 
-pub(super) fn build_pattern(
+pub(crate) fn build_pattern(
     problem: &Problem,
     shift: f64,
     d_diagonal: &[f64],
     eliminate_bound_rows: bool,
-) -> Result<(CscMatrix, KktPattern), JosephyError> {
+) -> Result<(CscMatrix, KktPattern), KktError> {
     let n = problem.variable_count();
     let bound_rows = BoundRows::detect(problem, eliminate_bound_rows);
     let matrix = assemble_sparse_k(problem, shift, d_diagonal, &bound_rows)?;
@@ -440,7 +537,7 @@ fn assemble_sparse_k(
     shift: f64,
     d_diagonal: &[f64],
     bound_rows: &BoundRows,
-) -> Result<CscMatrix, JosephyError> {
+) -> Result<CscMatrix, KktError> {
     let n = problem.variable_count();
     let m = bound_rows.kept.len();
     let dim = n.checked_add(m).ok_or(MatrixError::DimensionOverflow)?;
@@ -513,7 +610,7 @@ fn assemble_sparse_k(
 
 /// `out -= K u` for the full shifted matrix `K = [P + shift I, A^T; A, -diag(d)]`,
 /// or `out += |K| |u|` when `magnitudes`.
-pub(super) fn apply_full_system(
+pub(crate) fn apply_full_system(
     problem: &Problem,
     shift: f64,
     d_diagonal: &[f64],
@@ -541,7 +638,7 @@ pub(super) fn apply_full_system(
 
 /// Initialize the residual and its componentwise denominator in one sparse pass.
 /// Faer has no fused signed/absolute product, so keep this traversal allocation-free.
-pub(super) fn full_residual_and_denominator(
+pub(crate) fn full_residual_and_denominator(
     problem: &Problem,
     shift: f64,
     d_diagonal: &[f64],
@@ -586,7 +683,7 @@ pub(super) fn full_residual_and_denominator(
     }
 }
 
-pub(super) fn matrix_value(matrix: &CscMatrix, row: usize, column: usize) -> f64 {
+pub(crate) fn matrix_value(matrix: &CscMatrix, row: usize, column: usize) -> f64 {
     matrix.get(row.min(column), row.max(column)).unwrap_or(0.0)
 }
 
