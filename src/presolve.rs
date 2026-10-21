@@ -187,7 +187,7 @@ pub(crate) fn presolve(
                     _ => unreachable!("presolve emitted an unsupported cpo3 cone"),
                 })
                 .collect();
-            let problem = Problem::from_presolved(
+            let problem = Problem::from_validated(
                 p.p.map(crate::CscMatrix::from_native),
                 p.c,
                 crate::CscMatrix::from_native(p.a),

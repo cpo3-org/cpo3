@@ -914,7 +914,7 @@ impl Ray {
     ) -> Self {
         let x = equilibrated.unscale_x(x);
         let y = equilibrated.unscale_y(y);
-        let s = equilibrated.unscale_s_by(s, 1.0);
+        let s = equilibrated.unscale_s(s);
         let bty = dot(problem.b(), &y);
         let ctx = dot(problem.c(), &x);
         let aty = matrix_transpose_mul(problem.a(), &y);

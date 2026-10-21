@@ -34,8 +34,8 @@ pub struct Problem {
 }
 
 impl Problem {
-    /// The presolve builder preserves dimensions, upper-triangle storage, and cone blocks.
-    pub(crate) fn from_presolved(
+    /// Construct from validated data with upper-triangular P, without rechecking it.
+    pub(crate) fn from_validated(
         p: Option<CscMatrix>,
         c: Vec<f64>,
         a: CscMatrix,

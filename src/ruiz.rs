@@ -1,6 +1,6 @@
 //! One-time equilibration of the homogeneous problem data.
 
-use faer::{Col, ColMut};
+use faer::{Col, ColMut, ColRef};
 use std::borrow::Cow;
 
 use crate::{Cone, CscMatrix, Problem, Settings, SolveError};
@@ -17,8 +17,8 @@ use crate::{Cone, CscMatrix, Problem, Settings, SolveError};
 /// ```
 pub(crate) struct EquilibratedProblem<'a> {
     problem: Cow<'a, Problem>,
-    dx: Col<f64>,
-    dy: Col<f64>,
+    dx: Vec<f64>,
+    dy: Vec<f64>,
     dt: f64,
 }
 
@@ -27,8 +27,8 @@ impl<'a> EquilibratedProblem<'a> {
         let (m, n) = problem.dims();
         Self {
             problem: Cow::Borrowed(problem),
-            dx: Col::ones(n),
-            dy: Col::ones(m),
+            dx: vec![1.0; n],
+            dy: vec![1.0; m],
             dt: 1.0,
         }
     }
@@ -40,7 +40,7 @@ impl<'a> EquilibratedProblem<'a> {
     pub(crate) fn scale_x(&self, values: &[f64]) -> Vec<f64> {
         values
             .iter()
-            .zip(self.dx.iter())
+            .zip(&self.dx)
             .map(|(&x, &dx)| x * self.dt / dx)
             .collect()
     }
@@ -48,7 +48,7 @@ impl<'a> EquilibratedProblem<'a> {
     pub(crate) fn scale_y(&self, values: &[f64]) -> Vec<f64> {
         values
             .iter()
-            .zip(self.dy.iter())
+            .zip(&self.dy)
             .map(|(&y, &dy)| y * self.dt / dy)
             .collect()
     }
@@ -56,61 +56,57 @@ impl<'a> EquilibratedProblem<'a> {
     pub(crate) fn scale_s(&self, values: &[f64]) -> Vec<f64> {
         values
             .iter()
-            .zip(self.dy.iter())
+            .zip(&self.dy)
             .map(|(&s, &dy)| dy * (s * self.dt))
             .collect()
     }
 
     pub(crate) fn unscale_x(&self, values: &[f64]) -> Vec<f64> {
-        values
-            .iter()
-            .zip(self.dx.iter())
-            .map(|(&x, &dx)| dx * x / self.dt)
-            .collect()
-    }
-
-    pub(crate) fn unscale_y(&self, values: &[f64]) -> Vec<f64> {
-        values
-            .iter()
-            .zip(self.dy.iter())
-            .map(|(&y, &dy)| dy * y / self.dt)
-            .collect()
-    }
-
-    /// Write `unscale_x(values * factor)` to `out`.
-    pub(crate) fn unscale_x_into(&self, values: &[f64], factor: f64, out: &mut Vec<f64>) {
-        out.clear();
-        out.extend(
-            values
-                .iter()
-                .zip(self.dx.iter())
-                .map(|(&x, &dx)| dx * (x * factor) / self.dt),
-        );
-    }
-
-    pub(crate) fn unscale_y_into(&self, values: &[f64], factor: f64, out: &mut Vec<f64>) {
-        out.clear();
-        out.extend(
-            values
-                .iter()
-                .zip(self.dy.iter())
-                .map(|(&y, &dy)| dy * (y * factor) / self.dt),
-        );
-    }
-
-    pub(crate) fn unscale_s_by(&self, values: &[f64], factor: f64) -> Vec<f64> {
         let mut out = Vec::new();
-        self.unscale_s_into(values, factor, &mut out);
+        self.unscale_x_into(values, 1.0, &mut out);
         out
     }
 
-    pub(crate) fn unscale_s_into(&self, values: &[f64], factor: f64, out: &mut Vec<f64>) {
+    pub(crate) fn unscale_y(&self, values: &[f64]) -> Vec<f64> {
+        let mut out = Vec::new();
+        self.unscale_y_into(values, 1.0, &mut out);
+        out
+    }
+
+    pub(crate) fn unscale_s(&self, values: &[f64]) -> Vec<f64> {
+        let mut out = Vec::new();
+        self.unscale_s_into(values, 1.0, &mut out);
+        out
+    }
+
+    /// Write `unscale_x(values * inverse_tau)` to `out`.
+    pub(crate) fn unscale_x_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
         out.clear();
         out.extend(
             values
                 .iter()
-                .zip(self.dy.iter())
-                .map(|(&s, &dy)| (s * factor) / (self.dt * dy)),
+                .zip(&self.dx)
+                .map(|(&x, &dx)| dx * (x * inverse_tau) / self.dt),
+        );
+    }
+
+    pub(crate) fn unscale_y_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
+        out.clear();
+        out.extend(
+            values
+                .iter()
+                .zip(&self.dy)
+                .map(|(&y, &dy)| dy * (y * inverse_tau) / self.dt),
+        );
+    }
+
+    pub(crate) fn unscale_s_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
+        out.clear();
+        out.extend(
+            values
+                .iter()
+                .zip(&self.dy)
+                .map(|(&s, &dy)| (s * inverse_tau) / (self.dt * dy)),
         );
     }
 
@@ -119,8 +115,8 @@ impl<'a> EquilibratedProblem<'a> {
             return Ok(Self::unscaled(problem));
         }
         let (m, n) = problem.dims();
-        let mut dx = Col::<f64>::ones(n);
-        let mut dy = Col::<f64>::ones(m);
+        let mut dx = vec![1.0_f64; n];
+        let mut dy = vec![1.0_f64; m];
         let mut dt = 1.0_f64;
 
         let mut nx = Col::zeros(n);
@@ -137,16 +133,16 @@ impl<'a> EquilibratedProblem<'a> {
                 break;
             }
 
-            faer::zip!(&mut dx, &nx).for_each(|faer::unzip!(scale, norm)| {
+            for (scale, norm) in dx.iter_mut().zip(nx.iter()) {
                 if *norm > 0.0 {
                     *scale /= norm.sqrt();
                 }
-            });
-            faer::zip!(&mut dy, &ny).for_each(|faer::unzip!(scale, norm)| {
+            }
+            for (scale, norm) in dy.iter_mut().zip(ny.iter()) {
                 if *norm > 0.0 {
                     *scale /= norm.sqrt();
                 }
-            });
+            }
             if nt > 0.0 {
                 dt /= nt.sqrt();
             }
@@ -167,20 +163,9 @@ impl<'a> EquilibratedProblem<'a> {
         }
         let p = problem.p().map(|p| scale_matrix(p, &dx, &dx)).transpose()?;
         let a = scale_matrix(problem.a(), &dy, &dx)?;
-        let c = problem
-            .c()
-            .iter()
-            .zip(dx.iter())
-            .map(|(&c, &dx)| dt * dx * c)
-            .collect();
-        let b = problem
-            .b()
-            .iter()
-            .zip(dy.iter())
-            .map(|(&b, &dy)| dt * dy * b)
-            .collect();
-        let scaled = Problem::from_upper_triangle(p, c, a, b, problem.cones().to_vec())
-            .map_err(|error| SolveError::Numerical(error.to_string()))?;
+        let c = scale_vector(problem.c(), &dx, dt)?;
+        let b = scale_vector(problem.b(), &dy, dt)?;
+        let scaled = Problem::from_validated(p, c, a, b, problem.cones().to_vec());
         Ok(Self {
             problem: Cow::Owned(scaled),
             dx,
@@ -199,49 +184,68 @@ fn converged(nx: &Col<f64>, ny: &Col<f64>, nt: f64, tol: f64) -> bool {
 }
 
 #[inline]
-fn is_identity(dx: &Col<f64>, dy: &Col<f64>, dt: f64) -> bool {
+fn is_identity(dx: &[f64], dy: &[f64], dt: f64) -> bool {
     dx.iter()
-        .chain(dy.iter())
+        .chain(dy)
         .chain(std::iter::once(&dt))
         .all(|&scale| scale == 1.0)
 }
 
 #[inline]
-fn valid(dx: &Col<f64>, dy: &Col<f64>, dt: f64) -> bool {
+fn valid(dx: &[f64], dy: &[f64], dt: f64) -> bool {
     // Non-short-circuiting `&` enables SIMD vectorization; benchmarks showed
     // this reduction is faster than the short-circuiting `any` check.
     dx.iter()
-        .chain(dy.iter())
+        .chain(dy)
         .chain(std::iter::once(&dt))
         .fold(true, |valid, &scale| {
             valid & (scale > 0.0) & (scale <= f64::MAX)
         })
 }
 
+fn scale_vector(values: &[f64], scales: &[f64], dt: f64) -> Result<Vec<f64>, SolveError> {
+    let mut finite = true;
+    let scaled = values
+        .iter()
+        .zip(scales)
+        .map(|(&value, &scale)| {
+            let scaled = dt * scale * value;
+            finite &= scaled.is_finite();
+            scaled
+        })
+        .collect();
+    if !finite {
+        return Err(SolveError::Numerical("non-finite scaled vector".into()));
+    }
+    Ok(scaled)
+}
+
 /// Apply the cumulative factors once to the original matrix coefficients.
-fn scale_matrix(
-    matrix: &CscMatrix,
-    rows: &Col<f64>,
-    cols: &Col<f64>,
-) -> Result<CscMatrix, SolveError> {
+fn scale_matrix(matrix: &CscMatrix, rows: &[f64], cols: &[f64]) -> Result<CscMatrix, SolveError> {
     faer::with_dim!(m, matrix.rows());
     faer::with_dim!(n, matrix.columns());
-    let rows = rows.as_row_shape(m);
-    let cols = cols.as_row_shape(n);
+    let rows = ColRef::from_slice(rows).as_row_shape(m);
+    let cols = ColRef::from_slice(cols).as_row_shape(n);
     let orig = matrix.as_faer().as_shape(m, n);
     let mut vals = Vec::with_capacity(matrix.values().len());
+    let mut finite = true;
     for j in n.indices() {
         let col_scale = cols[j];
         vals.extend(
             orig.row_idx_of_col_raw(j)
                 .iter()
                 .zip(orig.val_of_col(j))
-                .map(|(&i, &value)| value * (rows[i] * col_scale)),
+                .map(|(&i, &value)| {
+                    let scaled = value * (rows[i] * col_scale);
+                    finite &= scaled.is_finite();
+                    scaled
+                }),
         );
     }
-    matrix
-        .with_values(vals)
-        .map_err(|error| SolveError::Numerical(error.to_string()))
+    if !finite {
+        return Err(SolveError::Numerical("non-finite scaled matrix".into()));
+    }
+    Ok(matrix.with_values(vals))
 }
 
 /// Row infinity norms of the cumulatively scaled [P Aᵀ c; A 0 b; cᵀ bᵀ 0].
@@ -249,8 +253,8 @@ fn scale_matrix(
 /// The first iteration uses unit factors and skips their multiplications.
 fn row_norms<const UNIT_SCALING: bool>(
     problem: &Problem,
-    dx: &Col<f64>,
-    dy: &Col<f64>,
+    dx: &[f64],
+    dy: &[f64],
     dt: f64,
     nx: &mut Col<f64>,
     ny: &mut Col<f64>,
@@ -261,8 +265,8 @@ fn row_norms<const UNIT_SCALING: bool>(
     faer::with_dim!(m, m);
     faer::with_dim!(n, n);
     {
-        let dx = dx.as_row_shape(n);
-        let dy = dy.as_row_shape(m);
+        let dx = ColRef::from_slice(dx).as_row_shape(n);
+        let dy = ColRef::from_slice(dy).as_row_shape(m);
         let mut nx = nx.as_row_shape_mut(n);
         let mut ny = ny.as_row_shape_mut(m);
         // P stores only its upper triangle, so each entry contributes to both rows.
@@ -300,7 +304,7 @@ fn row_norms<const UNIT_SCALING: bool>(
         }
     }
     let mut nt = 0.0_f64;
-    for ((norm, &scale), &value) in nx.iter_mut().zip(dx.iter()).zip(problem.c()) {
+    for ((norm, &scale), &value) in nx.iter_mut().zip(dx).zip(problem.c()) {
         let magnitude = if UNIT_SCALING {
             value.abs()
         } else {
@@ -309,7 +313,7 @@ fn row_norms<const UNIT_SCALING: bool>(
         *norm = norm.max(magnitude);
         nt = nt.max(magnitude);
     }
-    for ((norm, &scale), &value) in ny.iter_mut().zip(dy.iter()).zip(problem.b()) {
+    for ((norm, &scale), &value) in ny.iter_mut().zip(dy).zip(problem.b()) {
         let magnitude = if UNIT_SCALING {
             value.abs()
         } else {

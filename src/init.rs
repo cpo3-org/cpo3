@@ -449,7 +449,7 @@ mod tests {
             assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
             embedding.ensure_domain(&state).unwrap();
             assert_eq!(report.cvxopt_init_used, Some(false));
-            assert_ne!(scaled.unscale_s_by(state.s(), 1.0), state.s());
+            assert_ne!(scaled.unscale_s(state.s()), state.s());
         }
     }
 

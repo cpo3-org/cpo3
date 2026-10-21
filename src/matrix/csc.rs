@@ -120,17 +120,13 @@ impl CscMatrix {
     }
 
     /// Replace values without duplicating validated column pointers and indices.
-    pub(crate) fn with_values(&self, values: Vec<f64>) -> Result<Self, MatrixError> {
-        if values.len() != self.values.len() {
-            return Err(MatrixError::MismatchedSparseArrays);
-        }
-        if values.iter().any(|value| !value.is_finite()) {
-            return Err(MatrixError::NonFiniteValue);
-        }
-        Ok(Self {
+    /// Panics if the value count changes; callers handle numerical validation.
+    pub(crate) fn with_values(&self, values: Vec<f64>) -> Self {
+        assert_eq!(values.len(), self.values.len());
+        Self {
             pattern: Arc::clone(&self.pattern),
             values,
-        })
+        }
     }
 
     pub(crate) fn from_native(matrix: NativeMatrix) -> Self {
