@@ -7,7 +7,7 @@ use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 #[cfg(feature = "mps")]
 use pyo3::exceptions::PyOSError;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError},
     prelude::*,
     types::PyAny,
 };
@@ -380,6 +380,7 @@ fn solve_py(
     match py.detach(move || solve_from(problem, &settings, warm.as_ref())) {
         Ok(solution) => Ok(PySolution { inner: solution }),
         Err(SolveError::InvalidSetting(error)) => Err(PyValueError::new_err(error)),
+        Err(SolveError::Unimplemented(error)) => Err(PyNotImplementedError::new_err(error)),
         Err(error) => Err(PyRuntimeError::new_err(error.to_string())),
     }
 }
