@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::{Equilibration, LinearSolver, SolveError};
+use crate::{LinearSolver, SolveError};
 
 /// User-facing solver settings.
 #[derive(Clone, Debug, PartialEq)]
@@ -46,25 +46,24 @@ pub struct Settings {
     /// ||(x, y, tau)||^2 = nu + 1. Also used after a failed CVXOPT start;
     /// has no effect on accepted warm/CVXOPT starts or equality-only problems.
     pub initial_mu: f64,
-    pub data_equilibration: Equilibration,
     /// Maximum Ruiz sweeps on the augmented problem data (P, A, b, c).
     /// Zero leaves all problem data unscaled.
-    pub max_equilibration_passes: usize,
+    pub ruiz_iters: usize,
     /// Nonnegative tolerance on augmented row infinity norms relative to one.
-    pub equilibration_tolerance: f64,
+    pub ruiz_tol: f64,
 
     // KKT solves.
     pub linear_solver: LinearSolver,
     /// Eliminate singleton nonnegative-cone rows from the KKT factorization.
-    pub kkt_bound_elimination: bool,
+    pub eliminate_bounds: bool,
     /// Initial adaptive floor for full-system factor diagonal magnitudes.
     /// Outer steps adjust this floor; zero starts at the positive lower bound
     /// 1e-20. Refinement always targets the original K(mu) system.
-    pub initial_diagonal_floor: f64,
+    pub refine_init_reg: f64,
     /// Additional correction solves per KKT solve; zero returns the initial solve without refinement.
-    pub max_refinement_steps: usize,
+    pub refine_iters: usize,
     /// Positive componentwise backward-error target for iterative refinement.
-    pub refinement_tolerance: f64,
+    pub refine_tol: f64,
 
     // Outer iterations.
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
@@ -90,15 +89,14 @@ impl Default for Settings {
             force_warm_start: false,
             cvxopt_init: false,
             initial_mu: 1e-3,
-            data_equilibration: Equilibration::Ruiz,
-            max_equilibration_passes: 2,
-            equilibration_tolerance: 1e-2,
+            ruiz_iters: 2,
+            ruiz_tol: 1e-2,
 
             linear_solver: LinearSolver::Faer,
-            kkt_bound_elimination: true,
-            initial_diagonal_floor: 1e-12,
-            max_refinement_steps: 30,
-            refinement_tolerance: 1e-7,
+            eliminate_bounds: true,
+            refine_init_reg: 1e-12,
+            refine_iters: 30,
+            refine_tol: 1e-7,
 
             step_fraction: 0.999,
         }
@@ -114,14 +112,14 @@ impl Settings {
                 "initial_mu must be finite and in (0, 1]",
             ));
         }
-        if !self.refinement_tolerance.is_finite() || self.refinement_tolerance <= 0.0 {
+        if !self.refine_tol.is_finite() || self.refine_tol <= 0.0 {
             return Err(SolveError::InvalidSetting(
-                "refinement_tolerance must be finite and positive",
+                "refine_tol must be finite and positive",
             ));
         }
-        if !self.equilibration_tolerance.is_finite() || self.equilibration_tolerance < 0.0 {
+        if !self.ruiz_tol.is_finite() || self.ruiz_tol < 0.0 {
             return Err(SolveError::InvalidSetting(
-                "equilibration_tolerance must be finite and nonnegative",
+                "ruiz_tol must be finite and nonnegative",
             ));
         }
 
@@ -150,9 +148,9 @@ impl Settings {
                 "tol_gap_rel must be finite and positive",
             ));
         }
-        if !self.initial_diagonal_floor.is_finite() || self.initial_diagonal_floor < 0.0 {
+        if !self.refine_init_reg.is_finite() || self.refine_init_reg < 0.0 {
             return Err(SolveError::InvalidSetting(
-                "initial_diagonal_floor must be finite and nonnegative",
+                "refine_init_reg must be finite and nonnegative",
             ));
         }
         if !self.tol_infeas_abs.is_finite() || self.tol_infeas_abs < 0.0 {

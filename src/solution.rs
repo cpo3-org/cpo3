@@ -4,16 +4,16 @@ use std::time::Instant;
 use thiserror::Error;
 
 use crate::{
-    Equilibration, LinearSolver, Problem, Settings,
-    data_equilibration::EquilibratedProblem,
+    LinearSolver, Problem, Settings,
     embedding::{Embedding, EmbeddingError, State},
     init::{self, WarmStart},
+    io::progress::{IterationRecord, ProgressReporter},
     josephy::KktCache,
-    linear_system::{KktSettings, LinearAlgebraStats},
-    matrix::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
+    linear_algebra::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
+    linear_solvers::{KktSettings, LinearAlgebraStats},
     mehrotra::{self, MehrotraError},
     presolve::{self, PresolveOutcome, Presolved},
-    progress::{IterationRecord, ProgressReporter},
+    ruiz::EquilibratedProblem,
 };
 
 // CPO3's floor when recovering homogeneous iterates and measuring rays.
@@ -53,8 +53,7 @@ pub struct SolutionInfo {
     pub dres: f64,
     pub comp: f64,
     pub linear_solver: LinearSolver,
-    pub data_equilibration: Equilibration,
-    pub kkt_bound_elimination: bool,
+    pub eliminate_bounds: bool,
     /// Whether a supplied warm start was used; `None` when none was supplied.
     pub warm_start_used: Option<bool>,
     /// Score used to screen the best warm candidate; `None` without one.
@@ -96,8 +95,7 @@ impl SolutionInfo {
             dres: measures.dres,
             comp: measures.comp,
             linear_solver,
-            data_equilibration: settings.data_equilibration,
-            kkt_bound_elimination: settings.kkt_bound_elimination,
+            eliminate_bounds: settings.eliminate_bounds,
             warm_start_used: init.warm_start_used,
             warm_start_score: init.warm_start_score,
             cvxopt_init_used: init.cvxopt_init_used,
@@ -148,6 +146,8 @@ impl Solution {
 pub enum SolveError {
     #[error("invalid solver setting: {0}")]
     InvalidSetting(&'static str),
+    #[error("not implemented: {0}")]
+    Unimplemented(String),
     #[error("numerical solver failure: {0}")]
     Numerical(String),
 }
@@ -177,17 +177,13 @@ pub fn solve_from(
 ) -> Result<Solution, SolveError> {
     settings.validate()?;
     validate_warm_start(problem, warm_start)?;
-    // Presolve's direct exits must respect the same cone support as the
-    // embedding, even when fixing variables would bypass its construction.
+    // Check cone support before presolve can return without building an embedding.
     for (block, cone) in problem.cones().iter().enumerate() {
         if !matches!(cone, crate::Cone::Zero(_) | crate::Cone::Nonnegative(_)) {
-            return Err(SolveError::Numerical(
-                crate::cone::ConeGeometryError::UnsupportedCone {
-                    block,
-                    name: cone.name(),
-                }
-                .to_string(),
-            ));
+            return Err(SolveError::Unimplemented(format!(
+                "{} cone in block {block}",
+                cone.name(),
+            )));
         }
     }
     let started = Instant::now();
@@ -204,7 +200,7 @@ pub fn solve_from(
             let mut s: Vec<_> = problem.b().iter().zip(ax).map(|(b, ax)| b - ax).collect();
             let mut offset = 0;
             for cone in problem.cones() {
-                let dim = cone.vector_dim().unwrap();
+                let dim = cone.vector_dim();
                 match cone {
                     crate::Cone::Zero(_) => s[offset..offset + dim].fill(0.0),
                     crate::Cone::Nonnegative(_) => {
@@ -410,7 +406,7 @@ impl Products {
     fn update(&mut self, problem: &Problem, x: &[f64], y: &[f64]) {
         matrix_products_into(problem.a(), x, y, &mut self.ax, &mut self.aty);
         if let Some(p) = problem.p() {
-            crate::matrix::symmetric_mul_into(p, x, &mut self.px);
+            crate::linear_algebra::symmetric_mul_into(p, x, &mut self.px);
         } else {
             self.px.resize(problem.variable_count(), 0.0);
             self.px.fill(0.0);
@@ -579,8 +575,7 @@ fn solve_core(
     let linear_solver = settings.linear_solver;
     let kkt = KktSettings::from(settings);
     let mut cache = KktCache::new();
-    let equilibrated = EquilibratedProblem::new(problem, settings)
-        .map_err(|error| SolveError::Numerical(error.to_string()))?;
+    let equilibrated = EquilibratedProblem::new(problem, settings)?;
     let embedding = Embedding::new(equilibrated.problem())?;
     let mut identity = vec![0.0; problem.constraint_count()];
     embedding
@@ -783,7 +778,6 @@ fn predictor_corrector_step(
         tau: step.state.tau(),
         sigma: Some(step.sigma),
         alpha_aff: Some(step.alpha_affine),
-        rho: Some(step.rho),
         alpha: Some(step.alpha),
     };
     Ok((step.state, diagnostics))
@@ -802,7 +796,6 @@ struct RecoveredSolution {
 struct StepDiagnostics {
     /// Keep the numerator to preserve recovery's division order.
     sy: f64,
-    rho: Option<f64>,
     mu: f64,
     tau: f64,
     sigma: Option<f64>,
@@ -824,7 +817,6 @@ impl StepDiagnostics {
             } else {
                 sy / embedding.nu() as f64
             },
-            rho: None,
             tau: state.tau(),
             sigma: None,
             alpha_aff: None,
@@ -872,7 +864,6 @@ impl RecoveredSolution {
             iteration,
             elapsed,
             mu: diagnostics.mu,
-            rho: diagnostics.rho,
             tau: Some(diagnostics.tau),
             sigma: diagnostics.sigma,
             alpha_aff: diagnostics.alpha_aff,
@@ -908,7 +899,7 @@ impl Ray {
     ) -> Self {
         let x = equilibrated.unscale_x(x);
         let y = equilibrated.unscale_y(y);
-        let s = equilibrated.unscale_s_by(s, 1.0);
+        let s = equilibrated.unscale_s(s);
         let bty = dot(problem.b(), &y);
         let ctx = dot(problem.c(), &x);
         let aty = matrix_transpose_mul(problem.a(), &y);
@@ -916,7 +907,7 @@ impl Ray {
         let px = problem.p_mul(&x);
         let (norm_x, norm_y) = (two_norm(&x), two_norm(&y));
         let pinfeas = two_norm(&aty) / bty.abs().max(norm_y).max(RECOVERY_EPS);
-        crate::matrix::add_assign(&mut ax, &s);
+        crate::linear_algebra::add_assign(&mut ax, &s);
         let violation = two_norm(&ax);
         let dinfeas = (violation / ctx.abs().max(norm_x + two_norm(&s)).max(RECOVERY_EPS))
             .max(two_norm(&px) / ctx.abs().max(norm_x).max(RECOVERY_EPS));
@@ -1149,9 +1140,9 @@ mod tests {
     #[test]
     fn measures_use_infinity_norms_and_equation_scales() {
         let problem = Problem::new(
-            Some(crate::matrix::test_matrix(2, 2, vec![2.0, 0.0, 0.0, 4.0]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.0, 0.0, 4.0]).unwrap()),
             vec![-3.0, 2.0],
-            crate::matrix::test_matrix(2, 2, vec![1.0, 2.0, -3.0, 1.0]).unwrap(),
+            crate::linear_algebra::test_matrix(2, 2, vec![1.0, 2.0, -3.0, 1.0]).unwrap(),
             vec![1.0, -2.0],
             vec![Cone::Nonnegative(2)],
         )
@@ -1186,11 +1177,15 @@ mod tests {
         // from 1 to 1e6. A stationarity defect of 1e-4 must not be hidden by it.
         let problem = Problem::new(
             Some(
-                crate::matrix::test_matrix(3, 3, vec![0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 1.0, 2.0])
-                    .unwrap(),
+                crate::linear_algebra::test_matrix(
+                    3,
+                    3,
+                    vec![0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 1.0, 2.0],
+                )
+                .unwrap(),
             ),
             vec![1.0, 0.0, 0.0],
-            crate::matrix::test_matrix(
+            crate::linear_algebra::test_matrix(
                 4,
                 3,
                 vec![1.0, 1e6, 0.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0],
@@ -1283,7 +1278,7 @@ mod tests {
         let equilibrated = EquilibratedProblem::new(
             &problem,
             &crate::Settings {
-                data_equilibration: Equilibration::None,
+                ruiz_iters: 0,
                 ..crate::Settings::default()
             },
         )
@@ -1309,7 +1304,7 @@ mod tests {
         Problem::new(
             None,
             c,
-            crate::matrix::test_matrix(rows, columns, a).unwrap(),
+            crate::linear_algebra::test_matrix(rows, columns, a).unwrap(),
             b,
             vec![Cone::Nonnegative(rows)],
         )
@@ -1430,7 +1425,7 @@ mod tests {
         let equilibrated = EquilibratedProblem::new(
             &problem,
             &crate::Settings {
-                data_equilibration: Equilibration::None,
+                ruiz_iters: 0,
                 ..crate::Settings::default()
             },
         )

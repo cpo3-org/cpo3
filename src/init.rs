@@ -3,11 +3,11 @@
 
 use crate::{
     Settings,
-    data_equilibration::EquilibratedProblem,
     embedding::{Embedding, EmbeddingError, State},
     josephy::{KktCache, solve_shifted_systems},
-    linear_system::KktSettings,
-    matrix::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
+    linear_algebra::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
+    linear_solvers::KktSettings,
+    ruiz::EquilibratedProblem,
 };
 
 /// A caller-supplied starting point in original units.
@@ -229,9 +229,9 @@ fn cvxopt_state(
     shift_into_interior(&mut s, cone_rows);
     shift_into_interior(&mut y, cone_rows);
     let scale = sphere_factor(embedding, &x, &y);
-    crate::matrix::scale(&mut x, scale);
-    crate::matrix::scale(&mut s, scale);
-    crate::matrix::scale(&mut y, scale);
+    crate::linear_algebra::scale(&mut x, scale);
+    crate::linear_algebra::scale(&mut s, scale);
+    crate::linear_algebra::scale(&mut y, scale);
     let state = State::new(x, s, y, scale).map_err(|error| error.to_string())?;
     embedding
         .ensure_domain(&state)
@@ -369,7 +369,7 @@ pub(crate) fn initial_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cone, Equilibration, LinearSolver, Problem};
+    use crate::{Cone, LinearSolver, Problem};
 
     fn assert_close(actual: f64, expected: f64, tolerance: f64) {
         assert!(
@@ -392,7 +392,7 @@ mod tests {
 
     fn cvxopt_settings() -> Settings {
         Settings {
-            data_equilibration: Equilibration::None,
+            ruiz_iters: 0,
             cvxopt_init: true,
             ..Settings::default()
         }
@@ -420,19 +420,12 @@ mod tests {
         let problem = Problem::new(
             None,
             vec![1000.0],
-            crate::matrix::test_matrix(2, 1, vec![100.0, 0.001]).unwrap(),
+            crate::linear_algebra::test_matrix(2, 1, vec![100.0, 0.001]).unwrap(),
             vec![1e4, 0.02],
             vec![Cone::Zero(1), Cone::Nonnegative(1)],
         )
         .unwrap();
-        let scaled = EquilibratedProblem::new(
-            &problem,
-            &crate::Settings {
-                data_equilibration: Equilibration::Ruiz,
-                ..crate::Settings::default()
-            },
-        )
-        .unwrap();
+        let scaled = EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
         let embedding = Embedding::new(scaled.problem()).unwrap();
         for beta in [Settings::default().initial_mu, 0.25, 1.0] {
             let settings = Settings {
@@ -456,7 +449,7 @@ mod tests {
             assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
             embedding.ensure_domain(&state).unwrap();
             assert_eq!(report.cvxopt_init_used, Some(false));
-            assert_ne!(scaled.unscale_s_by(state.s(), 1.0), state.s());
+            assert_ne!(scaled.unscale_s(state.s()), state.s());
         }
     }
 
@@ -468,7 +461,7 @@ mod tests {
         let problem = Problem::new(
             None,
             vec![-1.0, -2.0],
-            crate::matrix::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
+            crate::linear_algebra::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
             vec![3.0, 4.0],
             vec![Cone::Nonnegative(2)],
         )
@@ -494,9 +487,10 @@ mod tests {
     #[test]
     fn cvxopt_quadratic_start_solves_the_initial_kkt_system_and_shifts_cone_rows() {
         let problem = Problem::new(
-            Some(crate::matrix::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
             vec![0.5, -1.0],
-            crate::matrix::test_matrix(3, 2, vec![1.0, -2.0, 3.0, 0.25, -1.0, 1.0]).unwrap(),
+            crate::linear_algebra::test_matrix(3, 2, vec![1.0, -2.0, 3.0, 0.25, -1.0, 1.0])
+                .unwrap(),
             vec![1.5, -0.75, 2.0],
             vec![Cone::Zero(1), Cone::Nonnegative(2)],
         )
@@ -537,9 +531,9 @@ mod tests {
     fn cvxopt_equality_only_start_is_the_kkt_point_at_unit_scale() {
         // x + A' y = -c and A x = b give x = (1, 0), y = -2.
         let problem = Problem::new(
-            Some(crate::matrix::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap()),
             vec![1.0, 2.0],
-            crate::matrix::test_matrix(1, 2, vec![1.0, 1.0]).unwrap(),
+            crate::linear_algebra::test_matrix(1, 2, vec![1.0, 1.0]).unwrap(),
             vec![1.0],
             vec![Cone::Zero(1)],
         )
@@ -569,9 +563,9 @@ mod tests {
     #[test]
     fn local_score_matches_the_guarded_metric_with_an_equality_row() {
         let problem = Problem::new(
-            Some(crate::matrix::test_matrix(1, 1, vec![2.0]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(1, 1, vec![2.0]).unwrap()),
             vec![3.0],
-            crate::matrix::test_matrix(2, 1, vec![1.0, 2.0]).unwrap(),
+            crate::linear_algebra::test_matrix(2, 1, vec![1.0, 2.0]).unwrap(),
             vec![4.0, 5.0],
             vec![Cone::Zero(1), Cone::Nonnegative(1)],
         )
@@ -591,7 +585,7 @@ mod tests {
             let problem = Problem::new(
                 None,
                 vec![0.0],
-                crate::matrix::test_matrix(1, 1, vec![0.0]).unwrap(),
+                crate::linear_algebra::test_matrix(1, 1, vec![0.0]).unwrap(),
                 vec![rhs],
                 vec![Cone::Nonnegative(1)],
             )
@@ -599,7 +593,7 @@ mod tests {
             let equilibrated = EquilibratedProblem::new(
                 &problem,
                 &crate::Settings {
-                    data_equilibration: Equilibration::None,
+                    ruiz_iters: 0,
                     ..crate::Settings::default()
                 },
             )
@@ -622,7 +616,7 @@ mod tests {
         let problem = Problem::new(
             None,
             vec![0.0],
-            crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap(),
+            crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap(),
             vec![1.0],
             vec![Cone::Zero(1)],
         )
@@ -630,7 +624,7 @@ mod tests {
         let equilibrated = EquilibratedProblem::new(
             &problem,
             &crate::Settings {
-                data_equilibration: Equilibration::None,
+                ruiz_iters: 0,
                 ..crate::Settings::default()
             },
         )

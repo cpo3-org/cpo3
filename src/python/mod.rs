@@ -7,14 +7,14 @@ use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1};
 #[cfg(feature = "mps")]
 use pyo3::exceptions::PyOSError;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError},
     prelude::*,
     types::PyAny,
 };
 
 use crate::{
-    Cone, CscMatrix, Equilibration, LinearSolver, Problem, Solution, SolutionInfo, SolveError,
-    WarmStart, solve_from,
+    Cone, CscMatrix, LinearSolver, Problem, Solution, SolutionInfo, SolveError, WarmStart,
+    solve_from,
 };
 
 type PyCscParts<'py> = (
@@ -133,16 +133,6 @@ fn parse_linear_solver(value: &str) -> PyResult<LinearSolver> {
         "feral" => Ok(LinearSolver::Feral),
         _ => Err(PyValueError::new_err(format!(
             "unknown linear solver {value:?}"
-        ))),
-    }
-}
-
-fn parse_equilibration(value: &str) -> PyResult<Equilibration> {
-    match value {
-        "none" => Ok(Equilibration::None),
-        "ruiz" => Ok(Equilibration::Ruiz),
-        _ => Err(PyValueError::new_err(format!(
-            "unknown equilibration method {value:?}"
         ))),
     }
 }
@@ -320,13 +310,8 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn data_equilibration(&self) -> &'static str {
-        self.inner.data_equilibration.as_str()
-    }
-
-    #[getter]
-    fn kkt_bound_elimination(&self) -> bool {
-        self.inner.kkt_bound_elimination
+    fn eliminate_bounds(&self) -> bool {
+        self.inner.eliminate_bounds
     }
 }
 
@@ -395,6 +380,7 @@ fn solve_py(
     match py.detach(move || solve_from(problem, &settings, warm.as_ref())) {
         Ok(solution) => Ok(PySolution { inner: solution }),
         Err(SolveError::InvalidSetting(error)) => Err(PyValueError::new_err(error)),
+        Err(SolveError::Unimplemented(error)) => Err(PyNotImplementedError::new_err(error)),
         Err(error) => Err(PyRuntimeError::new_err(error.to_string())),
     }
 }
@@ -403,10 +389,10 @@ fn solve_py(
 #[pyfunction(name = "_read_mps")]
 #[pyo3(signature = (path, *, first_named_set = false))]
 fn read_mps_py(py: Python<'_>, path: PathBuf, first_named_set: bool) -> PyResult<PyProblem> {
-    let options = crate::mps::MpsOptions { first_named_set };
-    match py.detach(move || crate::mps::read_with(path, options)) {
+    let options = crate::io::mps::MpsOptions { first_named_set };
+    match py.detach(move || crate::io::mps::read_with(path, options)) {
         Ok(inner) => Ok(PyProblem { inner }),
-        Err(error @ crate::mps::MpsError::Read { .. }) => {
+        Err(error @ crate::io::mps::MpsError::Read { .. }) => {
             Err(PyOSError::new_err(error.to_string()))
         }
         Err(error) => Err(PyValueError::new_err(error.to_string())),

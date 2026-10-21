@@ -48,7 +48,7 @@ pub(crate) fn domains(
     let mut cones = Vec::new();
     let mut offset = 0;
     for cone in input_cones {
-        let n = cone.vector_dim().unwrap();
+        let n = cone.vector_dim();
         match *cone {
             Cone::Zero(_) => {
                 rows.extend(b[offset..offset + n].iter().map(|&b| {
@@ -115,7 +115,7 @@ fn original_dual(original: &Problem, y: &[f64], w: &[f64]) -> Vec<f64> {
     let mut w = w.iter();
     let mut out = Vec::with_capacity(original.constraint_count());
     for cone in original.cones() {
-        let n = cone.vector_dim().unwrap();
+        let n = cone.vector_dim();
         match cone {
             Cone::Zero(_) | Cone::Nonnegative(_) => out.extend(y.by_ref().take(n).map(|v| -v)),
             _ => out.extend(w.by_ref().take(n).copied()),
@@ -187,7 +187,7 @@ pub(crate) fn presolve(
                     _ => unreachable!("presolve emitted an unsupported cpo3 cone"),
                 })
                 .collect();
-            let problem = Problem::from_presolved(
+            let problem = Problem::from_validated(
                 p.p.map(crate::CscMatrix::from_native),
                 p.c,
                 crate::CscMatrix::from_native(p.a),
@@ -302,7 +302,7 @@ impl Presolved {
         full.fill(0.0);
         let mut offset = 0;
         for cone in original.cones() {
-            let n = cone.vector_dim().unwrap();
+            let n = cone.vector_dim();
             if matches!(cone, Cone::Nonnegative(_)) {
                 for i in offset..offset + n {
                     full[i] = (original.b()[i] - ax[i]).max(0.0);
@@ -343,7 +343,7 @@ impl Presolved {
         };
         let p = self.postsolve.reduce_warm_start(original.as_ref());
         let mut y = self.map.warm_dual(&p);
-        let ax = crate::matrix::matrix_mul(self.problem.a(), &p.x);
+        let ax = crate::linear_algebra::matrix_mul(self.problem.a(), &p.x);
         let mut s: Vec<_> = self
             .problem
             .b()
@@ -353,7 +353,7 @@ impl Presolved {
             .collect();
         let mut offset = 0;
         for cone in self.problem.cones() {
-            let n = cone.vector_dim().unwrap();
+            let n = cone.vector_dim();
             match cone {
                 Cone::Zero(_) => s[offset..offset + n].fill(0.0),
                 Cone::Nonnegative(_) => {

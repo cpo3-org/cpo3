@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::matrix::binary_into;
+use crate::linear_algebra::binary_into;
 use faer::{ColMut, ColRef};
 
 use thiserror::Error;
@@ -63,9 +63,7 @@ impl ConeGeometry {
         let mut barrier_parameter = 0usize;
 
         for (block, cone) in cones.iter().enumerate() {
-            let dim = cone
-                .vector_dim()
-                .ok_or(ConeGeometryError::DimensionOverflow)?;
+            let dim = cone.vector_dim();
             if dim == 0 {
                 return Err(ConeGeometryError::EmptyBlock { block });
             }

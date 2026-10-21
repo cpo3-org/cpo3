@@ -1,6 +1,6 @@
 //! Independent-slack homogeneous embedding primitives.
 
-use crate::matrix::dot;
+use crate::linear_algebra::dot;
 use thiserror::Error;
 
 use crate::{
@@ -115,8 +115,8 @@ impl State {
         if !representable(&self.tau) || !self.xy.iter().chain(&self.s).all(representable) {
             return Err(EmbeddingError::NonFiniteResult);
         }
-        crate::matrix::scale(&mut self.xy, scale);
-        crate::matrix::scale(&mut self.s, scale);
+        crate::linear_algebra::scale(&mut self.xy, scale);
+        crate::linear_algebra::scale(&mut self.s, scale);
         self.tau *= scale;
         Ok(())
     }
@@ -329,9 +329,9 @@ mod tests {
 
     fn test_problem() -> Problem {
         Problem::new(
-            Some(crate::matrix::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
             vec![0.5, -1.0],
-            crate::matrix::test_matrix(2, 2, vec![1.0, -2.0, 3.0, 0.25]).unwrap(),
+            crate::linear_algebra::test_matrix(2, 2, vec![1.0, -2.0, 3.0, 0.25]).unwrap(),
             vec![1.5, -0.75],
             vec![Cone::Zero(1), Cone::Nonnegative(1)],
         )

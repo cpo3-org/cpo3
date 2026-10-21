@@ -15,9 +15,9 @@ fn reference_state(problem: &Problem) -> State {
 
 fn problem() -> Problem {
     Problem::new(
-        Some(crate::matrix::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
+        Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
         vec![0.5, -1.0],
-        crate::matrix::test_matrix(2, 2, vec![1.0, -2.0, 3.0, 0.25]).unwrap(),
+        crate::linear_algebra::test_matrix(2, 2, vec![1.0, -2.0, 3.0, 0.25]).unwrap(),
         vec![1.5, -0.75],
         vec![Cone::Zero(1), Cone::Nonnegative(1)],
     )
@@ -77,9 +77,11 @@ fn increment_resolvent_matches_point_equations_for_lp_and_qp() {
             let expected_tau = resolvent
                 .solve_tau(&expected, q_dot(&problem, &expected), r_tau, mu)
                 .unwrap();
-            crate::matrix::update(&mut expected, resolvent.direction, |value, direction| {
-                expected_tau.mul_add(direction, value)
-            });
+            crate::linear_algebra::update(
+                &mut expected,
+                resolvent.direction,
+                |value, direction| expected_tau.mul_add(direction, value),
+            );
             let actual = resolvent.solve_rhs(&rhs, r_tau, mu).unwrap();
             assert!(!actual.used_tau_fallback);
             assert_close(actual.tau, expected_tau);
@@ -100,7 +102,7 @@ fn increment_resolvent_preserves_a_small_point_between_large_columns() {
     let problem = Problem::new(
         None,
         vec![1.0],
-        crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+        crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
         vec![],
         vec![],
     )
@@ -192,7 +194,7 @@ fn linear_program() -> Problem {
     Problem::new(
         None,
         vec![1.0, 2.0],
-        crate::matrix::test_matrix(2, 2, vec![1.0, 1.0, -1.0, 2.0]).unwrap(),
+        crate::linear_algebra::test_matrix(2, 2, vec![1.0, 1.0, -1.0, 2.0]).unwrap(),
         vec![1.0, 0.5],
         vec![Cone::Nonnegative(2)],
     )
@@ -200,11 +202,11 @@ fn linear_program() -> Problem {
 }
 
 fn a_mul(problem: &Problem, x: &[f64]) -> Vec<f64> {
-    crate::matrix::matrix_mul(problem.a(), x)
+    crate::linear_algebra::matrix_mul(problem.a(), x)
 }
 
 fn at_mul(problem: &Problem, y: &[f64]) -> Vec<f64> {
-    crate::matrix::matrix_transpose_mul(problem.a(), y)
+    crate::linear_algebra::matrix_transpose_mul(problem.a(), y)
 }
 
 /// Residual of the generic shifted system at a case (i) solution.
@@ -282,9 +284,10 @@ fn resolvent_solves_the_shifted_system_for_every_solver() {
 /// An equality, a general inequality, and two bound rows on `x`.
 fn bounded_problem() -> Problem {
     Problem::new(
-        Some(crate::matrix::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
+        Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
         vec![0.5, -1.0],
-        crate::matrix::test_matrix(4, 2, vec![1.0, -2.0, 3.0, 0.25, -4.0, 0.0, 0.0, 1.5]).unwrap(),
+        crate::linear_algebra::test_matrix(4, 2, vec![1.0, -2.0, 3.0, 0.25, -4.0, 0.0, 0.0, 1.5])
+            .unwrap(),
         vec![1.5, -0.75, 2.0, 0.5],
         vec![Cone::Zero(1), Cone::Nonnegative(3)],
     )
@@ -296,9 +299,9 @@ fn bounded_problem() -> Problem {
 #[test]
 fn clamped_preconditioner_is_identical_with_or_without_bound_elimination() {
     let problem = Problem::new(
-        Some(crate::matrix::test_matrix(2, 2, vec![0.1, 0.0, 0.0, 2.0]).unwrap()),
+        Some(crate::linear_algebra::test_matrix(2, 2, vec![0.1, 0.0, 0.0, 2.0]).unwrap()),
         vec![0.0; 2],
-        crate::matrix::test_matrix(2, 2, vec![1.0, -1.0, 2.0, 0.0]).unwrap(),
+        crate::linear_algebra::test_matrix(2, 2, vec![1.0, -1.0, 2.0, 0.0]).unwrap(),
         vec![0.0; 2],
         vec![Cone::Zero(1), Cone::Nonnegative(1)],
     )
@@ -336,7 +339,7 @@ fn clamped_preconditioner_is_identical_with_or_without_bound_elimination() {
             let mut settings = KktSettings::new(solver);
             // Request accuracy tighter than the solution assertions below;
             // the production backward-error tolerance is only 1e-8.
-            settings.refinement_tolerance = 1e-12;
+            settings.refine_tol = 1e-12;
             let mut factor =
                 Factorization::new_counted(matrix, &settings, &mut cache.factorizations).unwrap();
             let pattern = cache.pattern.as_mut().unwrap();
@@ -408,7 +411,7 @@ fn best_effort_refines_true_system_even_without_eliminated_rows() {
     let problem = Problem::new(
         None,
         vec![0.0],
-        crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+        crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
         vec![],
         vec![],
     )
@@ -437,7 +440,7 @@ fn refinement_warm_start_preserves_weak_components_and_corrects_the_rest() {
     let problem = Problem::new(
         None,
         vec![0.0; 2],
-        crate::matrix::test_matrix(1, 2, vec![0.0, 1.0]).unwrap(),
+        crate::linear_algebra::test_matrix(1, 2, vec![0.0, 1.0]).unwrap(),
         vec![0.0],
         vec![Cone::Nonnegative(1)],
     )
@@ -454,7 +457,7 @@ fn refinement_warm_start_preserves_weak_components_and_corrects_the_rest() {
             settings.diagonal_floor = 1e-8;
             // Resolve the corrected components to the asserted accuracy,
             // rather than stopping at the production tolerance of 1e-8.
-            settings.refinement_tolerance = 1e-12;
+            settings.refine_tol = 1e-12;
             let matrix = assemble_preconditioner(
                 &problem,
                 shift,
@@ -503,7 +506,7 @@ fn failed_step_restores_the_previous_constant_column_without_copying() {
     let problem = Problem::new(
         None,
         vec![-1.0],
-        crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+        crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
         vec![],
         vec![],
     )
@@ -535,7 +538,7 @@ fn constant_column_warm_start_survives_refactorization_only_within_its_cache() {
     let problem = Problem::new(
         None,
         vec![-1e-14],
-        crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+        crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
         vec![],
         vec![],
     )
@@ -794,9 +797,9 @@ fn failed_root_uses_current_state_and_reuses_fallback_products() {
     // at x = 1 gives 1.5*tau^2 + (1-r_tau-x1)*tau + 1-mu-2*x1 = 0.
     // If it has no real root, the first-order step uses current tau = 2.
     let problem = Problem::new(
-        Some(crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap()),
+        Some(crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap()),
         vec![1.0],
-        crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+        crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
         vec![],
         vec![],
     )
@@ -871,8 +874,8 @@ fn distinct_factor_shift_keeps_resolvent_target_and_reconstruction() {
     let h = [0.0, 1.0];
     let settings = KktSettings {
         strict_refinement: true,
-        refinement_tolerance: 1e-13,
-        max_refinement_steps: 100,
+        refine_tol: 1e-13,
+        refine_iters: 100,
         ..KktSettings::new(LinearSolver::Faer)
     };
     let rhs = [0.7, -0.2, 0.5, -0.8];
@@ -917,7 +920,7 @@ fn zero_target_equality_column_solves_original_stationarity_and_feasibility() {
     let state = State::new(vec![0.0], vec![0.0], vec![0.0], 2.0).unwrap();
     let settings = KktSettings {
         strict_refinement: true,
-        refinement_tolerance: 1e-13,
+        refine_tol: 1e-13,
         ..KktSettings::new(LinearSolver::Faer)
     };
     let mut cache = KktCache::new();
@@ -944,7 +947,7 @@ fn fixed_floor_at_zero_mu_refines_the_unclamped_equality_system() {
         let settings = KktSettings {
             diagonal_floor: floor,
             strict_refinement: true,
-            refinement_tolerance: 1e-13,
+            refine_tol: 1e-13,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let mut cache = KktCache::new();
@@ -964,9 +967,9 @@ fn fixed_floor_at_zero_mu_refines_the_unclamped_equality_system() {
 fn nonbinding_floor_bound_accounts_for_the_actual_primal_diagonal() {
     for p in [0.0, 2.0, -0.5] {
         let problem = Problem::new(
-            Some(crate::matrix::test_matrix(1, 1, vec![p]).unwrap()),
+            Some(crate::linear_algebra::test_matrix(1, 1, vec![p]).unwrap()),
             vec![0.0],
-            crate::matrix::test_matrix(0, 1, vec![]).unwrap(),
+            crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
             vec![],
             vec![],
         )

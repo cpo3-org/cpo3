@@ -4,9 +4,33 @@ mod faer;
 mod feral;
 
 use self::{faer::FaerFactorization, feral::FeralFactorization};
+use std::fmt;
 use thiserror::Error;
 
-use crate::{CscMatrix, LinearSolver, Settings};
+use crate::{CscMatrix, Settings};
+
+/// Linear-system implementation used by the numerical solver.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LinearSolver {
+    #[default]
+    Faer,
+    Feral,
+}
+
+impl LinearSolver {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Faer => "faer",
+            Self::Feral => "feral",
+        }
+    }
+}
+
+impl fmt::Display for LinearSolver {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 // Per-pass contraction factor above which refinement may stop (no halving
 // over two passes).
@@ -22,8 +46,8 @@ pub(crate) struct KktSettings {
     /// Fold nonnegative singleton rows of `A` into the `(1,1)` block.
     pub(crate) eliminate_bound_rows: bool,
     pub(crate) diagonal_floor: f64,
-    pub(crate) max_refinement_steps: usize,
-    pub(crate) refinement_tolerance: f64,
+    pub(crate) refine_iters: usize,
+    pub(crate) refine_tol: f64,
 }
 
 impl KktSettings {
@@ -41,10 +65,10 @@ impl From<&Settings> for KktSettings {
         Self {
             linear_solver: settings.linear_solver,
             strict_refinement: false,
-            eliminate_bound_rows: settings.kkt_bound_elimination,
-            diagonal_floor: settings.initial_diagonal_floor,
-            max_refinement_steps: settings.max_refinement_steps,
-            refinement_tolerance: settings.refinement_tolerance,
+            eliminate_bound_rows: settings.eliminate_bounds,
+            diagonal_floor: settings.refine_init_reg,
+            refine_iters: settings.refine_iters,
+            refine_tol: settings.refine_tol,
         }
     }
 }
@@ -428,7 +452,7 @@ pub(crate) fn refine_with(
     initialize(&solution, rhs, residual, denominator);
     let mut best_error: Option<f64> = None;
     let mut errors = [f64::INFINITY; 2];
-    for iteration in 0..=settings.max_refinement_steps {
+    for iteration in 0..=settings.refine_iters {
         if iteration != 0 {
             residual_into(&solution, rhs, residual);
         }
@@ -448,7 +472,7 @@ pub(crate) fn refine_with(
             Some(error) => backward_error < error,
             None => true,
         };
-        if backward_error <= settings.refinement_tolerance {
+        if backward_error <= settings.refine_tol {
             stats.refinement_accurate += 1;
             return validate_solution(solution);
         }
@@ -464,11 +488,10 @@ pub(crate) fn refine_with(
         }
         if iteration >= 2 {
             let rate = (backward_error / errors[0]).sqrt();
-            let remaining =
-                i32::try_from(settings.max_refinement_steps - iteration).unwrap_or(i32::MAX);
+            let remaining = i32::try_from(settings.refine_iters - iteration).unwrap_or(i32::MAX);
             if rate.is_nan()
                 || (rate > STALL_RATE
-                    && backward_error * rate.powi(remaining) > settings.refinement_tolerance)
+                    && backward_error * rate.powi(remaining) > settings.refine_tol)
             {
                 stats.refinement_forecast += 1;
                 if iteration > 0 {
@@ -478,7 +501,7 @@ pub(crate) fn refine_with(
             }
         }
         errors = [errors[1], backward_error];
-        if iteration == settings.max_refinement_steps {
+        if iteration == settings.refine_iters {
             stats.refinement_budget += 1;
             if iteration > 0 {
                 diagnose_correction(residual, correction, perturbation, denominator, stats);
@@ -496,11 +519,14 @@ pub(crate) fn refine_with(
         if !strict && improved {
             // After a best-effort swap, `solution` is the stale output buffer.
             solution.resize(rhs.len(), 0.0);
-            crate::matrix::binary_into(&mut solution, best, correction, |base, correction| {
-                base + correction
-            });
+            crate::linear_algebra::binary_into(
+                &mut solution,
+                best,
+                correction,
+                |base, correction| base + correction,
+            );
         } else {
-            crate::matrix::add_assign(&mut solution, correction);
+            crate::linear_algebra::add_assign(&mut solution, correction);
         }
         if !solution.iter().all(|value| value.is_finite()) {
             stats.refinement_nonfinite += 1;
@@ -583,7 +609,7 @@ fn settle_refinement(
 #[cfg(test)]
 fn residual_into(matrix: &CscMatrix, solution: &[f64], rhs: &[f64], residual: &mut [f64]) {
     residual.copy_from_slice(rhs);
-    crate::matrix::symmetric_accumulate(matrix, solution, [residual], |product| [-product]);
+    crate::linear_algebra::symmetric_accumulate(matrix, solution, [residual], |product| [-product]);
 }
 
 /// First refinement residual and its fixed normalizer in one matrix traversal.
@@ -599,9 +625,12 @@ fn residual_and_denominator_into(
     for (out, rhs) in denominator.iter_mut().zip(rhs) {
         *out = rhs.abs();
     }
-    crate::matrix::symmetric_accumulate(matrix, solution, [residual, denominator], |product| {
-        [-product, product.abs()]
-    });
+    crate::linear_algebra::symmetric_accumulate(
+        matrix,
+        solution,
+        [residual, denominator],
+        |product| [-product, product.abs()],
+    );
 }
 
 /// `out <- |matrix| |solution| + |rhs|`.
@@ -610,7 +639,7 @@ fn backward_denominator_into(matrix: &CscMatrix, solution: &[f64], rhs: &[f64], 
     for (out, rhs) in out.iter_mut().zip(rhs) {
         *out = rhs.abs();
     }
-    crate::matrix::symmetric_accumulate(matrix, solution, [out], |product| [product.abs()]);
+    crate::linear_algebra::symmetric_accumulate(matrix, solution, [out], |product| [product.abs()]);
 }
 
 fn backward_error(residual: &[f64], denominator: &[f64]) -> f64 {
@@ -763,11 +792,13 @@ mod tests {
     use super::*;
 
     fn test_system(values: Vec<f64>) -> CscMatrix {
-        crate::matrix::take_upper_triangle(crate::matrix::test_matrix(3, 3, values).unwrap())
+        crate::linear_algebra::take_upper_triangle(
+            crate::linear_algebra::test_matrix(3, 3, values).unwrap(),
+        )
     }
 
     fn sparse_system(values: Vec<f64>) -> CscMatrix {
-        crate::matrix::take_upper_triangle(
+        crate::linear_algebra::take_upper_triangle(
             CscMatrix::from_triplets(
                 3,
                 3,
@@ -837,7 +868,7 @@ mod tests {
 
     #[test]
     fn componentwise_backward_error_detects_a_badly_scaled_row() {
-        let matrix = crate::matrix::test_matrix(2, 2, vec![1e12, 0.0, 0.0, 1.0]).unwrap();
+        let matrix = crate::linear_algebra::test_matrix(2, 2, vec![1e12, 0.0, 0.0, 1.0]).unwrap();
         let backward_error = backward_error_of(&matrix, &[1.0, 0.0], &[1e12, 1.0]);
 
         assert_eq!(backward_error, 1.0);
@@ -846,9 +877,9 @@ mod tests {
     #[test]
     fn componentwise_backward_error_is_invariant_under_row_scaling() {
         let original: CscMatrix =
-            crate::matrix::test_matrix(2, 2, vec![2.0, 0.0, 0.0, 3.0]).unwrap();
+            crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.0, 0.0, 3.0]).unwrap();
         let scaled: CscMatrix =
-            crate::matrix::test_matrix(2, 2, vec![2e12, 0.0, 0.0, 3e-12]).unwrap();
+            crate::linear_algebra::test_matrix(2, 2, vec![2e12, 0.0, 0.0, 3e-12]).unwrap();
         let solution = [0.75, 0.5];
         let original_error = backward_error_of(&original, &solution, &[2.0, 3.0]);
         let scaled_error = backward_error_of(&scaled, &solution, &[2e12, 3e-12]);
@@ -859,7 +890,7 @@ mod tests {
     #[test]
     fn refinement_corrects_a_componentwise_inaccurate_solution() {
         let matrix: CscMatrix =
-            crate::matrix::test_matrix(2, 2, vec![1e12, 0.0, 0.0, 1.0]).unwrap();
+            crate::linear_algebra::test_matrix(2, 2, vec![1e12, 0.0, 0.0, 1.0]).unwrap();
         let mut correction_count = 0;
         let solution = refine_solution(
             &matrix,
@@ -880,7 +911,7 @@ mod tests {
 
     #[test]
     fn refinement_counts_failed_corrections_and_successful_retries() {
-        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let matrix = crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap();
         let mut stats = LinearAlgebraStats::default();
         let failed = refine_solution(
             &matrix,
@@ -920,7 +951,7 @@ mod tests {
 
     #[test]
     fn refinement_stops_once_the_rate_cannot_reach_tolerance() {
-        let matrix: CscMatrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let matrix: CscMatrix = crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap();
         let mut correction_count = 0;
         let mut stats = LinearAlgebraStats::default();
         let solution = refine_solution(
@@ -968,7 +999,7 @@ mod tests {
                 vec![0.5],
                 &KktSettings {
                     strict_refinement: strict,
-                    max_refinement_steps: 0,
+                    refine_iters: 0,
                     ..KktSettings::new(LinearSolver::Faer)
                 },
                 &mut workspace,
@@ -1010,7 +1041,7 @@ mod tests {
 
     #[test]
     fn refinement_keeps_the_best_iterate_when_it_diverges() {
-        let matrix: CscMatrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let matrix: CscMatrix = crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap();
         // Corrections push the iterate away from the solution x = 1.
         let mut stats = LinearAlgebraStats::default();
         let solution = refine_solution(
@@ -1051,11 +1082,11 @@ mod tests {
     fn numeric_failure_is_counted_but_shape_validation_is_not() {
         let settings = KktSettings::new(LinearSolver::Faer);
         let mut count = 0;
-        let nonsquare = crate::matrix::test_matrix(1, 2, vec![1.0, 1.0]).unwrap();
+        let nonsquare = crate::linear_algebra::test_matrix(1, 2, vec![1.0, 1.0]).unwrap();
         assert!(Factorization::new_counted(nonsquare, &settings, &mut count).is_err());
         assert_eq!(count, 0);
-        let singular = crate::matrix::take_upper_triangle(
-            crate::matrix::test_matrix(2, 2, vec![1.0; 4]).unwrap(),
+        let singular = crate::linear_algebra::take_upper_triangle(
+            crate::linear_algebra::test_matrix(2, 2, vec![1.0; 4]).unwrap(),
         );
         assert!(Factorization::new_counted(singular, &settings, &mut count).is_err());
         assert_eq!(count, 1);
@@ -1152,12 +1183,12 @@ mod tests {
     }
     #[test]
     fn slowly_contracting_refinement_uses_the_selected_stop_rule() {
-        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let matrix = crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap();
         let mut stats = LinearAlgebraStats::default();
         let mut workspace = RefinementWorkspace::default();
         let settings = KktSettings {
-            max_refinement_steps: 100,
-            refinement_tolerance: 1e-7,
+            refine_iters: 100,
+            refine_tol: 1e-7,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let solution = refine_with(
@@ -1182,7 +1213,7 @@ mod tests {
 
     #[test]
     fn best_effort_refinement_returns_owned_iterates_and_keeps_scratch() {
-        let matrix = crate::matrix::test_matrix(1, 1, vec![1.0]).unwrap();
+        let matrix = crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap();
         let mut workspace = RefinementWorkspace {
             best: vec![123.0],
             ..RefinementWorkspace::default()
@@ -1192,7 +1223,7 @@ mod tests {
         let initial_ptr = initial.as_ptr();
         let mut stats = LinearAlgebraStats::default();
         let mut settings = KktSettings {
-            max_refinement_steps: 0,
+            refine_iters: 0,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let solve = |initial,
@@ -1219,7 +1250,7 @@ mod tests {
         assert_eq!(returned, vec![0.0]);
         assert_eq!(returned.as_ptr(), initial_ptr);
         assert_eq!(workspace.best.as_ptr(), scratch);
-        settings.max_refinement_steps = 1;
+        settings.refine_iters = 1;
         for _ in 0..2 {
             let returned = solve(vec![0.0], &settings, &mut workspace, &mut stats);
             assert_eq!(returned, vec![0.5]);

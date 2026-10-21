@@ -2,12 +2,10 @@
 
 from ._api import (
     Cone,
-    Equilibration,
     LinearSolver,
     NonnegativeCone,
     PositiveSemidefiniteCone,
     Problem,
-    PSDCone,
     SecondOrderCone,
     Settings,
     Solution,
@@ -20,10 +18,8 @@ from ._api import (
 
 __all__ = [
     "Cone",
-    "Equilibration",
     "LinearSolver",
     "NonnegativeCone",
-    "PSDCone",
     "PositiveSemidefiniteCone",
     "Problem",
     "SecondOrderCone",

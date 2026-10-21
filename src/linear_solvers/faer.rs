@@ -276,7 +276,7 @@ mod tests {
                     }
                 }
             }
-            let matrix = crate::matrix::take_upper_triangle(
+            let matrix = crate::linear_algebra::take_upper_triangle(
                 CscMatrix::from_triplets(n, n, rows, columns, values).unwrap(),
             );
             let factor = FaerFactorization::new(matrix.clone(), &mut 0).unwrap();

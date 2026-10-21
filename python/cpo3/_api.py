@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from os import PathLike
-from typing import Any, Literal, TypeAlias
+from typing import Any
 
 import numpy as np
 import numpy.typing as npt
@@ -13,21 +13,12 @@ from scipy import sparse
 
 from . import _core
 
-ArrayLike: TypeAlias = npt.ArrayLike
-
 
 class LinearSolver(str, Enum):
     """Linear-system implementation used by the Rust solver."""
 
     FAER = "faer"
     FERAL = "feral"
-
-
-class Equilibration(str, Enum):
-    """Diagonal equilibration method for problem data."""
-
-    NONE = "none"
-    RUIZ = "ruiz"
 
 
 class Cone(ABC):
@@ -98,91 +89,115 @@ class PositiveSemidefiniteCone(Cone):
         return self.order * (self.order + 1) // 2
 
 
-PSDCone = PositiveSemidefiniteCone
-
-
-_SETTINGS_DEFAULTS = _core._settings_defaults()
-_SETTINGS_DEFAULTS["linear_solver"] = LinearSolver(_SETTINGS_DEFAULTS["linear_solver"])
-_SETTINGS_DEFAULTS["data_equilibration"] = Equilibration(
-    _SETTINGS_DEFAULTS["data_equilibration"]
-)
-
-
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Settings:
-    """Flat, keyword-only solve options with defaults and validation owned by Rust.
+    """Solver controls, termination tolerances, and numerical settings.
 
-    Options are grouped below into run controls, termination and certificates,
-    initialization and equilibration, KKT solves, and outer iterations.
+    Parameters
+    ----------
+    max_iters : int, default=100
+        Maximum number of outer solver iterations. Must be positive.
+    time_limit : float or None, default=None
+        Elapsed-time limit in seconds, including presolve. Must be nonnegative;
+        None disables the limit. Checked between solver iterations.
+    verbose : bool, default=False
+        Print solver settings, iteration progress, and the final summary.
+    presolve : bool, default=True
+        Simplify the problem before solving and recover the solution in the
+        original coordinates.
+    tol_feas : float, default=1e-8
+        Positive primal and dual feasibility tolerance. Each residual infinity
+        norm must be less than this value times one plus the largest infinity
+        norm of the terms in its equation.
+    tol_gap_abs : float, default=1e-8
+        Positive absolute duality-gap tolerance. Optimality requires
+        feasibility and either the absolute or relative gap criterion.
+    tol_gap_rel : float, default=1e-8
+        Positive duality-gap tolerance relative to the objective scale.
+    tol_infeas_abs : float, default=1e-8
+        Nonnegative certificate slope threshold. A primal or dual
+        infeasibility certificate requires b.T @ y or c.T @ x, respectively,
+        to be less than -tol_infeas_abs.
+    tol_infeas_rel : float, default=1e-8
+        Nonnegative tolerance for certificate residuals, normalized by the
+        certificate slope and ray norms.
+    certificate_ktratio : float, default=1e9
+        Consider infeasibility certificates only when the homogeneous ratio
+        kappa / tau exceeds this threshold. Must be at least one.
+    force_warm_start : bool, default=False
+        Accept the best finite interior warm-start candidate even if its local
+        score exceeds the screening threshold. Has no effect without a warm
+        start or for equality-only problems.
+    cvxopt_init : bool, default=False
+        Use a CVXOPT/Clarabel-style linear-system initialization when no warm
+        start is accepted. Falls back to the canonical spherical starting
+        point if initialization fails.
+    initial_mu : float, default=1e-3
+        Initial complementarity for the canonical spherical starting point.
+        Must be in (0, 1]. Has no effect on accepted warm or CVXOPT-style starts
+        or on equality-only problems.
+    ruiz_iters : int, default=2
+        Maximum number of Ruiz equilibration passes on the augmented problem
+        data (P, A, b, c). Zero disables equilibration.
+    ruiz_tol : float, default=1e-2
+        Nonnegative tolerance for equilibration: stop when all nonzero,
+        cone-compatible augmented row infinity norms are within this distance
+        of one.
+    linear_solver : LinearSolver, default=LinearSolver.FAER
+        Sparse factorization backend: LinearSolver.FAER or LinearSolver.FERAL.
+    eliminate_bounds : bool, default=True
+        Eliminate nonnegative-cone constraint rows with a single nonzero
+        coefficient from the KKT factorization by folding their contributions
+        into the primal diagonal.
+    refine_init_reg : float, default=1e-12
+        Initial nonnegative floor for diagonal magnitudes in the full KKT
+        system used for factorization. The solver adjusts this floor during
+        outer iterations; zero starts at the lower bound of 1e-20. Iterative
+        refinement targets the original KKT system.
+    refine_iters : int, default=30
+        Maximum number of iterative refinement corrections per KKT solve.
+        Zero disables corrections and keeps the initial linear solve.
+    refine_tol : float, default=1e-7
+        Positive componentwise backward-error target for iterative refinement.
+        Refinement may stop before reaching this target if further corrections
+        are unlikely to improve the solution or meet the target within budget.
+    step_fraction : float, default=0.999
+        Fraction of the step to the cone boundary to take. Must be strictly
+        between zero and one to retain an interior margin.
+
+    Notes
+    -----
+    All numerical values must be finite. Iteration limits must be nonnegative,
+    with max_iters strictly positive.
     """
 
-    # Run controls.
-    max_iters: int = _SETTINGS_DEFAULTS["max_iters"]
-    time_limit: float | None = _SETTINGS_DEFAULTS["time_limit"]
-    verbose: bool = _SETTINGS_DEFAULTS["verbose"]
-    presolve: bool = _SETTINGS_DEFAULTS["presolve"]
+    max_iters: int = 100
+    time_limit: float | None = None
+    verbose: bool = False
+    presolve: bool = True
 
-    # Termination and certificates.
-    tol_feas: float = _SETTINGS_DEFAULTS["tol_feas"]
-    tol_gap_abs: float = _SETTINGS_DEFAULTS["tol_gap_abs"]
-    tol_gap_rel: float = _SETTINGS_DEFAULTS["tol_gap_rel"]
-    tol_infeas_abs: float = _SETTINGS_DEFAULTS["tol_infeas_abs"]
-    tol_infeas_rel: float = _SETTINGS_DEFAULTS["tol_infeas_rel"]
-    certificate_ktratio: float = _SETTINGS_DEFAULTS["certificate_ktratio"]
+    tol_feas: float = 1e-8
+    tol_gap_abs: float = 1e-8
+    tol_gap_rel: float = 1e-8
+    tol_infeas_abs: float = 1e-8
+    tol_infeas_rel: float = 1e-8
+    certificate_ktratio: float = 1e9
 
-    # Initialization and equilibration.
-    force_warm_start: bool = _SETTINGS_DEFAULTS["force_warm_start"]
-    # Start from cpo3's CVXOPT-style KKT solve instead of the canonical point.
-    cvxopt_init: bool = _SETTINGS_DEFAULTS["cvxopt_init"]
-    # Canonical cold-start mu_0 = beta in (0, 1]; s_i = y_i = sqrt(beta).
-    # Tau preserves the sphere radius. Ignored for accepted warm/CVXOPT starts.
-    initial_mu: float = _SETTINGS_DEFAULTS["initial_mu"]
-    data_equilibration: Equilibration = _SETTINGS_DEFAULTS["data_equilibration"]
-    # Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
-    max_equilibration_passes: int = _SETTINGS_DEFAULTS["max_equilibration_passes"]
-    # Nonnegative tolerance on scaled P/A row infinity norms relative to one.
-    equilibration_tolerance: float = _SETTINGS_DEFAULTS["equilibration_tolerance"]
+    force_warm_start: bool = False
+    cvxopt_init: bool = False
+    initial_mu: float = 1e-3
+    ruiz_iters: int = 2
+    ruiz_tol: float = 1e-2
 
-    # KKT solves.
-    linear_solver: LinearSolver | Literal["faer", "feral"] = _SETTINGS_DEFAULTS[
-        "linear_solver"
-    ]
-    kkt_bound_elimination: bool = _SETTINGS_DEFAULTS["kkt_bound_elimination"]
-    # Initial adaptive diagonal floor; refinement targets the original K(mu).
-    initial_diagonal_floor: float = _SETTINGS_DEFAULTS["initial_diagonal_floor"]
-    # Additional correction solves per KKT solve; zero returns the initial solve without refinement.
-    max_refinement_steps: int = _SETTINGS_DEFAULTS["max_refinement_steps"]
-    # Positive componentwise backward-error target for iterative refinement.
-    refinement_tolerance: float = _SETTINGS_DEFAULTS["refinement_tolerance"]
+    linear_solver: LinearSolver = LinearSolver.FAER
+    eliminate_bounds: bool = True
+    refine_init_reg: float = 1e-12
+    refine_iters: int = 30
+    refine_tol: float = 1e-7
 
-    # Outer iterations.
-    # Fraction of the cone-boundary step to take, strictly between zero and one.
-    step_fraction: float = _SETTINGS_DEFAULTS["step_fraction"]
+    step_fraction: float = 0.999
 
     def __post_init__(self) -> None:
-        # Check Python types before conversion to Rust's unsigned counts/bools.
-        # Numerical ranges and interactions are validated by Settings::validate.
-        for name in (
-            "max_iters",
-            "max_equilibration_passes",
-            "max_refinement_steps",
-        ):
-            value = getattr(self, name)
-            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-                raise ValueError(f"{name} must be a nonnegative integer")
-        for name in (
-            "verbose",
-            "presolve",
-            "force_warm_start",
-            "cvxopt_init",
-            "kkt_bound_elimination",
-        ):
-            if not isinstance(getattr(self, name), bool):
-                raise TypeError(f"{name} must be a bool")
-        object.__setattr__(self, "linear_solver", LinearSolver(self.linear_solver))
-        object.__setattr__(
-            self, "data_equilibration", Equilibration(self.data_equilibration)
-        )
         _core._validate_settings(self)
 
 
@@ -205,9 +220,9 @@ class Problem:
         self,
         *,
         P: sparse.spmatrix | sparse.sparray | None,
-        c: ArrayLike,
+        c: npt.ArrayLike,
         A: sparse.spmatrix | sparse.sparray,
-        b: ArrayLike,
+        b: npt.ArrayLike,
         cones: Sequence[Cone],
     ) -> None:
         native_p = None if P is None else _matrix_parts(P, "P")
@@ -378,12 +393,8 @@ class SolutionInfo:
         return LinearSolver(self._native.linear_solver)
 
     @property
-    def data_equilibration(self) -> Equilibration:
-        return Equilibration(self._native.data_equilibration)
-
-    @property
-    def kkt_bound_elimination(self) -> bool:
-        return self._native.kkt_bound_elimination
+    def eliminate_bounds(self) -> bool:
+        return self._native.eliminate_bounds
 
 
 class Solution:
@@ -499,7 +510,7 @@ def _matrix_parts(value: object, name: str) -> _core._CscParts:
     return rows, columns, indptr, indices, data
 
 
-def _vector(value: ArrayLike, name: str) -> npt.NDArray[np.float64]:
+def _vector(value: npt.ArrayLike, name: str) -> npt.NDArray[np.float64]:
     vector = np.asarray(value, dtype=np.float64)
     if vector.ndim != 1:
         raise ValueError(f"{name} must be a one-dimensional vector")

@@ -21,13 +21,10 @@ pub enum Cone {
 impl Cone {
     /// Return the number of rows occupied by this cone block.
     #[must_use]
-    pub fn vector_dim(&self) -> Option<usize> {
+    pub fn vector_dim(&self) -> usize {
         match *self {
-            Self::Zero(dim) | Self::Nonnegative(dim) | Self::SecondOrder(dim) => Some(dim),
-            Self::PositiveSemidefinite(order) => order
-                .checked_add(1)
-                .and_then(|next| order.checked_mul(next))
-                .map(|product| product / 2),
+            Self::Zero(dim) | Self::Nonnegative(dim) | Self::SecondOrder(dim) => dim,
+            Self::PositiveSemidefinite(order) => order.strict_mul(order.strict_add(1)) / 2,
         }
     }
 

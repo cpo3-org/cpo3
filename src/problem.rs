@@ -11,6 +11,8 @@ pub enum ProblemError {
     InvalidConstraintColumnCount,
     #[error("A must have one row per element of b")]
     InvalidConstraintRowCount,
+    #[error("problem matrices must contain only finite values")]
+    NonFiniteMatrix,
     #[error("problem vectors must contain only finite values")]
     NonFiniteVector,
     #[error("P must be symmetric")]
@@ -19,8 +21,6 @@ pub enum ProblemError {
     EmptyCone,
     #[error("a second-order cone must have dimension at least two")]
     InvalidSecondOrderCone,
-    #[error("cone dimension overflow")]
-    ConeDimensionOverflow,
     #[error("cone dimensions sum to {actual}, but A and b have {expected} rows")]
     ConeDimensionMismatch { expected: usize, actual: usize },
 }
@@ -36,8 +36,8 @@ pub struct Problem {
 }
 
 impl Problem {
-    /// The presolve builder preserves dimensions, upper-triangle storage, and cone blocks.
-    pub(crate) fn from_presolved(
+    /// Construct from validated data with upper-triangular P, without rechecking it.
+    pub(crate) fn from_validated(
         p: Option<CscMatrix>,
         c: Vec<f64>,
         a: CscMatrix,
@@ -55,17 +55,17 @@ impl Problem {
         b: Vec<f64>,
         cones: Vec<Cone>,
     ) -> Result<Self, ProblemError> {
-        if let Some(p) = &p {
-            if p.rows() != c.len() || p.columns() != c.len() {
-                return Err(ProblemError::InvalidQuadraticShape);
-            }
+        let mut problem = Self { p, c, a, b, cones };
+        problem.validate()?;
+        if let Some(p) = &problem.p {
             validate_symmetry(p)?;
         }
-        Self::from_upper_triangle(p.map(crate::matrix::take_upper_triangle), c, a, b, cones)
+        problem.p = problem.p.map(crate::linear_algebra::take_upper_triangle);
+        Ok(problem)
     }
 
-    /// Internal builders supply a validated upper-triangle P; validate the
-    /// remaining problem data without expanding or checking its symmetry again.
+    /// Construct from upper-triangular P, validating data without a symmetry check.
+    #[cfg(any(feature = "mps", test))]
     pub(crate) fn from_upper_triangle(
         p: Option<CscMatrix>,
         c: Vec<f64>,
@@ -73,44 +73,53 @@ impl Problem {
         b: Vec<f64>,
         cones: Vec<Cone>,
     ) -> Result<Self, ProblemError> {
-        let variable_count = c.len();
-        if let Some(p) = &p
+        let problem = Self { p, c, a, b, cones };
+        problem.validate()?;
+        Ok(problem)
+    }
+
+    fn validate(&self) -> Result<(), ProblemError> {
+        let variable_count = self.c.len();
+        if let Some(p) = &self.p
             && (p.rows() != variable_count || p.columns() != variable_count)
         {
             return Err(ProblemError::InvalidQuadraticShape);
         }
-        if a.columns() != variable_count {
+        if self.a.columns() != variable_count {
             return Err(ProblemError::InvalidConstraintColumnCount);
         }
-        if a.rows() != b.len() {
+        if self.a.rows() != self.b.len() {
             return Err(ProblemError::InvalidConstraintRowCount);
         }
-        if !c.iter().chain(&b).all(|value| value.is_finite()) {
+        if self.a.values().iter().any(|value| !value.is_finite())
+            || self
+                .p
+                .as_ref()
+                .is_some_and(|p| p.values().iter().any(|value| !value.is_finite()))
+        {
+            return Err(ProblemError::NonFiniteMatrix);
+        }
+        if !self.c.iter().chain(&self.b).all(|value| value.is_finite()) {
             return Err(ProblemError::NonFiniteVector);
         }
         let mut cone_dim = 0usize;
-        for cone in &cones {
+        for cone in &self.cones {
             if cone.parameter() == 0 {
                 return Err(ProblemError::EmptyCone);
             }
             if matches!(cone, Cone::SecondOrder(dim) if *dim < 2) {
                 return Err(ProblemError::InvalidSecondOrderCone);
             }
-            cone_dim = cone_dim
-                .checked_add(
-                    cone.vector_dim()
-                        .ok_or(ProblemError::ConeDimensionOverflow)?,
-                )
-                .ok_or(ProblemError::ConeDimensionOverflow)?;
+            cone_dim = cone_dim.strict_add(cone.vector_dim());
         }
-        if cone_dim != b.len() {
+        if cone_dim != self.b.len() {
             return Err(ProblemError::ConeDimensionMismatch {
-                expected: b.len(),
+                expected: self.b.len(),
                 actual: cone_dim,
             });
         }
 
-        Ok(Self { p, c, a, b, cones })
+        Ok(())
     }
 
     /// Upper triangle of the symmetric quadratic matrix, including its diagonal.
@@ -141,6 +150,10 @@ impl Problem {
     pub fn constraint_count(&self) -> usize {
         self.b.len()
     }
+
+    pub fn dims(&self) -> (usize, usize) {
+        (self.b.len(), self.c.len())
+    }
 }
 
 fn validate_symmetry(matrix: &CscMatrix) -> Result<(), ProblemError> {
@@ -157,7 +170,7 @@ impl Problem {
     pub(crate) fn p_mul_opt(&self, vector: &[f64]) -> Option<Vec<f64>> {
         self.p().map(|p| {
             let mut product = Vec::new();
-            crate::matrix::symmetric_mul_into(p, vector, &mut product);
+            crate::linear_algebra::symmetric_mul_into(p, vector, &mut product);
             product
         })
     }

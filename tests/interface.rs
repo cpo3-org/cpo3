@@ -1,14 +1,12 @@
 mod common;
-use cpo3::{
-    Cone, CscMatrix, Equilibration, LinearSolver, Problem, ProblemError, Settings, SolverStatus,
-    solve,
-};
+use cpo3::{Cone, CscMatrix, LinearSolver, Problem, ProblemError, Settings, SolverStatus, solve};
 
 #[test]
 fn cones_report_their_vector_dim() {
-    assert_eq!(Cone::Nonnegative(4).vector_dim(), Some(4));
-    assert_eq!(Cone::SecondOrder(3).vector_dim(), Some(3));
-    assert_eq!(Cone::PositiveSemidefinite(3).vector_dim(), Some(6));
+    assert_eq!(Cone::Zero(2).vector_dim(), 2);
+    assert_eq!(Cone::Nonnegative(4).vector_dim(), 4);
+    assert_eq!(Cone::SecondOrder(3).vector_dim(), 3);
+    assert_eq!(Cone::PositiveSemidefinite(3).vector_dim(), 6);
 }
 
 #[test]
@@ -20,9 +18,8 @@ fn settings_use_short_names() {
     assert_eq!(settings.tol_gap_rel, 1e-8);
     assert_eq!(settings.linear_solver, LinearSolver::Faer);
     assert_eq!(LinearSolver::default(), LinearSolver::Faer);
-    assert_eq!(settings.data_equilibration, Equilibration::Ruiz);
-    assert!(settings.kkt_bound_elimination);
-    assert_eq!(settings.initial_diagonal_floor, 1e-12);
+    assert!(settings.eliminate_bounds);
+    assert_eq!(settings.refine_init_reg, 1e-12);
     assert!(!settings.cvxopt_init);
     assert_eq!(settings.initial_mu, 1e-3);
     assert_eq!(settings.step_fraction, 0.999);
@@ -118,8 +115,7 @@ fn assert_bounded_quadratic_solution(problem: &Problem, linear_solver: LinearSol
     let solution = solve(problem, &solve_settings(linear_solver)).unwrap();
 
     assert_eq!(solution.status(), SolverStatus::Solved);
-    assert_eq!(solution.info().data_equilibration, Equilibration::Ruiz);
-    assert!(solution.info().kkt_bound_elimination);
+    assert!(solution.info().eliminate_bounds);
     assert_close(solution.x()[0], 1.0);
     assert_close(solution.y()[0], 1.0);
     assert_close(solution.s()[0], 0.0);
@@ -152,19 +148,19 @@ fn bound_elimination_is_optional_with_every_sparse_solver() {
     .unwrap();
     for linear_solver in [LinearSolver::Faer, LinearSolver::Feral] {
         for presolve in [false, true] {
-            for kkt_bound_elimination in [false, true] {
+            for eliminate_bounds in [false, true] {
                 let solution = solve(
                     &problem,
                     &Settings {
                         presolve,
-                        kkt_bound_elimination,
+                        eliminate_bounds,
                         ..solve_settings(linear_solver)
                     },
                 )
                 .unwrap();
                 assert_eq!(solution.status(), SolverStatus::Solved);
                 assert!(solution.info().linear_algebra.primary_solves > 0);
-                assert_eq!(solution.info().kkt_bound_elimination, kkt_bound_elimination);
+                assert_eq!(solution.info().eliminate_bounds, eliminate_bounds);
                 assert_close(solution.x()[0], 0.5);
                 assert_close(solution.x()[1], 1.5);
                 assert_close(solution.y()[0], 1.0);

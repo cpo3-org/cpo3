@@ -16,7 +16,7 @@ the API and solver behavior may change between releases.
 
 ## Install from source
 
-Requires Rust 1.89 or later, Python 3.10 or later, and [uv](https://docs.astral.sh/uv/).
+Requires Rust 1.91 or later, Python 3.10 or later, and [uv](https://docs.astral.sh/uv/).
 From the repository root:
 
 ```console
@@ -55,14 +55,14 @@ inequality slacks and multipliers `0.1`. Accepted warm starts and CVXOPT starts 
 unaffected; a failed CVXOPT start falls back to this configured cold start.
 
 The default `step_fraction` is `0.999`. KKT solves use an adaptive diagonal
-floor, initially `initial_diagonal_floor=1e-12`, applied before singleton
+floor, initially `refine_init_reg=1e-12`, applied before singleton
 elimination. Refinement always targets the original system at the current
 complementarity. Numerical failures increase the floor and retry; accepted
 steps increase or decrease it according to the dominant source of refinement
 error. Accurate steps relax it, and a retry prevents immediate relaxation.
 Faer pivot replacement is disabled.
 
-Refinement allows up to `max_refinement_steps=30` corrections, with tolerance
+Refinement allows up to `refine_iters=30` corrections, with tolerance
 `1e-7`. It retains the best finite iterate when it cannot reach tolerance.
 The existing forecast can stop earlier: after two corrections, it projects
 whether the recent contraction rate can reach tolerance within the remaining
@@ -102,6 +102,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Progress output
+
+Set `verbose=True` in Python or `verbose: true` in Rust to print the problem
+summary, iteration table, and termination status to stderr. Nonzero counts and
+fill percentages are reported separately for `P` and `A`;
+`P` counts and fill refer to the full symmetric matrix. Set the environment
+variable `CPO3_PROGRESS_DETAILS=1` to also show `mu`, `tau`, `sigma`, and
+the affine step. Detailed output still requires `verbose` to be enabled.
+
 ## Development
 
 Run the Rust and Python tests:
@@ -133,9 +142,9 @@ Equation labels below refer to the paper source, `mpc_main.tex`.
 | `src/embedding.rs` | Homogeneous state, complementarity, and spherical normalization (`eq:iterate_normalisation`). |
 | `src/init.rs` | Canonical or CVXOPT cold starts and local-norm warm-start screening (`subsec:warm-start`). |
 | `src/mehrotra.rs` | Predictor, centering, second-order corrector, and damped boundary step (`subsec:mehrotra`). |
-| `src/josephy.rs` | Surrogate right-hand sides, cached data solve, scalar quadratic, and reconstruction (`eq:surrogate_rhs`, `eq:cached_data_solve`, `thm:resolvent`). |
+| `src/josephy/mod.rs` | Surrogate right-hand sides, cached data solve, scalar quadratic, and reconstruction (`eq:surrogate_rhs`, `eq:cached_data_solve`, `thm:resolvent`). |
 | `src/josephy/kkt.rs` | Sparse quasi-definite system (`eq:qd_system`), singleton Schur complement, and full-system refinement. |
-| `src/linear_system/` | Faer and Feral factorization adapters. |
+| `src/linear_solvers/` | Faer and Feral factorization adapters. |
 | `src/solution.rs` | Preparation, outer loop, original-unit stopping tests, certificates, and recovery (`subsec:termination`). |
 
 The implemented centering rule is `sigma = (1 - alpha_affine)^3`; the paper's
