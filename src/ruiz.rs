@@ -5,6 +5,12 @@ use std::borrow::Cow;
 
 use crate::{Cone, CscMatrix, Problem, Settings, SolveError};
 
+struct Scales {
+    dx: Vec<f64>,
+    dy: Vec<f64>,
+    dt: f64,
+}
+
 /// A problem in equilibrated homogeneous coordinates and its inverse mapping.
 ///
 /// `dx` and `dy` store cumulative positive Ruiz factors for primal variables
@@ -15,21 +21,17 @@ use crate::{Cone, CscMatrix, Problem, Settings, SolveError};
 /// P_scaled = Dx * P * Dx       A_scaled = Dy * A * Dx
 /// c_scaled = dt * Dx * c       b_scaled = dt * Dy * b
 /// ```
+/// Identity equilibration stores no factors (`scales: None`).
 pub(crate) struct EquilibratedProblem<'a> {
     problem: Cow<'a, Problem>,
-    dx: Vec<f64>,
-    dy: Vec<f64>,
-    dt: f64,
+    scales: Option<Scales>,
 }
 
 impl<'a> EquilibratedProblem<'a> {
     fn unscaled(problem: &'a Problem) -> Self {
-        let (m, n) = problem.dims();
         Self {
             problem: Cow::Borrowed(problem),
-            dx: vec![1.0; n],
-            dy: vec![1.0; m],
-            dt: 1.0,
+            scales: None,
         }
     }
 
@@ -38,26 +40,35 @@ impl<'a> EquilibratedProblem<'a> {
     }
 
     pub(crate) fn scale_x(&self, values: &[f64]) -> Vec<f64> {
+        let Some(scales) = &self.scales else {
+            return values.to_vec();
+        };
         values
             .iter()
-            .zip(&self.dx)
-            .map(|(&x, &dx)| x * self.dt / dx)
+            .zip(&scales.dx)
+            .map(|(&x, &dx)| x * scales.dt / dx)
             .collect()
     }
 
     pub(crate) fn scale_y(&self, values: &[f64]) -> Vec<f64> {
+        let Some(scales) = &self.scales else {
+            return values.to_vec();
+        };
         values
             .iter()
-            .zip(&self.dy)
-            .map(|(&y, &dy)| y * self.dt / dy)
+            .zip(&scales.dy)
+            .map(|(&y, &dy)| y * scales.dt / dy)
             .collect()
     }
 
     pub(crate) fn scale_s(&self, values: &[f64]) -> Vec<f64> {
+        let Some(scales) = &self.scales else {
+            return values.to_vec();
+        };
         values
             .iter()
-            .zip(&self.dy)
-            .map(|(&s, &dy)| dy * (s * self.dt))
+            .zip(&scales.dy)
+            .map(|(&s, &dy)| dy * (s * scales.dt))
             .collect()
     }
 
@@ -81,34 +92,46 @@ impl<'a> EquilibratedProblem<'a> {
 
     /// Write `unscale_x(values * inverse_tau)` to `out`.
     pub(crate) fn unscale_x_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
-        let factor = inverse_tau / self.dt;
+        let Some(scales) = &self.scales else {
+            unscale_identity_into(values, inverse_tau, out);
+            return;
+        };
+        let factor = inverse_tau / scales.dt;
         out.clear();
         out.extend(
             values
                 .iter()
-                .zip(&self.dx)
+                .zip(&scales.dx)
                 .map(|(&x, &dx)| dx * (x * factor)),
         );
     }
 
     pub(crate) fn unscale_y_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
-        let factor = inverse_tau / self.dt;
+        let Some(scales) = &self.scales else {
+            unscale_identity_into(values, inverse_tau, out);
+            return;
+        };
+        let factor = inverse_tau / scales.dt;
         out.clear();
         out.extend(
             values
                 .iter()
-                .zip(&self.dy)
+                .zip(&scales.dy)
                 .map(|(&y, &dy)| dy * (y * factor)),
         );
     }
 
     pub(crate) fn unscale_s_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
+        let Some(scales) = &self.scales else {
+            unscale_identity_into(values, inverse_tau, out);
+            return;
+        };
         out.clear();
         out.extend(
             values
                 .iter()
-                .zip(&self.dy)
-                .map(|(&s, &dy)| (s * inverse_tau) / (self.dt * dy)),
+                .zip(&scales.dy)
+                .map(|(&s, &dy)| (s * inverse_tau) / (scales.dt * dy)),
         );
     }
 
@@ -148,12 +171,7 @@ impl<'a> EquilibratedProblem<'a> {
             ));
         }
         if is_identity(&dx, &dy, dt) {
-            return Ok(Self {
-                problem: Cow::Borrowed(problem),
-                dx,
-                dy,
-                dt,
-            });
+            return Ok(Self::unscaled(problem));
         }
         let p = problem.p().map(|p| scale_matrix(p, &dx, &dx)).transpose()?;
         let a = scale_matrix(problem.a(), &dy, &dx)?;
@@ -162,10 +180,17 @@ impl<'a> EquilibratedProblem<'a> {
         let scaled = Problem::from_validated(p, c, a, b, problem.cones().to_vec());
         Ok(Self {
             problem: Cow::Owned(scaled),
-            dx,
-            dy,
-            dt,
+            scales: Some(Scales { dx, dy, dt }),
         })
+    }
+}
+
+fn unscale_identity_into(values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
+    out.clear();
+    if inverse_tau == 1.0 {
+        out.extend_from_slice(values);
+    } else {
+        out.extend(values.iter().map(|&value| value * inverse_tau));
     }
 }
 
