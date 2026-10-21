@@ -171,9 +171,36 @@ impl<'a> EquilibratedProblem<'a> {
 
 #[inline]
 fn update_scales(scales: &mut [f64], norms: &Col<f64>) {
-    for (scale, norm) in scales.iter_mut().zip(norms.iter()) {
-        if *norm > 0.0 {
-            *scale /= norm.sqrt();
+    let norms = norms.try_as_col_major().unwrap().as_slice();
+    assert_eq!(scales.len(), norms.len());
+    pulp::Arch::new().dispatch(ScaleUpdate { scales, norms });
+}
+
+struct ScaleUpdate<'a> {
+    scales: &'a mut [f64],
+    norms: &'a [f64],
+}
+
+impl pulp::WithSimd for ScaleUpdate<'_> {
+    type Output = ();
+
+    #[inline(always)]
+    fn with_simd<S: pulp::Simd>(self, simd: S) {
+        let (scales, scale_tail) = S::as_mut_simd_f64s(self.scales);
+        let (norms, norm_tail) = S::as_simd_f64s(self.norms);
+        let zero = simd.splat_f64s(0.0);
+        let one = simd.splat_f64s(1.0);
+        // Inactive lanes retain their original factors and use a safe divisor.
+        for (scale, &norm) in scales.iter_mut().zip(norms) {
+            let mask = simd.greater_than_f64s(norm, zero);
+            let denominator = simd.sqrt_f64s(simd.select_f64s(mask, norm, one));
+            let updated = simd.div_f64s(*scale, denominator);
+            *scale = simd.select_f64s(mask, updated, *scale);
+        }
+        for (scale, &norm) in scale_tail.iter_mut().zip(norm_tail) {
+            if norm > 0.0 {
+                *scale /= norm.sqrt();
+            }
         }
     }
 }

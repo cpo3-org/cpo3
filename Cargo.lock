@@ -153,6 +153,7 @@ dependencies = [
  "mps",
  "numpy",
  "presolve",
+ "pulp",
  "pyo3",
  "thiserror 2.0.20",
 ]
