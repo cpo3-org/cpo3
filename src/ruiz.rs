@@ -81,22 +81,24 @@ impl<'a> EquilibratedProblem<'a> {
 
     /// Write `unscale_x(values * inverse_tau)` to `out`.
     pub(crate) fn unscale_x_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
+        let factor = inverse_tau / self.dt;
         out.clear();
         out.extend(
             values
                 .iter()
                 .zip(&self.dx)
-                .map(|(&x, &dx)| dx * (x * inverse_tau) / self.dt),
+                .map(|(&x, &dx)| dx * (x * factor)),
         );
     }
 
     pub(crate) fn unscale_y_into(&self, values: &[f64], inverse_tau: f64, out: &mut Vec<f64>) {
+        let factor = inverse_tau / self.dt;
         out.clear();
         out.extend(
             values
                 .iter()
                 .zip(&self.dy)
-                .map(|(&y, &dy)| dy * (y * inverse_tau) / self.dt),
+                .map(|(&y, &dy)| dy * (y * factor)),
         );
     }
 
@@ -133,16 +135,8 @@ impl<'a> EquilibratedProblem<'a> {
                 break;
             }
 
-            for (scale, norm) in dx.iter_mut().zip(nx.iter()) {
-                if *norm > 0.0 {
-                    *scale /= norm.sqrt();
-                }
-            }
-            for (scale, norm) in dy.iter_mut().zip(ny.iter()) {
-                if *norm > 0.0 {
-                    *scale /= norm.sqrt();
-                }
-            }
+            update_scales(&mut dx, &nx);
+            update_scales(&mut dy, &ny);
             if nt > 0.0 {
                 dt /= nt.sqrt();
             }
@@ -172,6 +166,15 @@ impl<'a> EquilibratedProblem<'a> {
             dy,
             dt,
         })
+    }
+}
+
+#[inline]
+fn update_scales(scales: &mut [f64], norms: &Col<f64>) {
+    for (scale, norm) in scales.iter_mut().zip(norms.iter()) {
+        if *norm > 0.0 {
+            *scale /= norm.sqrt();
+        }
     }
 }
 
@@ -259,8 +262,25 @@ fn row_norms<const UNIT_SCALING: bool>(
     nx: &mut Col<f64>,
     ny: &mut Col<f64>,
 ) -> f64 {
-    nx.fill(0.0);
-    ny.fill(0.0);
+    let mut nt = 0.0_f64;
+    for ((norm, &scale), &value) in nx.iter_mut().zip(dx).zip(problem.c()) {
+        let magnitude = if UNIT_SCALING {
+            value.abs()
+        } else {
+            value.abs() * scale * dt
+        };
+        *norm = magnitude;
+        nt = nt.max(magnitude);
+    }
+    for ((norm, &scale), &value) in ny.iter_mut().zip(dy).zip(problem.b()) {
+        let magnitude = if UNIT_SCALING {
+            value.abs()
+        } else {
+            value.abs() * scale * dt
+        };
+        *norm = magnitude;
+        nt = nt.max(magnitude);
+    }
     let (m, n) = problem.dims();
     faer::with_dim!(m, m);
     faer::with_dim!(n, n);
@@ -302,25 +322,6 @@ fn row_norms<const UNIT_SCALING: bool>(
             }
             nx[j] = col_max;
         }
-    }
-    let mut nt = 0.0_f64;
-    for ((norm, &scale), &value) in nx.iter_mut().zip(dx).zip(problem.c()) {
-        let magnitude = if UNIT_SCALING {
-            value.abs()
-        } else {
-            value.abs() * scale * dt
-        };
-        *norm = norm.max(magnitude);
-        nt = nt.max(magnitude);
-    }
-    for ((norm, &scale), &value) in ny.iter_mut().zip(dy).zip(problem.b()) {
-        let magnitude = if UNIT_SCALING {
-            value.abs()
-        } else {
-            value.abs() * scale * dt
-        };
-        *norm = norm.max(magnitude);
-        nt = nt.max(magnitude);
     }
     nt
 }
