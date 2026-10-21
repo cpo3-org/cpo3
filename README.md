@@ -145,7 +145,7 @@ Equation labels below refer to the paper source, `mpc_main.tex`.
 | `src/josephy/mod.rs` | Surrogate right-hand sides, cached data solve, scalar quadratic, and reconstruction (`eq:surrogate_rhs`, `eq:cached_data_solve`, `thm:resolvent`). |
 | `src/josephy/kkt.rs` | Sparse quasi-definite system (`eq:qd_system`), singleton Schur complement, and full-system refinement. |
 | `src/linear_solvers/` | Faer and Feral factorization adapters. |
-| `src/solution.rs` | Preparation, outer loop, original-unit stopping tests, certificates, and recovery (`subsec:termination`). |
+| `src/solve.rs` | Preparation, outer loop, original-unit stopping tests, certificates, and recovery (`subsec:termination`). |
 
 The implemented centering rule is `sigma = (1 - alpha_affine)^3`; the paper's
 normalized affine-complementarity formula is awaiting revision. `mu` denotes

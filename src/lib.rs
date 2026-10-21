@@ -12,7 +12,7 @@ mod presolve;
 mod problem;
 mod ruiz;
 mod settings;
-mod solution;
+mod solve;
 
 #[cfg(feature = "python")]
 mod python;
@@ -25,7 +25,7 @@ pub use linear_algebra::{CscMatrix, MatrixError};
 pub use linear_solvers::{LinearAlgebraStats, LinearSolver};
 pub use problem::{Problem, ProblemError};
 pub use settings::Settings;
-pub use solution::{Solution, SolutionInfo, SolveError, SolverStatus, solve, solve_from};
+pub use solve::{Solution, SolutionInfo, SolveError, SolverStatus, solve, solve_from};
 
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
