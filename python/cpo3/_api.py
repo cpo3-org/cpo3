@@ -134,12 +134,13 @@ class Settings:
     force_warm_start: bool = _SETTINGS_DEFAULTS["force_warm_start"]
     # Start from cpo3's CVXOPT-style KKT solve instead of the canonical point.
     cvxopt_init: bool = _SETTINGS_DEFAULTS["cvxopt_init"]
-    # Cold-point scale on the embedding sphere; equality-only problems use 1.
-    initial_scale: float = _SETTINGS_DEFAULTS["initial_scale"]
+    # Canonical cold-start mu_0 = beta in (0, 1]; s_i = y_i = sqrt(beta).
+    # Tau preserves the sphere radius. Ignored for accepted warm/CVXOPT starts.
+    initial_mu: float = _SETTINGS_DEFAULTS["initial_mu"]
     data_equilibration: Equilibration = _SETTINGS_DEFAULTS["data_equilibration"]
     # Maximum problem-data Ruiz scaling passes; zero leaves the data unscaled.
     max_equilibration_passes: int = _SETTINGS_DEFAULTS["max_equilibration_passes"]
-    # Nonnegative tolerance on scaled augmented row infinity norms relative to one.
+    # Nonnegative tolerance on scaled P/A row infinity norms relative to one.
     equilibration_tolerance: float = _SETTINGS_DEFAULTS["equilibration_tolerance"]
 
     # KKT solves.
@@ -147,25 +148,16 @@ class Settings:
         "linear_solver"
     ]
     kkt_bound_elimination: bool = _SETTINGS_DEFAULTS["kkt_bound_elimination"]
-    min_static_regularization: float = _SETTINGS_DEFAULTS["min_static_regularization"]
+    # Initial adaptive diagonal floor; refinement targets the original K(mu).
+    initial_diagonal_floor: float = _SETTINGS_DEFAULTS["initial_diagonal_floor"]
     # Additional correction solves per KKT solve; zero returns the initial solve without refinement.
     max_refinement_steps: int = _SETTINGS_DEFAULTS["max_refinement_steps"]
     # Positive componentwise backward-error target for iterative refinement.
     refinement_tolerance: float = _SETTINGS_DEFAULTS["refinement_tolerance"]
 
     # Outer iterations.
-    # Initial true-KKT-shift floor; adapts independently of complementarity.
-    initial_shift_floor: float = _SETTINGS_DEFAULTS["initial_shift_floor"]
     # Fraction of the cone-boundary step to take, strictly between zero and one.
     step_fraction: float = _SETTINGS_DEFAULTS["step_fraction"]
-    max_centrality_correctors: int = _SETTINGS_DEFAULTS["max_centrality_correctors"]
-    # Skip extra correctors at this undamped boundary step; zero skips all.
-    corrector_gate: float = _SETTINGS_DEFAULTS["corrector_gate"]
-    governor: bool = _SETTINGS_DEFAULTS["governor"]
-    # Maximum governor-triggered recentering steps; zero disables the governor.
-    max_recenters: int = _SETTINGS_DEFAULTS["max_recenters"]
-    # Persistent centering floor in [0, 1] after the governor first triggers.
-    recenter_sigma_floor: float = _SETTINGS_DEFAULTS["recenter_sigma_floor"]
 
     def __post_init__(self) -> None:
         # Check Python types before conversion to Rust's unsigned counts/bools.
@@ -174,8 +166,6 @@ class Settings:
             "max_iters",
             "max_equilibration_passes",
             "max_refinement_steps",
-            "max_centrality_correctors",
-            "max_recenters",
         ):
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -186,7 +176,6 @@ class Settings:
             "force_warm_start",
             "cvxopt_init",
             "kkt_bound_elimination",
-            "governor",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -318,28 +307,12 @@ class SolutionInfo:
         return self._native.comp
 
     @property
-    def init_level(self) -> float:
-        return self._native.init_level
-
-    @property
-    def init_proximity(self) -> float:
-        return self._native.init_proximity
-
-    @property
-    def init_proximity_after(self) -> float:
-        return self._native.init_proximity_after
+    def warm_start_score(self) -> float | None:
+        return self._native.warm_start_score
 
     @property
     def warm_start_used(self) -> bool | None:
         return self._native.warm_start_used
-
-    @property
-    def warm_level(self) -> float:
-        return self._native.warm_level
-
-    @property
-    def warm_proximity(self) -> float:
-        return self._native.warm_proximity
 
     @property
     def cvxopt_init_used(self) -> bool | None:
@@ -369,12 +342,20 @@ class SolutionInfo:
         return self._native.presolve_parallel_comparisons
 
     @property
-    def kkt_solves(self) -> int:
-        return self._native.kkt_solves
+    def primary_solves(self) -> int:
+        """Initial linear solves attempted for KKT right-hand sides.
+
+        Includes initialization and internal retries, but excludes refinement.
+        """
+        return self._native.primary_solves
 
     @property
-    def refinement_passes(self) -> int:
-        return self._native.refinement_passes
+    def refinement_solves(self) -> int:
+        """Correction linear solves attempted, including internally failed attempts.
+
+        Excludes the initial solve for each right-hand side and residual checks.
+        """
+        return self._native.refinement_solves
 
     @property
     def refinement_settled(self) -> int:
@@ -385,24 +366,12 @@ class SolutionInfo:
         return self._native.refinement_failures
 
     @property
-    def recenter_steps(self) -> int:
-        return self._native.recenter_steps
-
-    @property
     def factorizations(self) -> int:
         return self._native.factorizations
 
     @property
     def inertia_failures(self) -> int:
         return self._native.inertia_failures
-
-    @property
-    def corrector_tries(self) -> int:
-        return self._native.corrector_tries
-
-    @property
-    def corrector_accepts(self) -> int:
-        return self._native.corrector_accepts
 
     @property
     def linear_solver(self) -> LinearSolver:

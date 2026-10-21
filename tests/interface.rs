@@ -22,8 +22,10 @@ fn settings_use_short_names() {
     assert_eq!(LinearSolver::default(), LinearSolver::Faer);
     assert_eq!(settings.data_equilibration, Equilibration::Ruiz);
     assert!(settings.kkt_bound_elimination);
-    assert_eq!(settings.initial_shift_floor, 1e-10);
+    assert_eq!(settings.initial_diagonal_floor, 1e-12);
     assert!(!settings.cvxopt_init);
+    assert_eq!(settings.initial_mu, 1e-3);
+    assert_eq!(settings.step_fraction, 0.999);
 }
 
 fn sparse_identity(size: usize) -> CscMatrix {
@@ -161,7 +163,7 @@ fn bound_elimination_is_optional_with_every_sparse_solver() {
                 )
                 .unwrap();
                 assert_eq!(solution.status(), SolverStatus::Solved);
-                assert!(solution.info().linear_algebra.kkt_solves > 0);
+                assert!(solution.info().linear_algebra.primary_solves > 0);
                 assert_eq!(solution.info().kkt_bound_elimination, kkt_bound_elimination);
                 assert_close(solution.x()[0], 0.5);
                 assert_close(solution.x()[1], 1.5);
@@ -330,7 +332,7 @@ fn cvxopt_initialization_solves_the_reference_problems_with_every_solver() {
                 assert_ne!(info.cvxopt_init_used, Some(false));
                 if info.cvxopt_init_used.is_some() {
                     assert!(info.linear_algebra.factorizations >= 1);
-                    assert!(info.linear_algebra.kkt_solves >= 1);
+                    assert!(info.linear_algebra.primary_solves >= 1);
                 }
                 for (actual, expected) in solution.x().iter().zip(&expected) {
                     assert_close(*actual, *expected);
@@ -465,4 +467,32 @@ fn owned_conversion_moves_cpo3_matrix_and_vector_buffers() {
     assert_eq!(native.c.as_ptr(), c);
     assert_eq!(native.p.as_ref().unwrap().values().as_ptr(), p);
     assert_eq!(native.p.unwrap().values(), [2., 1., 3.]);
+}
+
+#[test]
+fn equality_zero_target_does_not_falsely_accept_inconsistent_or_unbounded_problems() {
+    // The baseline does not generate equality-only certificates with presolve
+    // off (its certificate gate is zero). Preserve rejection as non-solutions.
+    for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for (c, b) in [(0.0, 1.0), (-1.0, 0.0)] {
+            let problem = Problem::new(
+                None,
+                vec![c],
+                common::matrix(1, 1, vec![0.0]).unwrap(),
+                vec![b],
+                vec![Cone::Zero(1)],
+            )
+            .unwrap();
+            let solution = solve(
+                &problem,
+                &Settings {
+                    presolve: false,
+                    linear_solver: solver,
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(solution.status(), SolverStatus::MaxIterations);
+        }
+    }
 }

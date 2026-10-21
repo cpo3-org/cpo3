@@ -26,22 +26,16 @@ macro_rules! scalar_fields {
             // Initialization and equilibration.
             force_warm_start,
             cvxopt_init,
-            initial_scale,
+            initial_mu,
             max_equilibration_passes,
             equilibration_tolerance,
             // KKT solves.
             kkt_bound_elimination,
-            min_static_regularization,
+            initial_diagonal_floor,
             max_refinement_steps,
             refinement_tolerance,
             // Outer iterations.
-            initial_shift_floor,
             step_fraction,
-            max_centrality_correctors,
-            corrector_gate,
-            governor,
-            max_recenters,
-            recenter_sigma_floor,
         }
     };
 }

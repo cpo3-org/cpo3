@@ -53,16 +53,16 @@ def test_settings_use_short_names() -> None:
     assert settings.linear_solver is cpo3.LinearSolver.FAER
     assert settings.data_equilibration is cpo3.Equilibration.RUIZ
     assert settings.kkt_bound_elimination is True
-    assert settings.initial_shift_floor == 1e-10
-    assert settings.min_static_regularization == 0.0
-    assert settings.governor is True
+    assert settings.initial_diagonal_floor == 1e-12
     assert not hasattr(settings, "shift_floor")
-    assert settings.initial_scale == 0.01
+    assert not hasattr(settings, "initial_scale")
     assert settings.tol_infeas_abs == 1e-8
     assert settings.tol_infeas_rel == 1e-8
     assert settings.certificate_ktratio == 1e9
     assert settings.force_warm_start is False
     assert settings.cvxopt_init is False
+    assert settings.initial_mu == 1e-3
+    assert settings.step_fraction == 0.999
     assert settings.presolve is True
     assert not hasattr(settings, "max_iterations")
     assert not hasattr(settings, "absolute_tolerance")
@@ -88,10 +88,9 @@ def test_cvxopt_initialization_solves_and_is_reported() -> None:
     assert canonical.info.cvxopt_init_used is False
     assert cvxopt.info.pobj == pytest.approx(canonical.info.pobj, abs=1e-6)
     np.testing.assert_allclose(cvxopt.x, canonical.x, atol=1e-6)
-    assert math.isfinite(cvxopt.info.init_proximity)
     # The initialization solve is counted with the main loop's linear algebra.
     assert cvxopt.info.factorizations >= 1
-    assert cvxopt.info.kkt_solves >= 1
+    assert cvxopt.info.primary_solves >= 1
 
 
 def test_presolved_problem_reports_no_initialization() -> None:
@@ -151,11 +150,14 @@ def test_warm_start_from_numpy_arrays_is_used() -> None:
     settings = cpo3.Settings(presolve=False)
     cold = cpo3.solve(problem, settings=settings)
     assert cold.info.warm_start_used is None
+    assert cold.info.warm_start_score is None
     warm = cpo3.solve(problem, settings=settings, warm_start=(cold.x, cold.y, cold.s))
     assert warm.status is cpo3.SolverStatus.SOLVED
     assert warm.info.warm_start_used is True
     assert warm.info.iters <= cold.info.iters
-    assert math.isfinite(warm.info.init_proximity)
+    assert warm.info.warm_start_score is not None
+    assert math.isfinite(warm.info.warm_start_score)
+    assert warm.info.warm_start_score <= 100.0
 
 
 def test_warm_start_requires_arrays_from_solution() -> None:
@@ -175,6 +177,8 @@ def test_junk_warm_start_is_ignored_unless_forced(
         problem, settings=cpo3.Settings(presolve=False), warm_start=junk
     )
     assert solution.info.warm_start_used is False
+    assert solution.info.warm_start_score is not None
+    assert solution.info.warm_start_score > 100.0
     assert "warm start ignored" in capfd.readouterr().err
     forced = cpo3.solve(
         problem,
@@ -182,6 +186,7 @@ def test_junk_warm_start_is_ignored_unless_forced(
         warm_start=junk,
     )
     assert forced.info.warm_start_used is True
+    assert forced.info.warm_start_score == solution.info.warm_start_score
     assert forced.status is cpo3.SolverStatus.SOLVED
     cold = cpo3.solve(
         problem,
@@ -189,6 +194,7 @@ def test_junk_warm_start_is_ignored_unless_forced(
         warm_start=None,
     )
     assert cold.info.warm_start_used is None
+    assert cold.info.warm_start_score is None
     assert cold.info.iters == solution.info.iters
     with pytest.raises(ValueError, match="unpack"):
         # Deliberately pass two vectors to exercise runtime validation.
@@ -437,10 +443,20 @@ def test_same_problem_can_be_solved_concurrently() -> None:
             np.testing.assert_array_equal(actual, reference)
 
 
-@pytest.mark.parametrize("value", [0.0, -1.0, float("nan"), float("inf")])
-def test_mu_floor_is_validated_at_settings_construction(value: float) -> None:
-    with pytest.raises(ValueError, match="initial_shift_floor"):
-        cpo3.Settings(initial_shift_floor=value)
+@pytest.mark.parametrize("value", [0.0, -1.0, 1.01, float("nan"), float("inf")])
+def test_initial_mu_is_validated(value: float) -> None:
+    with pytest.raises(ValueError, match="initial_mu"):
+        cpo3.Settings(initial_mu=value)
+
+
+@pytest.mark.parametrize("beta", [1e-3, 0.1, 1.0])
+def test_configurable_cold_start_solves(beta: float) -> None:
+    solution = cpo3.solve(
+        sparse_problem(),
+        settings=cpo3.Settings(presolve=False, initial_mu=beta),
+    )
+    assert solution.status is cpo3.SolverStatus.SOLVED
+    assert solution.info.cvxopt_init_used is False
 
 
 @pytest.mark.parametrize("name", ["A", "P"])
@@ -507,56 +523,24 @@ def test_sparse_only_api_has_no_backend_or_auto_solver() -> None:
         cpo3.Settings(linear_solver="auto")  # ty: ignore[invalid-argument-type]
 
 
-@pytest.mark.parametrize("value", [None, 0, 1, "false"])
-def test_governor_requires_bool(value: Any) -> None:
-    with pytest.raises(TypeError, match="governor must be a bool"):
-        cpo3.Settings(governor=value)
-
-
 @pytest.mark.parametrize("value", [-1.0, math.inf, math.nan])
-def test_static_regularization_is_finite_and_nonnegative(value: float) -> None:
-    with pytest.raises(ValueError, match="min_static_regularization"):
-        cpo3.Settings(min_static_regularization=value)
+def test_initial_diagonal_floor_is_finite_and_nonnegative(value: float) -> None:
+    with pytest.raises(ValueError, match="initial_diagonal_floor"):
+        cpo3.Settings(initial_diagonal_floor=value)
 
 
-def test_untriggered_governor_preserves_iterates_and_work_counts() -> None:
-    solutions = [
-        cpo3.solve(
-            sparse_problem(),
-            settings=cpo3.Settings(
-                presolve=False, governor=enabled, max_centrality_correctors=0
-            ),
-        )
-        for enabled in [False, True]
-    ]
-    for solution in solutions:
-        assert solution.status is cpo3.SolverStatus.SOLVED
-        assert solution.info.recenter_steps == 0
-        assert solution.info.factorizations == solution.info.iters
-        assert solution.info.kkt_solves == 3 * solution.info.iters
-    np.testing.assert_array_equal(solutions[0].x, solutions[1].x)
-    np.testing.assert_array_equal(solutions[0].y, solutions[1].y)
-    np.testing.assert_array_equal(solutions[0].s, solutions[1].s)
+@pytest.mark.parametrize("name", ["initial_shift_floor", "min_static_regularization"])
+def test_removed_regularization_settings_are_rejected(name: str) -> None:
+    assert not hasattr(cpo3.Settings(), name)
+    with pytest.raises(TypeError, match=name):
+        cpo3.Settings(**{name: 1e-12})  # ty: ignore[invalid-argument-type]
 
 
-def test_adaptive_floor_relaxes_without_changing_user_settings() -> None:
-    # A large initial shift slows progress; the adaptive floor must relax
-    # without mutating the user's requested initial setting.
-    settings = cpo3.Settings(
-        presolve=False,
-        initial_shift_floor=100.0,
-        max_iters=100,
-        max_centrality_correctors=0,
-    )
-    solution = cpo3.solve(sparse_problem(), settings=settings)
+def test_predictor_corrector_work_counts() -> None:
+    solution = cpo3.solve(sparse_problem(), settings=cpo3.Settings(presolve=False))
     assert solution.status is cpo3.SolverStatus.SOLVED
-    assert 0 <= solution.info.recenter_steps <= 8
-    assert solution.info.factorizations == solution.info.iters < 100
-    assert (
-        solution.info.kkt_solves
-        == 3 * solution.info.iters - solution.info.recenter_steps
-    )
-    assert settings.initial_shift_floor == 100.0
+    assert solution.info.factorizations == solution.info.iters
+    assert solution.info.primary_solves == 3 * solution.info.iters
 
 
 @pytest.mark.parametrize("limit", ["iterations", "time"])
@@ -567,7 +551,39 @@ def test_work_counters_on_early_returns(limit: str) -> None:
     solution = cpo3.solve(sparse_problem(), settings=settings)
     expected = 0 if limit == "time" else 1
     assert solution.info.iters == solution.info.factorizations == expected
-    assert solution.info.recenter_steps == 0
+
+
+@pytest.mark.parametrize("backend", [cpo3.LinearSolver.FAER, cpo3.LinearSolver.FERAL])
+def test_initial_and_refinement_solves_are_separate(backend: Any) -> None:
+    problem = cpo3.Problem(
+        P=None,
+        c=[1.0],
+        A=scipy.sparse.csc_matrix([[-1.0]]),
+        b=[-1.0],
+        cones=[cpo3.NonnegativeCone(1)],
+    )
+    solution = cpo3.solve(
+        problem,
+        settings=cpo3.Settings(
+            presolve=False,
+            linear_solver=backend,
+            initial_diagonal_floor=1e-4,
+            refinement_tolerance=1e-14,
+            max_iters=1000,
+        ),
+    )
+    assert solution.status is cpo3.SolverStatus.SOLVED
+    assert solution.info.primary_solves >= 3 * solution.info.iters
+    assert solution.info.refinement_solves > 0
+
+    unrefined = cpo3.solve(
+        problem,
+        settings=cpo3.Settings(
+            presolve=False, linear_solver=backend, max_iters=1, max_refinement_steps=0
+        ),
+    )
+    assert unrefined.info.primary_solves == 3
+    assert unrefined.info.refinement_solves == 0
 
 
 @pytest.mark.parametrize("presolve", [False, True])
@@ -587,5 +603,4 @@ def test_no_barrier_problems_with_redundant_equalities(
     solution = cpo3.solve(problem, settings=cpo3.Settings(presolve=presolve))
     assert solution.status is cpo3.SolverStatus.SOLVED
     np.testing.assert_allclose(solution.x, [1.0, 2.0], rtol=0, atol=1e-7)
-    assert solution.info.recenter_steps == 0
     assert solution.info.factorizations == solution.info.iters
