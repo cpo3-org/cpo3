@@ -17,6 +17,7 @@ fn settings_use_short_names() {
     assert_eq!(settings.tol_gap_abs, 1e-8);
     assert_eq!(settings.tol_gap_rel, 1e-8);
     assert_eq!(settings.linear_solver, LinearSolver::Faer);
+    assert_eq!(settings.threads, 0);
     assert_eq!(LinearSolver::default(), LinearSolver::Faer);
     assert!(settings.eliminate_bounds);
     assert_eq!(settings.refine_init_reg, 1e-12);
@@ -338,10 +339,9 @@ fn cvxopt_initialization_solves_the_reference_problems_with_every_solver() {
     }
 }
 
-/// Refinement stops at a 1e-8 backward error, so the starting point lands
-/// just outside the stopping test and one step finishes the solve.
+/// Equality-only problems bypass CVXOPT initialization and factor only once.
 #[test]
-fn cvxopt_initialization_solves_an_equality_constrained_quadratic_in_one_step() {
+fn equality_solver_bypasses_optional_cvxopt_initialization() {
     let (problem, expected) = reference_problems().pop().unwrap();
     let solution = solve(
         &problem,
@@ -353,7 +353,9 @@ fn cvxopt_initialization_solves_an_equality_constrained_quadratic_in_one_step() 
     )
     .unwrap();
     assert_eq!(solution.status(), SolverStatus::Solved);
-    assert_eq!(solution.info().cvxopt_init_used, Some(true));
+    assert_eq!(solution.info().cvxopt_init_used, None);
+    assert_eq!(solution.info().linear_algebra.factorizations, 1);
+    assert_eq!(solution.info().linear_algebra.refinement_solves, 0);
     assert!(solution.info().iters <= 1, "{}", solution.info().iters);
     assert_close(solution.x()[0], expected[0]);
     assert_close(solution.y()[0], -2.0);
@@ -467,8 +469,7 @@ fn owned_conversion_moves_cpo3_matrix_and_vector_buffers() {
 
 #[test]
 fn equality_zero_target_does_not_falsely_accept_inconsistent_or_unbounded_problems() {
-    // The baseline does not generate equality-only certificates with presolve
-    // off (its certificate gate is zero). Preserve rejection as non-solutions.
+    // Dedicated equality-only least squares returns verified certificates.
     for solver in [LinearSolver::Faer, LinearSolver::Feral] {
         for (c, b) in [(0.0, 1.0), (-1.0, 0.0)] {
             let problem = Problem::new(
@@ -488,7 +489,15 @@ fn equality_zero_target_does_not_falsely_accept_inconsistent_or_unbounded_proble
                 },
             )
             .unwrap();
-            assert_eq!(solution.status(), SolverStatus::MaxIterations);
+            if b != 0.0 {
+                assert_eq!(solution.status(), SolverStatus::PrimalInfeasible);
+                assert_close(b * solution.y()[0], -1.0);
+            } else {
+                assert_eq!(solution.status(), SolverStatus::DualInfeasible);
+                assert_close(c * solution.x()[0], -1.0);
+            }
+            assert_eq!(solution.info().linear_solver, LinearSolver::Faer);
+            assert_eq!(solution.info().linear_algebra.factorizations, 1);
         }
     }
 }

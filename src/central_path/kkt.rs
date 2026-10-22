@@ -742,6 +742,18 @@ impl KktWorkspace {
     }
 }
 
+/// Assemble the unregularized equality KKT matrix using the shared CSC layout.
+pub(crate) fn assemble_equality_kkt(
+    problem: &Problem,
+    geometry: &ConeGeometry,
+) -> Result<CscMatrix, KktError> {
+    let (mut matrix, pattern) = build_pattern(problem, geometry, false)?;
+    for (column, value) in pattern.p_diagonal.iter().enumerate() {
+        matrix.values_mut()[pattern.diagonal_positions[column]] = *value;
+    }
+    Ok(matrix)
+}
+
 /// Assemble fixed off-diagonal entries and retain zero-valued diagonal slots.
 fn build_pattern(
     problem: &Problem,

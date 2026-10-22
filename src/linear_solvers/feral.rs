@@ -23,12 +23,13 @@ pub(super) struct FeralFactorization {
 impl FeralFactorization {
     pub(super) fn new(
         matrix: CscMatrix,
+        threads: usize,
         factorizations: &mut usize,
     ) -> Result<Self, LinearSystemError> {
         let (prepared, source) = to_feral(&matrix)?;
         drop(matrix);
         let matrix = prepared;
-        let mut solver = feral_solver();
+        let mut solver = feral_solver(threads);
         *factorizations += 1;
         check_feral_status(solver.factor(&matrix, None))?;
         Ok(Self {
@@ -76,13 +77,20 @@ impl FeralFactorization {
 /// Feral with a pattern-only ordering, so its symbolic cache stays valid as
 /// the KKT values change; the default value-dependent matching preprocess
 /// computes a much worse ordering on the first IPM matrix and then caches it.
-fn feral_solver() -> FeralSolver {
+fn feral_solver(threads: usize) -> FeralSolver {
     let supernode = FeralSupernodeParams {
         preprocess: FeralOrderingPreprocess::None,
         ..FeralSupernodeParams::default()
     };
-    FeralSolver::with_params(FeralNumericParams::default(), supernode)
-        .with_scaling(FeralScalingStrategy::Identity)
+    let solver = FeralSolver::with_params(FeralNumericParams::default(), supernode)
+        .with_scaling(FeralScalingStrategy::Identity);
+    // Feral 0.21 creates its own pool and exposes only an on/off switch.
+    // Use its sequential driver for any explicit cap so it cannot exceed it.
+    if threads == 0 {
+        solver
+    } else {
+        solver.with_parallel(false)
+    }
 }
 
 fn to_feral(matrix: &CscMatrix) -> Result<(FeralCscMatrix, TriangleSource), LinearSystemError> {
@@ -136,6 +144,41 @@ fn check_feral_status(status: FeralFactorStatus) -> Result<(), LinearSystemError
         }
         FeralFactorStatus::FatalError(error) => {
             Err(LinearSystemError::Factorization(error.to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::linear_solvers::{Factorization, FactorizationInner, KktSettings};
+
+    #[test]
+    fn explicit_thread_caps_disable_ferals_unbounded_pool() {
+        let matrix =
+            CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![2.0, -2.0]).unwrap();
+        for threads in [0, 1, 3] {
+            let settings = KktSettings::from(&crate::Settings {
+                linear_solver: crate::LinearSolver::Feral,
+                threads,
+                ..crate::Settings::default()
+            });
+            let factor = Factorization::new_counted(matrix.clone(), &settings, &mut 0).unwrap();
+            let FactorizationInner::Feral(mut factor) = factor.inner else {
+                unreachable!()
+            };
+            assert_eq!(
+                factor.solver.parallel(),
+                threads == 0 && FeralSolver::default_use_parallel()
+            );
+            for diagonal in [2.0, 3.0] {
+                factor
+                    .refactor_diagonal(&[diagonal, -diagonal], &mut 0)
+                    .unwrap();
+                let mut rhs = [diagonal, diagonal];
+                factor.solve_in_place(&mut rhs).unwrap();
+                assert_eq!(rhs, [1.0, -1.0]);
+            }
         }
     }
 }

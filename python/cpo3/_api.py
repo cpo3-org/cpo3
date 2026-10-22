@@ -145,6 +145,12 @@ class Settings:
         of one.
     linear_solver : LinearSolver, default=LinearSolver.FAER
         Sparse factorization backend: LinearSolver.FAER or LinearSolver.FERAL.
+        Equality-only problems always use Faer with regularized LDL and LSMR.
+    threads : int, default=0
+        Maximum parallelism for factorization and solves. Zero uses the
+        backend default; one runs sequentially. Must be nonnegative. Feral
+        currently runs sequentially for every positive cap because it cannot
+        configure its private pool size.
     eliminate_bounds : bool, default=True
         Eliminate nonnegative-cone constraint rows with a single nonzero
         coefficient from the KKT factorization by folding their contributions
@@ -153,12 +159,15 @@ class Settings:
         Initial nonnegative floor for diagonal magnitudes in the full KKT
         system used for factorization. The solver adjusts this floor during
         outer iterations; zero starts at the lower bound of 1e-20. Iterative
-        refinement targets the original KKT system.
+        refinement targets the original KKT system. Unused for equality-only
+        problems, which use fixed dynamic pivot regularization.
     refine_iters : int, default=30
         Maximum number of iterative refinement corrections per KKT solve.
-        Zero disables corrections and keeps the initial linear solve.
+        Zero disables corrections and keeps the initial linear solve. Equality-only
+        problems instead use a fixed budget of ten corrections before LSMR.
     refine_tol : float, default=1e-7
         Positive componentwise backward-error target for iterative refinement.
+        Unused for equality-only problems, which check optimality directly.
         Refinement may stop before reaching this target if further corrections
         are unlikely to improve the solution or meet the target within budget.
     step_fraction : float, default=0.999
@@ -190,6 +199,7 @@ class Settings:
     ruiz_tol: float = 1e-2
 
     linear_solver: LinearSolver = LinearSolver.FAER
+    threads: int = 0
     eliminate_bounds: bool = True
     refine_init_reg: float = 1e-12
     refine_iters: int = 30
@@ -360,9 +370,15 @@ class SolutionInfo:
     def primary_solves(self) -> int:
         """Initial linear solves attempted for KKT right-hand sides.
 
-        Includes initialization and internal retries, but excludes refinement.
+        Includes initialization, internal retries, and equality-only LSMR
+        preconditioner applications, but excludes refinement.
         """
         return self._native.primary_solves
+
+    @property
+    def lsmr_iterations(self) -> int:
+        """Iterations of the equality-only LSMR fallback."""
+        return self._native.lsmr_iterations
 
     @property
     def refinement_solves(self) -> int:

@@ -28,6 +28,7 @@ pub(super) struct FaerFactorization {
 impl FaerFactorization {
     pub(super) fn new(
         matrix: CscMatrix,
+        threads: usize,
         factorizations: &mut usize,
     ) -> Result<Self, LinearSystemError> {
         let symbolic = sparse_cholesky::factorize_symbolic_cholesky(
@@ -45,7 +46,8 @@ impl FaerFactorization {
         // Querying Rayon's thread count would start a pool they never use.
         let parallelism = match symbolic.raw() {
             sparse_cholesky::SymbolicCholeskyRaw::Simplicial(_) => Par::Seq,
-            sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_) => Par::rayon(0),
+            sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_) if threads == 1 => Par::Seq,
+            sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_) => Par::rayon(threads),
         };
         let factor_values = vec![0.0; symbolic.len_val()];
         let numeric_scratch = match symbolic.raw() {
@@ -217,11 +219,65 @@ mod tests {
     fn disabled_pivot_replacement_preserves_tiny_signed_pivots() {
         let matrix =
             CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![1e-20, -1e-20]).unwrap();
-        let mut factor = FaerFactorization::new(matrix, &mut 0).unwrap();
+        let mut factor = FaerFactorization::new(matrix, 3, &mut 0).unwrap();
+        assert_eq!(factor.parallelism, Par::Seq);
         let mut rhs = vec![1e-20, 1e-20];
         factor.solve_in_place(&mut rhs, 1).unwrap();
         assert!((rhs[0] - 1.0).abs() < 1e-12);
         assert!((rhs[1] + 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn configured_threads_apply_to_supernodal_factorization_and_solves() {
+        let n = 128;
+        let matrix = CscMatrix::from_triplets(
+            n,
+            n,
+            (0..n).flat_map(|column| 0..=column).collect(),
+            (0..n)
+                .flat_map(|column| std::iter::repeat_n(column, column + 1))
+                .collect(),
+            (0..n)
+                .flat_map(|column| {
+                    (0..=column).map(move |row| if row == column { 2.0 } else { 0.001 })
+                })
+                .collect(),
+        )
+        .unwrap();
+        for threads in [0, 1, 2, 3] {
+            let settings = super::super::KktSettings::from(&crate::Settings {
+                threads,
+                ..crate::Settings::default()
+            });
+            let factor =
+                super::super::Factorization::new_counted(matrix.clone(), &settings, &mut 0)
+                    .unwrap();
+            let super::super::FactorizationInner::Faer(mut factor) = factor.inner else {
+                unreachable!()
+            };
+            assert!(matches!(
+                factor.symbolic.raw(),
+                sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_)
+            ));
+            assert_eq!(
+                factor.parallelism,
+                if threads == 1 {
+                    Par::Seq
+                } else {
+                    Par::rayon(threads)
+                }
+            );
+            for diagonal in [2.0, 3.0] {
+                factor
+                    .refactor_diagonal(&vec![diagonal; n], &mut 0)
+                    .unwrap();
+                for columns in [1, 2] {
+                    let mut rhs = vec![diagonal + 0.001 * (n - 1) as f64; n * columns];
+                    factor.solve_in_place(&mut rhs, columns).unwrap();
+                    assert!(rhs.iter().all(|value| (value - 1.0).abs() < 1e-12));
+                }
+            }
+        }
     }
 
     #[test]
@@ -248,7 +304,7 @@ mod tests {
             let matrix = crate::linear_algebra::take_upper_triangle(
                 CscMatrix::from_triplets(n, n, rows, columns, values).unwrap(),
             );
-            let factor = FaerFactorization::new(matrix.clone(), &mut 0).unwrap();
+            let factor = FaerFactorization::new(matrix.clone(), 1, &mut 0).unwrap();
             assert_eq!(
                 matches!(
                     factor.symbolic.raw(),

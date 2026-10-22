@@ -2,6 +2,7 @@
 
 mod central_path;
 mod cone;
+mod equality;
 mod io;
 mod linear_algebra;
 mod linear_solvers;

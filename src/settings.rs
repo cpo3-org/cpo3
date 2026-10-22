@@ -53,16 +53,25 @@ pub struct Settings {
     pub ruiz_tol: f64,
 
     // KKT solves.
+    /// Factorization backend for the interior-point path. Equality-only
+    /// problems always use Faer with dynamically regularized LDL and LSMR.
     pub linear_solver: LinearSolver,
+    /// Maximum parallelism for factorization and solves. Zero uses the
+    /// backend default; one runs sequentially. Feral currently runs sequentially
+    /// for every positive cap because it cannot configure its private pool size.
+    pub threads: usize,
     /// Eliminate singleton nonnegative-cone rows from the KKT factorization.
     pub eliminate_bounds: bool,
     /// Initial adaptive floor for full-system factor diagonal magnitudes.
     /// Outer steps adjust this floor; zero starts at the positive lower bound
     /// 1e-20. Refinement always targets the original K(mu) system.
+    /// Unused by the dedicated equality-only solver.
     pub refine_init_reg: f64,
     /// Additional correction solves per KKT solve; zero returns the initial solve without refinement.
+    /// Equality-only problems instead use ten corrections before falling back to LSMR.
     pub refine_iters: usize,
     /// Positive componentwise backward-error target for iterative refinement.
+    /// Unused for equality-only problems, which check optimality directly.
     pub refine_tol: f64,
 
     // Outer iterations.
@@ -93,6 +102,7 @@ impl Default for Settings {
             ruiz_tol: 1e-2,
 
             linear_solver: LinearSolver::Faer,
+            threads: 0,
             eliminate_bounds: true,
             refine_init_reg: 1e-12,
             refine_iters: 30,

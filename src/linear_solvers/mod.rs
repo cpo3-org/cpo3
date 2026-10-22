@@ -40,6 +40,7 @@ const STALL_RATE: f64 = std::f64::consts::FRAC_1_SQRT_2;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct KktSettings {
     pub(crate) linear_solver: LinearSolver,
+    pub(crate) threads: usize,
     /// Fail a solve whose refinement diverges or stalls; otherwise return the
     /// best iterate seen.
     pub(crate) strict_refinement: bool,
@@ -64,6 +65,7 @@ impl From<&Settings> for KktSettings {
     fn from(settings: &Settings) -> Self {
         Self {
             linear_solver: settings.linear_solver,
+            threads: settings.threads,
             strict_refinement: false,
             eliminate_bound_rows: settings.eliminate_bounds,
             diagonal_floor: settings.refine_init_reg,
@@ -91,11 +93,14 @@ pub struct LinearAlgebraStats {
     /// Numeric factorization attempts, including failures.
     pub factorizations: usize,
     /// Initial linear solves attempted for KKT right-hand sides, including failures.
-    /// Includes initialization and retries, but excludes refinement corrections.
+    /// Includes initialization, retries, and equality-only LSMR preconditioner
+    /// applications, but excludes refinement corrections.
     pub primary_solves: usize,
     /// Correction linear solves attempted by iterative refinement, including failures.
     /// Excludes the initial solve for each right-hand side and residual evaluations.
     pub refinement_solves: usize,
+    /// Iterations of the equality-only preconditioned KKT least-squares solve.
+    pub lsmr_iterations: usize,
     /// Refinements that returned their best iterate after stalling or diverging.
     pub refinement_settled: usize,
     /// Refinements that failed (strict stall/divergence, or singular).
@@ -130,6 +135,7 @@ impl LinearAlgebraStats {
         self.factorizations += other.factorizations;
         self.primary_solves += other.primary_solves;
         self.refinement_solves += other.refinement_solves;
+        self.lsmr_iterations += other.lsmr_iterations;
         self.refinement_settled += other.refinement_settled;
         self.refinement_failures += other.refinement_failures;
         self.inertia_failures += other.inertia_failures;
@@ -160,15 +166,17 @@ impl Factorization {
         let diagonal = (0..matrix.rows())
             .map(|column| matrix.get(column, column).unwrap_or(0.0))
             .collect();
-        let inner = match settings.linear_solver {
-            LinearSolver::Faer => {
-                FactorizationInner::Faer(Box::new(FaerFactorization::new(matrix, factorizations)?))
-            }
-            LinearSolver::Feral => FactorizationInner::Feral(Box::new(FeralFactorization::new(
-                matrix,
-                factorizations,
-            )?)),
-        };
+        let inner =
+            match settings.linear_solver {
+                LinearSolver::Faer => FactorizationInner::Faer(Box::new(FaerFactorization::new(
+                    matrix,
+                    settings.threads,
+                    factorizations,
+                )?)),
+                LinearSolver::Feral => FactorizationInner::Feral(Box::new(
+                    FeralFactorization::new(matrix, settings.threads, factorizations)?,
+                )),
+            };
         Ok(Self {
             diagonal,
             inner,

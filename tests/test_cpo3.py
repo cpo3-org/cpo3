@@ -135,3 +135,31 @@ def test_solves_mixed_equality_and_inequality_constraints() -> None:
 def test_default_settings_match_in_rust_and_python() -> None:
     py_settings = cpo3.Settings()
     assert _core._default_settings_match(py_settings)
+
+
+@pytest.mark.parametrize("threads", [0, 1, 3])
+def test_thread_settings_reach_rust(threads: int) -> None:
+    settings = cpo3.Settings(threads=threads)
+    assert _core._default_settings_match(settings) == (threads == 0)
+
+
+def test_negative_threads_rejected() -> None:
+    with pytest.raises(OverflowError):
+        cpo3.Settings(threads=-1)
+
+
+def test_equality_lsmr_reports_iterations_and_verified_certificate() -> None:
+    problem = cpo3.Problem(
+        P=scipy.sparse.eye(1, format="csc"),
+        c=[0.0],
+        A=scipy.sparse.csc_matrix([[1.0], [1.0]]),
+        b=[1.0, 2.0],
+        cones=[cpo3.ZeroCone(2)],
+    )
+    solution = cpo3.solve(problem, settings=cpo3.Settings(presolve=False, threads=1))
+    assert solution.status is cpo3.SolverStatus.PRIMAL_INFEASIBLE
+    assert solution.info.lsmr_iterations > 0
+    assert solution.info.factorizations == 1
+    assert solution.info.refinement_solves == 10
+    np.testing.assert_allclose(np.array([1.0, 2.0]) @ solution.y, -1.0, atol=1e-7)
+    np.testing.assert_allclose(solution.y.sum(), 0.0, atol=1e-7)

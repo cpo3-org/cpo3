@@ -200,9 +200,42 @@ fn solve_core(
     original: Option<(&Problem, &Presolved, &ConeGeometry)>,
     started: Instant,
 ) -> Result<Solution, SolveError> {
+    let equilibrated = EquilibratedProblem::new(problem, settings)?;
+    let mut recovery = Recovery::new(problem, &equilibrated, geometry, original);
+    if geometry.barrier_parameter() == 0 {
+        let settings = Settings {
+            linear_solver: crate::LinearSolver::Faer,
+            ..settings.clone()
+        };
+        let reporter = ProgressReporter::new(settings.verbose);
+        reporter.header(problem, &settings, presolve_summary);
+        let mut info = SolutionInfo::new(&settings, None);
+        info.warm_start_used = warm_start.map(|_| false);
+        let termination = crate::equality::solve(
+            problem,
+            geometry,
+            &equilibrated,
+            &settings,
+            &mut recovery,
+            started,
+            &mut info,
+        )
+        .inspect_err(|error| reporter.failure(info.iters, &error.to_string()))?;
+        info.solve_time = started.elapsed();
+        let solution = match termination {
+            Termination::Certificate(certificate) => build_certificate(certificate, info),
+            Termination::Point(status) => build_solution(status, recovery.into_point(), info),
+        };
+        reporter.finish(
+            solution.status(),
+            solution.info.iters,
+            solution.info.solve_time,
+            solution.info.pobj,
+        );
+        return Ok(solution);
+    }
     let kkt = KktSettings::from(settings);
     let mut cache = KktCache::new();
-    let equilibrated = EquilibratedProblem::new(problem, settings)?;
     let scaled_problem = equilibrated.problem();
     let (mut state, init_report) = init::initial_state(
         geometry,
@@ -213,7 +246,6 @@ fn solve_core(
         &mut cache,
     )?;
     let mut diagnostics = StepDiagnostics::new(geometry, &state);
-    let mut recovery = Recovery::new(problem, &equilibrated, geometry, original);
     let mut recovered = recovery.update(&state, diagnostics.sy);
     let mut reporter = ProgressReporter::new(settings.verbose);
     reporter.header(problem, settings, presolve_summary);
@@ -352,7 +384,7 @@ impl RecoveredSolution {
     }
 }
 
-fn time_limit_reached(started: Instant, time_limit: Option<Duration>) -> bool {
+pub(crate) fn time_limit_reached(started: Instant, time_limit: Option<Duration>) -> bool {
     time_limit.is_some_and(|limit| started.elapsed() >= limit)
 }
 
