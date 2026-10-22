@@ -227,17 +227,40 @@ pub(crate) fn predictor(
     let r_tau = scaling.mu * state.tau();
     let affine = resolvent.solve_predictor(r_tau)?;
 
-    let dy = difference(affine.y(), state.y());
-    let mut ds = dy
-        .iter()
-        .zip(&scaling.d)
-        .zip(state.s())
-        .map(|((dy, h), s)| -h * dy - s)
-        .collect::<Vec<_>>();
-
-    let alpha_affine = geometry
-        .step_to_boundary_from_interior(state.s(), &ds)?
-        .min(geometry.step_to_boundary_from_interior(state.y(), &dy)?);
+    let zero = if geometry.barrier_parameter() > 0 {
+        -0.0
+    } else {
+        0.0
+    };
+    let mut correction = vec![zero; state.s().len()];
+    let mut alpha_affine = 1.0_f64;
+    let mut finite = true;
+    // Each affine displacement is needed only for its boundary and correction.
+    faer::zip!(
+        faer::ColMut::from_slice_mut(&mut correction),
+        faer::ColRef::from_slice(state.s()),
+        faer::ColRef::from_slice(state.y()),
+        faer::ColRef::from_slice(affine.y()),
+        faer::ColRef::from_slice(&scaling.d),
+        faer::ColRef::from_slice(&scaling.y_inverse)
+    )
+    .for_each(|faer::unzip!(correction, s, y, target_y, h, inverse)| {
+        let dy = target_y - y;
+        let ds = -h * dy - s;
+        finite &= ds.is_finite() & dy.is_finite();
+        if *inverse > 0.0 {
+            if ds < 0.0 {
+                alpha_affine = alpha_affine.min(-s / ds);
+            }
+            if dy < 0.0 {
+                alpha_affine = alpha_affine.min(-y / dy);
+            }
+            *correction = -(inverse * (ds * dy));
+        }
+    });
+    if !finite {
+        return Err(ConeGeometryError::NonFiniteInput { argument: "dv" }.into());
+    }
     // A long feasible affine step supports a smaller centering target.
     // Keep mu as current complementarity; only the dimensionless sigma changes.
     let sigma = if scaling.mu > 0.0 {
@@ -249,18 +272,9 @@ pub(crate) fn predictor(
         return Err(StateError::NonFiniteResult.into());
     }
 
-    // The affine boundary is complete. Reuse
-    // ds for the correction and release dy before any centered solve.
-    if geometry.barrier_parameter() > 0 {
-        geometry.negated_triple_product_in_place(&scaling.y_inverse, &mut ds, &dy)?;
-    } else {
-        ds.fill(0.0);
-    }
-    drop(dy);
-
     Ok(Predictor {
         affine,
-        correction: ds,
+        correction,
         alpha_affine,
         sigma,
     })
@@ -327,13 +341,6 @@ pub(crate) fn corrector(
         centered,
         s_centered: correction,
     })
-}
-
-fn difference(left: &[f64], right: &[f64]) -> Vec<f64> {
-    left.iter()
-        .zip(right)
-        .map(|(left, right)| left - right)
-        .collect()
 }
 
 #[cfg(test)]
