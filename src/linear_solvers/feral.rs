@@ -21,17 +21,11 @@ pub(super) struct FeralFactorization {
 }
 
 impl FeralFactorization {
-    pub(super) fn new(
-        matrix: CscMatrix,
-        threads: usize,
-        factorizations: &mut usize,
-    ) -> Result<Self, LinearSystemError> {
+    pub(super) fn new(matrix: CscMatrix, threads: usize) -> Result<Self, LinearSystemError> {
         let (prepared, source) = to_feral(&matrix)?;
         drop(matrix);
         let matrix = prepared;
-        let mut solver = feral_solver(threads);
-        *factorizations += 1;
-        check_feral_status(solver.factor(&matrix, None))?;
+        let solver = feral_solver(threads);
         Ok(Self {
             solver,
             matrix,
@@ -69,6 +63,10 @@ impl FeralFactorization {
     ) -> Result<(), LinearSystemError> {
         self.source
             .gather_diagonal(diagonal, &mut self.matrix.values);
+        self.factor(factorizations)
+    }
+
+    pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         *factorizations += 1;
         check_feral_status(self.solver.factor(&self.matrix, None))
     }
@@ -163,7 +161,8 @@ mod tests {
                 threads,
                 ..crate::Settings::default()
             });
-            let factor = Factorization::new_counted(matrix.clone(), &settings, &mut 0).unwrap();
+            let mut factor = Factorization::prepare(matrix.clone(), &settings).unwrap();
+            factor.factor(&mut 0).unwrap();
             let FactorizationInner::Feral(mut factor) = factor.inner else {
                 unreachable!()
             };

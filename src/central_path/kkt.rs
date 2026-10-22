@@ -40,11 +40,11 @@ impl KktError {
 /// Per-solve cache: the KKT sparsity pattern and a reusable factorization.
 ///
 /// Only the diagonal of the KKT matrix changes between iterations, so the
-/// layout and symbolic analysis are reused after the first successful
-/// factorization. Failed initial attempts retain the layout for clamp decisions.
+/// layout and symbolic analysis are retained before the first numeric attempt
+/// and reused on retries, including after numeric factorization failures.
 #[derive(Default)]
 pub(crate) struct KktCache {
-    // Layout may exist before the first successful numeric factorization.
+    // Layout and backend storage survive failed numeric factorization attempts.
     pattern: Option<KktPattern>,
     workspace: KktWorkspace,
     factorization: Option<Factorization>,
@@ -238,11 +238,11 @@ impl KktCache {
                     kkt.eliminate_bound_rows,
                 )?;
                 self.pattern = Some(pattern);
-                self.factorization = Some(Factorization::new_counted(
-                    k,
-                    kkt,
-                    &mut self.factorizations,
-                )?);
+                self.factorization = Some(Factorization::prepare(k, kkt)?);
+                self.factorization
+                    .as_mut()
+                    .expect("the factorization workspace was just stored")
+                    .factor(&mut self.factorizations)?;
             }
         }
         self.factorization
@@ -420,7 +420,7 @@ fn assemble_preconditioner(
     }
     // Assembly owns the only full CSC matrix; the cache retains just the
     // metadata needed for diagonal updates and bound-row reconstruction.
-    // A failed initial factorization can rebuild this same pattern on retry.
+    // Numeric retries retain this layout and the prepared backend storage.
     let (mut matrix, pattern) = build_pattern(problem, geometry, eliminate_bound_rows)?;
     let values = matrix.values_mut();
     pattern.write_diagonal(
@@ -972,7 +972,7 @@ mod cache_tests {
     }
 
     #[test]
-    fn failed_factorization_retains_layout_and_can_be_retried() {
+    fn failed_factorization_retains_workspace_and_can_be_retried() {
         let problem = Problem::new(
             None,
             vec![-2.0],
@@ -988,19 +988,15 @@ mod cache_tests {
                 ..KktSettings::new(solver)
             };
             let mut cache = KktCache::new();
-            let error = cache
-                .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
-                .unwrap_err();
-            assert!(cache.pattern.is_some());
-            // Inertia rejection happens after construction; numeric failure does not.
-            assert_eq!(
-                cache.factorization.is_some(),
-                matches!(
-                    error,
-                    KktError::LinearSystem(LinearSystemError::WrongInertia { .. })
-                )
-            );
-            assert_eq!(cache.stats().factorizations, 1);
+            for attempts in 1..=2 {
+                cache
+                    .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
+                    .unwrap_err();
+                // Keep the prepared workspace even when numeric retries fail.
+                assert!(cache.pattern.is_some());
+                assert!(cache.factorization.is_some());
+                assert_eq!(cache.stats().factorizations, attempts);
+            }
             assert_eq!(cache.nonbinding_floor_limit(0.1), 0.1);
             cache
                 .prepare(&problem, &geometry, 1.0, &[1.0], &settings)
@@ -1009,7 +1005,7 @@ mod cache_tests {
                 .solve(&problem, 1.0, &[1.0], &[1.0], &[2.0, 1.0])
                 .unwrap();
             assert_eq!(result, vec![2.0, -1.0]);
-            assert_eq!(cache.stats().factorizations, 2);
+            assert_eq!(cache.stats().factorizations, 3);
         }
     }
 

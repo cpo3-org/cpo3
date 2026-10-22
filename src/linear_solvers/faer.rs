@@ -26,11 +26,7 @@ pub(super) struct FaerFactorization {
 }
 
 impl FaerFactorization {
-    pub(super) fn new(
-        matrix: CscMatrix,
-        threads: usize,
-        factorizations: &mut usize,
-    ) -> Result<Self, LinearSystemError> {
+    pub(super) fn new(matrix: CscMatrix, threads: usize) -> Result<Self, LinearSystemError> {
         let symbolic = sparse_cholesky::factorize_symbolic_cholesky(
             matrix.as_faer().symbolic(),
             Side::Upper,
@@ -82,7 +78,6 @@ impl FaerFactorization {
             parallelism,
         };
         let values = factorization.permute_input(values);
-        factorization.factor(&values, factorizations)?;
         factorization.values = values;
         Ok(factorization)
     }
@@ -108,11 +103,8 @@ impl FaerFactorization {
         diagonal: &[f64],
         factorizations: &mut usize,
     ) -> Result<(), LinearSystemError> {
-        let mut values = std::mem::take(&mut self.values);
-        self.source.gather_diagonal(diagonal, &mut values);
-        let result = self.factor(&values, factorizations);
-        self.values = values;
-        result
+        self.source.gather_diagonal(diagonal, &mut self.values);
+        self.factor(factorizations)
     }
 
     /// Cache the input layout expected by Faer's numeric kernel. Preserve the
@@ -171,12 +163,8 @@ impl FaerFactorization {
         permuted
     }
 
-    fn factor(
-        &mut self,
-        values: &[f64],
-        factorizations: &mut usize,
-    ) -> Result<(), LinearSystemError> {
-        let matrix = SparseColMatRef::new(self.pattern.as_ref(), values);
+    pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
+        let matrix = SparseColMatRef::new(self.pattern.as_ref(), &self.values);
         let stack = MemStack::new(&mut self.scratch);
         let regularization = LdltRegularization {
             dynamic_regularization_signs: None,
@@ -219,7 +207,8 @@ mod tests {
     fn disabled_pivot_replacement_preserves_tiny_signed_pivots() {
         let matrix =
             CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![1e-20, -1e-20]).unwrap();
-        let mut factor = FaerFactorization::new(matrix, 3, &mut 0).unwrap();
+        let mut factor = FaerFactorization::new(matrix, 3).unwrap();
+        factor.factor(&mut 0).unwrap();
         assert_eq!(factor.parallelism, Par::Seq);
         let mut rhs = vec![1e-20, 1e-20];
         factor.solve_in_place(&mut rhs, 1).unwrap();
@@ -249,9 +238,9 @@ mod tests {
                 threads,
                 ..crate::Settings::default()
             });
-            let factor =
-                super::super::Factorization::new_counted(matrix.clone(), &settings, &mut 0)
-                    .unwrap();
+            let mut factor =
+                super::super::Factorization::prepare(matrix.clone(), &settings).unwrap();
+            factor.factor(&mut 0).unwrap();
             let super::super::FactorizationInner::Faer(mut factor) = factor.inner else {
                 unreachable!()
             };
@@ -304,7 +293,8 @@ mod tests {
             let matrix = crate::linear_algebra::take_upper_triangle(
                 CscMatrix::from_triplets(n, n, rows, columns, values).unwrap(),
             );
-            let factor = FaerFactorization::new(matrix.clone(), 1, &mut 0).unwrap();
+            let mut factor = FaerFactorization::new(matrix.clone(), 1).unwrap();
+            factor.factor(&mut 0).unwrap();
             assert_eq!(
                 matches!(
                     factor.symbolic.raw(),

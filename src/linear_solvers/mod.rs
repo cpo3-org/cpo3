@@ -142,8 +142,9 @@ impl LinearAlgebraStats {
     }
 }
 
-/// A factored symmetric system. The backend owns the matrix storage; the
-/// wrapper retains only its diagonal for subsequent KKT updates.
+/// A reusable symmetric factorization workspace. Numerical factors are valid
+/// only after a successful factorization attempt. The backend owns matrix
+/// storage; the wrapper retains its diagonal for subsequent KKT updates.
 pub(crate) struct Factorization {
     diagonal: Vec<f64>,
     inner: FactorizationInner,
@@ -157,26 +158,25 @@ enum FactorizationInner {
 }
 
 impl Factorization {
-    pub(crate) fn new_counted(
+    /// Prepare and retain backend storage before attempting numeric factorization.
+    pub(crate) fn prepare(
         matrix: CscMatrix,
         settings: &KktSettings,
-        factorizations: &mut usize,
     ) -> Result<Self, LinearSystemError> {
         validate_matrix(&matrix)?;
         let diagonal = (0..matrix.rows())
             .map(|column| matrix.get(column, column).unwrap_or(0.0))
             .collect();
-        let inner =
-            match settings.linear_solver {
-                LinearSolver::Faer => FactorizationInner::Faer(Box::new(FaerFactorization::new(
-                    matrix,
-                    settings.threads,
-                    factorizations,
-                )?)),
-                LinearSolver::Feral => FactorizationInner::Feral(Box::new(
-                    FeralFactorization::new(matrix, settings.threads, factorizations)?,
-                )),
-            };
+        let inner = match settings.linear_solver {
+            LinearSolver::Faer => FactorizationInner::Faer(Box::new(FaerFactorization::new(
+                matrix,
+                settings.threads,
+            )?)),
+            LinearSolver::Feral => FactorizationInner::Feral(Box::new(FeralFactorization::new(
+                matrix,
+                settings.threads,
+            )?)),
+        };
         Ok(Self {
             diagonal,
             inner,
@@ -278,6 +278,14 @@ impl Factorization {
             FactorizationInner::Feral(factor) => {
                 factor.refactor_diagonal(&self.diagonal, factorizations)
             }
+        }
+    }
+
+    /// Factor the already assembled values without rewriting their diagonal.
+    pub(crate) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
+        match &mut self.inner {
+            FactorizationInner::Faer(factor) => factor.factor(factorizations),
+            FactorizationInner::Feral(factor) => factor.factor(factorizations),
         }
     }
 }
@@ -662,15 +670,12 @@ mod tests {
                     LinearSystemError::NotUpperTriangle,
                 ),
             ] {
-                assert_eq!(
-                    Factorization::new_counted(matrix, &settings, &mut count).err(),
-                    Some(error)
-                );
+                assert_eq!(Factorization::prepare(matrix, &settings).err(), Some(error));
             }
             assert_eq!(count, 0);
             let mut factor =
-                Factorization::new_counted(CscMatrix::identity(1).unwrap(), &settings, &mut count)
-                    .unwrap();
+                Factorization::prepare(CscMatrix::identity(1).unwrap(), &settings).unwrap();
+            factor.factor(&mut count).unwrap();
             assert_eq!(
                 factor.solve_unrefined_in_place(&mut []),
                 Err(LinearSystemError::InvalidRightHandSide {
@@ -912,12 +917,10 @@ mod tests {
                 ..Settings::default()
             });
             let mut count = 0;
-            let mut factorization = Factorization::new_counted(
-                sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]),
-                &settings,
-                &mut count,
-            )
-            .unwrap();
+            let mut factorization =
+                Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
+                    .unwrap();
+            factorization.factor(&mut count).unwrap();
             let mut solution = Vec::new();
             for diagonal in [[4.0, -3.0, 2.0], [5.0, -4.0, 3.0], [7.0, -2.0, 6.0]] {
                 factorization
@@ -947,12 +950,10 @@ mod tests {
             linear_solver: LinearSolver::Feral,
             ..Settings::default()
         });
-        let mut factorization = Factorization::new_counted(
-            sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]),
-            &settings,
-            &mut 0,
-        )
-        .unwrap();
+        let mut factorization =
+            Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
+                .unwrap();
+        factorization.factor(&mut 0).unwrap();
         let report = factorization.pivot_report().unwrap();
         assert_eq!((report.positive, report.negative, report.zero), (2, 1, 0));
         assert!(factorization.check_inertia(2).is_ok());
