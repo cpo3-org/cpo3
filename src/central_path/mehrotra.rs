@@ -311,47 +311,24 @@ pub(crate) struct Corrector {
     pub(crate) s_centered: Vec<f64>,
 }
 
-/// Solve the surrogate system at target `sigma * complementarity` with the given surrogate
-/// and Mehrotra's second-order correction in the dual block.
+/// Consume the predictor to solve at target `sigma * mu`, using its affine
+/// point as the anchor and reusing its second-order correction buffer for slack.
 pub(crate) fn corrector(
     state: &State,
     scaling: &Scaling,
     predictor: Predictor,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Corrector, MehrotraError> {
-    let mu_centered = predictor.sigma * scaling.mu;
-
-    let (centered, s_centered) = centered_solve(
-        state,
-        scaling,
-        (
-            predictor.affine.x(),
-            predictor.affine.y(),
-            predictor.affine.tau,
-        ),
-        mu_centered,
-        predictor.correction,
-        resolvent,
-    )?;
-
-    Ok(Corrector {
-        centered,
-        s_centered,
-    })
-}
-
-/// Solve the surrogate system at target `mu_centered` with `correction` in
-/// the dual block; returns the point and its slack.
-fn centered_solve(
-    state: &State,
-    scaling: &Scaling,
-    (anchor_x, anchor_y, anchor_tau): (&[f64], &[f64], f64),
-    mu_centered: f64,
-    mut correction: Vec<f64>,
-    resolvent: &mut Resolvent<'_>,
-) -> Result<(ResolventSolution, Vec<f64>), MehrotraError> {
+    let Predictor {
+        affine,
+        mut correction,
+        sigma,
+        ..
+    } = predictor;
     let mu = scaling.mu;
+    let mu_centered = sigma * mu;
     let residual_weight = mu - mu_centered;
+    let (anchor_x, anchor_y) = (affine.x(), affine.y());
     let m = state.y().len();
     // Form the increment RHS from actual feasibility residuals. This
     // cancels H y = s and common shifted anchor terms algebraically.
@@ -376,7 +353,7 @@ fn centered_solve(
             - mu_over_y(index)
             - correction[index]
     }));
-    let r_tau = residual_weight * anchor_tau;
+    let r_tau = residual_weight * affine.tau;
     let centered = resolvent.solve_increment_rhs(&rhs, r_tau, mu_centered)?;
     // The second-order correction is no longer needed after the solve.
     // Reuse its allocation for slack, preserving the scalar evaluation order.
@@ -385,7 +362,10 @@ fn centered_solve(
         *value = mu_over_y(index) - scaling.d[index] * (centered.y()[index] - state.y()[index])
             + second_order_correction;
     }
-    Ok((centered, correction))
+    Ok(Corrector {
+        centered,
+        s_centered: correction,
+    })
 }
 
 fn difference(left: &[f64], right: &[f64]) -> Vec<f64> {
