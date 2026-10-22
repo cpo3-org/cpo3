@@ -4,7 +4,7 @@ use std::time::Instant;
 use thiserror::Error;
 
 use crate::{
-    Problem, Settings, Solution, SolverStatus,
+    Problem, Settings, Solution, SolutionInfo, SolverStatus,
     central_path::{
         init::{self, WarmStart},
         kkt::KktCache,
@@ -81,17 +81,23 @@ pub fn solve_from(
         .map_err(|error| SolveError::Numerical(error.to_string()))?;
     let presolve_time = started.elapsed();
     let direct = |status, point| {
-        (
-            direct_solution(
-                problem,
-                settings,
-                status,
-                point,
-                started.elapsed(),
-                settings.linear_solver,
-            ),
-            None,
-        )
+        let elapsed = started.elapsed();
+        let info = SolutionInfo {
+            solve_time: elapsed,
+            presolve_rows_removed: problem.constraint_count(),
+            presolve_columns_removed: problem.variable_count(),
+            ..SolutionInfo::new(settings, None)
+        };
+        let solution = direct_solution(problem, status, point, info);
+        let reporter = ProgressReporter::new(settings.verbose);
+        reporter.header(
+            problem,
+            settings,
+            settings.linear_solver,
+            Some((problem.constraint_count(), problem.variable_count())),
+        );
+        reporter.finish(status, 0, elapsed, solution.info.pobj);
+        (solution, None)
     };
     let (mut solution, comparisons) = match outcome {
         PresolveOutcome::Solved(x, y) => {
@@ -289,27 +295,15 @@ fn solve_core(
         recovered.iteration_record(iteration, elapsed, diagnostics),
         true,
     );
+    let info = SolutionInfo {
+        solve_time: elapsed,
+        iters: iteration,
+        linear_algebra: cache.stats(),
+        ..SolutionInfo::new(settings, Some(init_report))
+    };
     let solution = match certificate {
-        Some(ray) => build_certificate(
-            status,
-            ray,
-            iteration,
-            elapsed,
-            linear_solver,
-            settings,
-            init_report,
-            cache.stats(),
-        ),
-        None => build_solution(
-            status,
-            recovery.into_point(),
-            iteration,
-            elapsed,
-            linear_solver,
-            settings,
-            init_report,
-            cache.stats(),
-        ),
+        Some(ray) => build_certificate(status, ray, info),
+        None => build_solution(status, recovery.into_point(), info),
     };
     reporter.finish(status, iteration, elapsed, solution.info.pobj);
     Ok(solution)
@@ -521,36 +515,66 @@ mod tests {
     fn primal_infeasible_lp_returns_a_farkas_certificate() {
         // x <= -1 and x >= 0: A x + s = b with s >= 0.
         let problem = lp(vec![1.0, -1.0], 2, vec![-1.0, 0.0], vec![1.0]);
-        let solution = solve(&problem, &Settings::default()).unwrap();
-        assert_eq!(solution.info().iters, 0);
-        assert_eq!(solution.info().presolve_parallel_comparisons, None);
-        assert!(solution.info().solve_time >= solution.info().presolve_time);
-        assert_eq!(solution.status(), SolverStatus::PrimalInfeasible);
-        assert!(solution.x().iter().all(|v| v.is_nan()));
-        let bty = dot(problem.b(), solution.y());
-        assert!((bty + 1.0).abs() < 1e-6);
-        let aty = matrix_transpose_mul(problem.a(), solution.y());
-        assert!(aty.iter().all(|v| v.abs() < 1e-6));
-        assert!(solution.y().iter().all(|v| *v >= 0.0));
+        for presolve in [true, false] {
+            let solution = solve(
+                &problem,
+                &Settings {
+                    presolve,
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(solution.info().iters == 0, presolve);
+            assert_eq!(solution.info().linear_algebra.factorizations == 0, presolve);
+            assert_eq!(
+                solution.info().cvxopt_init_used,
+                if presolve { None } else { Some(false) }
+            );
+            assert!(solution.info().pobj.is_nan() && solution.info().dobj.is_nan());
+            assert_eq!(solution.info().presolve_parallel_comparisons, None);
+            assert!(solution.info().solve_time >= solution.info().presolve_time);
+            assert_eq!(solution.status(), SolverStatus::PrimalInfeasible);
+            assert!(solution.x().iter().all(|v| v.is_nan()));
+            let bty = dot(problem.b(), solution.y());
+            assert!((bty + 1.0).abs() < 1e-6);
+            let aty = matrix_transpose_mul(problem.a(), solution.y());
+            assert!(aty.iter().all(|v| v.abs() < 1e-6));
+            assert!(solution.y().iter().all(|v| *v >= 0.0));
+        }
     }
 
     #[test]
     fn dual_infeasible_lp_returns_an_unbounded_ray() {
         // minimize -x subject to x >= 0.
         let problem = lp(vec![-1.0], 1, vec![0.0], vec![-1.0]);
-        let solution = solve(&problem, &Settings::default()).unwrap();
-        assert_eq!(solution.info().iters, 0);
-        assert_eq!(solution.info().presolve_parallel_comparisons, None);
-        assert!(solution.info().solve_time >= solution.info().presolve_time);
-        assert_eq!(solution.status(), SolverStatus::DualInfeasible);
-        assert!(solution.y().iter().all(|v| v.is_nan()));
-        assert!((dot(problem.c(), solution.x()) + 1.0).abs() < 1e-6);
-        let ax = matrix_mul(problem.a(), solution.x());
-        assert!(
-            ax.iter()
-                .zip(solution.s())
-                .all(|(ax, s)| (ax + s).abs() < 1e-6)
-        );
+        for presolve in [true, false] {
+            let solution = solve(
+                &problem,
+                &Settings {
+                    presolve,
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(solution.info().iters == 0, presolve);
+            assert_eq!(solution.info().linear_algebra.factorizations == 0, presolve);
+            assert_eq!(
+                solution.info().cvxopt_init_used,
+                if presolve { None } else { Some(false) }
+            );
+            assert!(solution.info().pobj.is_nan() && solution.info().dobj.is_nan());
+            assert_eq!(solution.info().presolve_parallel_comparisons, None);
+            assert!(solution.info().solve_time >= solution.info().presolve_time);
+            assert_eq!(solution.status(), SolverStatus::DualInfeasible);
+            assert!(solution.y().iter().all(|v| v.is_nan()));
+            assert!((dot(problem.c(), solution.x()) + 1.0).abs() < 1e-6);
+            let ax = matrix_mul(problem.a(), solution.x());
+            assert!(
+                ax.iter()
+                    .zip(solution.s())
+                    .all(|(ax, s)| (ax + s).abs() < 1e-6)
+            );
+        }
     }
 
     #[test]

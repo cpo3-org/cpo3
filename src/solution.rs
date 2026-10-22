@@ -6,7 +6,6 @@ use crate::{
     LinearSolver, Problem, Settings,
     central_path::init,
     cone::ConeGeometry,
-    io::progress::ProgressReporter,
     linear_algebra::matrix_mul,
     linear_solvers::LinearAlgebraStats,
     presolve::Presolved,
@@ -69,12 +68,7 @@ pub struct SolutionInfo {
 }
 
 impl SolutionInfo {
-    fn new(
-        measures: Measures,
-        linear_solver: LinearSolver,
-        settings: &Settings,
-        init_report: Option<init::InitReport>,
-    ) -> Self {
+    pub(crate) fn new(settings: &Settings, init_report: Option<init::InitReport>) -> Self {
         let init = init_report.unwrap_or(init::InitReport {
             warm_start_used: None,
             warm_start_score: None,
@@ -83,12 +77,12 @@ impl SolutionInfo {
         Self {
             iters: 0,
             solve_time: Duration::ZERO,
-            pobj: measures.pobj,
-            dobj: measures.dobj,
-            pres: measures.pres,
-            dres: measures.dres,
-            comp: measures.comp,
-            linear_solver,
+            pobj: f64::NAN,
+            dobj: f64::NAN,
+            pres: f64::NAN,
+            dres: f64::NAN,
+            comp: f64::NAN,
+            linear_solver: settings.linear_solver,
             eliminate_bounds: settings.eliminate_bounds,
             warm_start_used: init.warm_start_used,
             warm_start_score: init.warm_start_score,
@@ -99,6 +93,14 @@ impl SolutionInfo {
             presolve_parallel_comparisons: None,
             linear_algebra: LinearAlgebraStats::default(),
         }
+    }
+
+    fn set_measures(&mut self, measures: Measures) {
+        self.pobj = measures.pobj;
+        self.dobj = measures.dobj;
+        self.pres = measures.pres;
+        self.dres = measures.dres;
+        self.comp = measures.comp;
     }
 }
 
@@ -113,6 +115,22 @@ pub struct Solution {
 }
 
 impl Solution {
+    fn new(
+        status: SolverStatus,
+        (x, y, s): (Vec<f64>, Vec<f64>, Vec<f64>),
+        measures: Measures,
+        mut info: SolutionInfo,
+    ) -> Self {
+        info.set_measures(measures);
+        Self {
+            status,
+            x,
+            y,
+            s,
+            info,
+        }
+    }
+
     pub fn status(&self) -> SolverStatus {
         self.status
     }
@@ -161,11 +179,7 @@ pub(crate) fn expand_solution(
             let ax = matrix_mul(problem.a(), &x);
             let s = presolved.expand_s_from_ax(problem, geometry, &reduced.s, &ax);
             let measures = Measures::with_ax(problem, &x, &y, &s, &ax);
-            info.pobj = measures.pobj;
-            info.dobj = measures.dobj;
-            info.pres = measures.pres;
-            info.dres = measures.dres;
-            info.comp = measures.comp;
+            info.set_measures(measures);
             (x, y, s)
         }
     };
@@ -181,81 +195,33 @@ pub(crate) fn expand_solution(
 /// A solution decided by presolve alone.
 pub(crate) fn direct_solution(
     problem: &Problem,
-    settings: &Settings,
     status: SolverStatus,
     (x, y, s): (Vec<f64>, Vec<f64>, Vec<f64>),
-    solve_time: Duration,
-    linear_solver: LinearSolver,
+    info: SolutionInfo,
 ) -> Solution {
     let measures = if status == SolverStatus::Solved {
         Measures::new(problem, &x, &y, &s)
     } else {
         Measures::nan()
     };
-    let reporter = ProgressReporter::new(settings.verbose);
-    reporter.header(
-        problem,
-        settings,
-        linear_solver,
-        Some((problem.constraint_count(), problem.variable_count())),
-    );
-    reporter.finish(status, 0, solve_time, measures.pobj);
-    Solution {
-        status,
-        x,
-        y,
-        s,
-        info: SolutionInfo {
-            solve_time,
-            presolve_rows_removed: problem.constraint_count(),
-            presolve_columns_removed: problem.variable_count(),
-            ..SolutionInfo::new(measures, linear_solver, settings, None)
-        },
-    }
+    Solution::new(status, (x, y, s), measures, info)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_solution(
     status: SolverStatus,
     recovered: RecoveredSolution,
-    iters: usize,
-    solve_time: Duration,
-    linear_solver: LinearSolver,
-    settings: &Settings,
-    init_report: init::InitReport,
-    stats: LinearAlgebraStats,
+    info: SolutionInfo,
 ) -> Solution {
-    Solution {
+    Solution::new(
         status,
-        x: recovered.x,
-        y: recovered.y,
-        s: recovered.s,
-        info: SolutionInfo {
-            solve_time,
-            iters,
-            linear_algebra: stats,
-            ..SolutionInfo::new(
-                recovered.measures,
-                linear_solver,
-                settings,
-                Some(init_report),
-            )
-        },
-    }
+        (recovered.x, recovered.y, recovered.s),
+        recovered.measures,
+        info,
+    )
 }
 
 /// Package a certificate: the ray scaled to unit slope, the other side NaN.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn build_certificate(
-    status: SolverStatus,
-    ray: Ray,
-    iters: usize,
-    solve_time: Duration,
-    linear_solver: LinearSolver,
-    settings: &Settings,
-    init_report: init::InitReport,
-    stats: LinearAlgebraStats,
-) -> Solution {
+pub(crate) fn build_certificate(status: SolverStatus, ray: Ray, info: SolutionInfo) -> Solution {
     let nan = |len: usize| vec![f64::NAN; len];
     let scaled = |v: &[f64], slope: f64| v.iter().map(|e| e / slope.abs()).collect::<Vec<_>>();
     let (x, y, s) = match status {
@@ -268,16 +234,5 @@ pub(crate) fn build_certificate(
             scaled(&ray.s, ray.ctx),
         ),
     };
-    Solution {
-        status,
-        x,
-        y,
-        s,
-        info: SolutionInfo {
-            solve_time,
-            iters,
-            linear_algebra: stats,
-            ..SolutionInfo::new(Measures::nan(), linear_solver, settings, Some(init_report))
-        },
-    }
+    Solution::new(status, (x, y, s), Measures::nan(), info)
 }
