@@ -208,8 +208,6 @@ impl Scaling {
 /// The affine trial point and the centering parameter it induces.
 pub(crate) struct Predictor {
     pub(crate) affine: ResolventSolution,
-    #[cfg(test)]
-    pub(crate) s_affine: Vec<f64>,
     /// Second-order correction, reusing the slack-displacement allocation.
     pub(crate) correction: Vec<f64>,
     pub(crate) alpha_affine: f64,
@@ -241,8 +239,6 @@ pub(crate) fn predictor(
         .zip(state.s())
         .map(|((dy, h), s)| -h * dy - s)
         .collect::<Vec<_>>();
-    #[cfg(test)]
-    let s_affine = dy.iter().zip(&scaling.d).map(|(dy, h)| -h * dy).collect();
 
     let alpha_affine = geometry
         .step_to_boundary_from_interior(state.s(), &ds)?
@@ -269,8 +265,6 @@ pub(crate) fn predictor(
 
     Ok(Predictor {
         affine,
-        #[cfg(test)]
-        s_affine,
         correction: ds,
         alpha_affine,
         sigma,
@@ -517,10 +511,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, y)| {
-                weight * y + state.s()[i] + target * scaling.y_inverse[i]
-                    - scaling.y_inverse[i]
-                        * (first.s_affine[i] - state.s()[i])
-                        * (first.affine.y()[i] - state.y()[i])
+                weight * y + state.s()[i] + target * scaling.y_inverse[i] + first.correction[i]
             })
             .collect::<Vec<_>>();
         let r_tau = weight * first.affine.tau;
@@ -633,46 +624,48 @@ mod tests {
         );
     }
 
-    fn run_predictor(problem: &Problem) -> (State, f64, Scaling, Predictor) {
-        let geometry = ConeGeometry::new(problem).unwrap();
-        let state = interior_state(problem);
-        let mu = state.duality_measure(&geometry);
-        let scaling = Scaling::new(problem, &geometry, &state).unwrap();
-        let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
-            problem,
-            &geometry,
-            &state,
-            &scaling.d,
-            mu,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut cache,
-        )
-        .unwrap();
-        let result = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
-        (state, mu, scaling, result)
-    }
-
     #[test]
-    fn predictor_slack_is_the_newton_update_on_affine_complementarity() {
+    fn predictor_correction_and_boundary_follow_affine_complementarity() {
         for problem in [quadratic_problem(), linear_problem()] {
-            let (state, _, _, result) = run_predictor(&problem);
+            let geometry = ConeGeometry::new(&problem).unwrap();
+            let state = interior_state(&problem);
+            let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
+            let mut cache = KktCache::new();
+            let mut resolvent = Resolvent::new(
+                &problem,
+                &geometry,
+                &state,
+                &scaling.d,
+                scaling.mu,
+                &KktSettings::new(LinearSolver::Faer),
+                &mut cache,
+            )
+            .unwrap();
+            let result = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
+            let mut boundary: f64 = 1.0;
             for index in 0..problem.constraint_count() {
                 let (s, y) = (state.s()[index], state.y()[index]);
-                let lhs = result.s_affine[index] * y + s * result.affine.y()[index];
-                assert_close(lhs, s * y);
+                if s == 0.0 {
+                    // Equality rows have no complementarity correction or boundary.
+                    assert_eq!(result.correction[index], 0.0);
+                    continue;
+                }
+                let dy = result.affine.y()[index] - y;
+                // Linearized complementarity: y * ds + s * y_affine = 0.
+                let ds = -s * result.affine.y()[index] / y;
+                assert_close(result.correction[index], -(ds * dy) / y);
+                if ds < 0.0 {
+                    boundary = boundary.min(-s / ds);
+                }
+                if dy < 0.0 {
+                    boundary = boundary.min(-y / dy);
+                }
             }
+            assert_close(result.alpha_affine, boundary);
             assert!(result.alpha_affine > 0.0 && result.alpha_affine <= 1.0);
             assert!((0.0..=1.0).contains(&result.sigma));
             assert_close(result.sigma, (1.0 - result.alpha_affine).powi(3));
         }
-    }
-
-    #[test]
-    fn predictor_slack_vanishes_on_zero_rows() {
-        let problem = quadratic_problem();
-        let (_, _, _, result) = run_predictor(&problem);
-        assert_eq!(result.s_affine[0], 0.0);
     }
 
     #[test]
@@ -700,7 +693,7 @@ mod tests {
                         return 0.0;
                     }
                     let (s, y) = (state.s()[index], state.y()[index]);
-                    let ds = first.s_affine[index] - s;
+                    let ds = -s * first.affine.y()[index] / y;
                     let dy = first.affine.y()[index] - y;
                     s * y + (first.sigma * mu) - ds * dy
                 })
@@ -746,7 +739,6 @@ mod tests {
                 x_len: state.x().len(),
                 tau: state.tau(),
             },
-            s_affine: state.s().to_vec(),
             correction: vec![-0.0; state.s().len()],
             alpha_affine: 1.0,
             sigma: 1.0,
