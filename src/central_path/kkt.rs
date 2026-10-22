@@ -76,6 +76,8 @@ struct KktPattern {
 /// Mutable buffers reused across factorizations and right-hand sides.
 #[derive(Default)]
 struct KktWorkspace {
+    /// Reduced right-hand side and solution when bound rows are eliminated.
+    reduced: Vec<f64>,
     /// Full-system residual used for the first correction of a warm start.
     initial_residual: Vec<f64>,
     refinement: RefinementWorkspace,
@@ -394,9 +396,10 @@ impl KktPattern {
         factorization: &mut Factorization,
         d_diagonal: &[f64],
         rhs: &[f64],
+        reduced: &mut Vec<f64>,
     ) -> Result<Vec<f64>, LinearSystemError> {
         let mut out = Vec::new();
-        self.solve_preconditioner_into(factorization, d_diagonal, rhs, &mut out)?;
+        self.solve_preconditioner_into(factorization, d_diagonal, rhs, &mut out, reduced)?;
         Ok(out)
     }
 
@@ -406,32 +409,29 @@ impl KktPattern {
         d_diagonal: &[f64],
         rhs: &[f64],
         full: &mut Vec<f64>,
+        reduced: &mut Vec<f64>,
     ) -> Result<(), LinearSystemError> {
         if self.bound_rows.eliminated.is_empty() {
             return factorization.solve_unrefined_into(rhs, full);
         }
         let n = self.variable_count;
         let bound_rows = &self.bound_rows;
-        let mut reduced = factorization.take_scratch();
         reduced.clear();
         reduced.extend_from_slice(&rhs[..n]);
         for &(row, column, coefficient) in &bound_rows.eliminated {
             reduced[column] += coefficient * rhs[n + row] / d_diagonal[row];
         }
         reduced.extend(bound_rows.kept.iter().map(|&row| rhs[n + row]));
-        let solved = factorization.solve_unrefined_in_place(&mut reduced);
-        let result = solved.map(|()| {
-            full.resize(rhs.len(), 0.0);
-            full[..n].copy_from_slice(&reduced[..n]);
-            for (index, &row) in bound_rows.kept.iter().enumerate() {
-                full[n + row] = reduced[n + index];
-            }
-            for &(row, column, coefficient) in &bound_rows.eliminated {
-                full[n + row] = (coefficient * reduced[column] - rhs[n + row]) / d_diagonal[row];
-            }
-        });
-        factorization.put_scratch(reduced);
-        result
+        factorization.solve_unrefined_in_place(reduced)?;
+        full.resize(rhs.len(), 0.0);
+        full[..n].copy_from_slice(&reduced[..n]);
+        for (index, &row) in bound_rows.kept.iter().enumerate() {
+            full[n + row] = reduced[n + index];
+        }
+        for &(row, column, coefficient) in &bound_rows.eliminated {
+            full[n + row] = (coefficient * reduced[column] - rhs[n + row]) / d_diagonal[row];
+        }
+        Ok(())
     }
 }
 
@@ -452,6 +452,7 @@ impl KktWorkspace {
     ) -> Result<Vec<f64>, LinearSystemError> {
         validate_rhs(problem.variable_count() + problem.constraint_count(), rhs)?;
         factorization.stats_mut().primary_solves += 1;
+        let reduced = &mut self.reduced;
         let initial = match initial {
             Some((x, y)) => {
                 debug_assert_eq!(x.len(), problem.variable_count());
@@ -471,13 +472,14 @@ impl KktWorkspace {
                     factorization,
                     d_factor,
                     &self.initial_residual,
+                    reduced,
                 )?;
                 let (solution_x, solution_y) = solution.split_at_mut(x.len());
                 crate::linear_algebra::add_assign(solution_x, x);
                 crate::linear_algebra::add_assign(solution_y, y);
                 solution
             }
-            None => pattern.solve_preconditioner(factorization, d_factor, rhs)?,
+            None => pattern.solve_preconditioner(factorization, d_factor, rhs, reduced)?,
         };
         let mut stats = LinearAlgebraStats::default();
         let workspace = &mut self.refinement;
@@ -527,7 +529,7 @@ impl KktWorkspace {
                 );
             },
             |residual, out| {
-                pattern.solve_preconditioner_into(factorization, d_factor, residual, out)
+                pattern.solve_preconditioner_into(factorization, d_factor, residual, out, reduced)
             },
             &mut stats,
         );

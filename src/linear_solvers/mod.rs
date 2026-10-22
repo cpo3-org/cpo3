@@ -143,8 +143,6 @@ pub(crate) struct Factorization {
     inner: FactorizationInner,
     settings: KktSettings,
     stats: LinearAlgebraStats,
-    /// Buffer lent to callers that solve reduced systems.
-    scratch: Vec<f64>,
 }
 
 enum FactorizationInner {
@@ -176,7 +174,6 @@ impl Factorization {
             inner,
             settings: *settings,
             stats: LinearAlgebraStats::default(),
-            scratch: Vec::new(),
         })
     }
 
@@ -241,15 +238,6 @@ impl Factorization {
         rhs: &mut [f64],
     ) -> Result<(), LinearSystemError> {
         self.inner.solve_in_place(rhs)
-    }
-
-    /// Borrow reduced-solve scratch; return it with `put_scratch`.
-    pub(crate) fn take_scratch(&mut self) -> Vec<f64> {
-        std::mem::take(&mut self.scratch)
-    }
-
-    pub(crate) fn put_scratch(&mut self, scratch: Vec<f64>) {
-        self.scratch = scratch;
     }
 
     /// Update the compact diagonal in original variable order. Each backend
