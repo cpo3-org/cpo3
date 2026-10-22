@@ -9,7 +9,7 @@ use crate::{
     cone::{ConeBlock, ConeGeometry},
     linear_solvers::{
         Factorization, KktSettings, LinearAlgebraStats, LinearSystemError, RefinementWorkspace,
-        refine_with,
+        refine_with, validate_rhs,
     },
 };
 use thiserror::Error;
@@ -25,8 +25,6 @@ pub(crate) enum KktError {
     InvalidParameters,
     #[error("the KKT diagonal must be finite and strictly positive")]
     InvalidDiagonal,
-    #[error("KKT right-hand side has length {actual}, expected {expected}")]
-    IncorrectRhsLength { expected: usize, actual: usize },
 }
 
 impl KktError {
@@ -221,16 +219,6 @@ pub(crate) fn solve_shifted_systems(
     right_hand_sides
         .iter()
         .map(|rhs| {
-            let expected = problem.variable_count() + problem.constraint_count();
-            if rhs.len() != expected {
-                return Err(KktError::IncorrectRhsLength {
-                    expected,
-                    actual: rhs.len(),
-                });
-            }
-            if !rhs.iter().all(|value| value.is_finite()) {
-                return Err(LinearSystemError::NonFiniteRightHandSide.into());
-            }
             Ok(pattern.solve(
                 problem,
                 factorization,
@@ -373,6 +361,7 @@ impl KktPattern {
         rhs: &[f64],
         initial: Option<(&[f64], &[f64])>,
     ) -> Result<Vec<f64>, LinearSystemError> {
+        validate_rhs(problem.variable_count() + problem.constraint_count(), rhs)?;
         factorization.stats_mut().primary_solves += 1;
         let initial = match initial {
             Some((x, y)) => {
@@ -703,6 +692,45 @@ pub(crate) fn matrix_value(matrix: &CscMatrix, row: usize, column: usize) -> f64
 mod cache_tests {
     use super::*;
     use crate::{Cone, LinearSolver};
+
+    #[test]
+    fn refinement_solves_the_true_system_with_a_clamped_primal_diagonal() {
+        let problem = Problem::new(
+            Some(CscMatrix::from_triplets(1, 1, vec![0], vec![0], vec![1e-14]).unwrap()),
+            vec![0.0],
+            CscMatrix::identity(1).unwrap(),
+            vec![0.0],
+            vec![Cone::Nonnegative(1)],
+        )
+        .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let settings = KktSettings::from(&crate::Settings {
+            eliminate_bounds: false,
+            refine_init_reg: 1e-6,
+            refine_tol: 1e-12,
+            ..crate::Settings::default()
+        });
+        let mut cache = KktCache::new();
+        factorize(&problem, &geometry, 0.0, &[1.0], &settings, &mut cache).unwrap();
+        let solution = cache
+            .pattern
+            .as_mut()
+            .unwrap()
+            .solve(
+                &problem,
+                cache.factorization.as_mut().unwrap(),
+                0.0,
+                &[1.0],
+                &[1.0],
+                &[2.0 + 1e-14, -1.0],
+                None,
+            )
+            .unwrap();
+        assert!((solution[0] - 1.0).abs() < 1e-10);
+        assert!((solution[1] - 2.0).abs() < 1e-10);
+        assert!(cache.stats().refinement_solves > 0);
+        assert_eq!(cache.stats().refinement_accurate, 1);
+    }
 
     #[test]
     fn perturbation_is_reused_and_invalidated_after_refactorization() {

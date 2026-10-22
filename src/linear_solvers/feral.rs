@@ -1,9 +1,6 @@
 //! FERAL factorization adapter.
 
-use super::{
-    LinearSystemError, PivotReport, TriangleSource, validate_finite, validate_rhs, validate_square,
-    validate_upper_triangle,
-};
+use super::{LinearSystemError, PivotReport, TriangleSource};
 use crate::CscMatrix;
 use ::feral::{
     CscMatrix as FeralCscMatrix, FactorStatus as FeralFactorStatus,
@@ -17,7 +14,7 @@ use ::feral::{
 pub(super) struct FeralFactorization {
     solver: FeralSolver,
     matrix: FeralCscMatrix,
-    /// Source position of each lower-triangle entry.
+    /// Diagonal slots in the lower triangle.
     source: TriangleSource,
     /// Output buffer for `solve_into`, which needs a distinct target.
     scratch: Vec<f64>,
@@ -28,11 +25,6 @@ impl FeralFactorization {
         matrix: CscMatrix,
         factorizations: &mut usize,
     ) -> Result<Self, LinearSystemError> {
-        validate_square(matrix.rows(), matrix.columns())?;
-        if matrix.rows() == 0 {
-            return Err(LinearSystemError::Empty);
-        }
-        validate_upper_triangle(&matrix)?;
         let (prepared, source) = to_feral(&matrix)?;
         drop(matrix);
         let matrix = prepared;
@@ -52,13 +44,12 @@ impl FeralFactorization {
     }
 
     pub(super) fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
-        validate_rhs(self.dim(), vector)?;
         self.scratch.resize(vector.len(), 0.0);
         self.solver
             .solve_into(vector, &mut self.scratch)
             .map_err(|error| LinearSystemError::Factorization(error.to_string()))?;
         vector.copy_from_slice(&self.scratch);
-        validate_finite(vector)
+        Ok(())
     }
 
     pub(super) fn pivot_report(&self) -> Option<PivotReport> {
@@ -70,25 +61,6 @@ impl FeralFactorization {
             min_abs: self.solver.min_pivot_magnitude()?,
             max_abs: self.solver.max_pivot_magnitude()?,
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn refactor(
-        &mut self,
-        matrix: &CscMatrix,
-        factorizations: &mut usize,
-    ) -> Result<(), LinearSystemError> {
-        if matrix.rows() != self.dim() || matrix.columns() != self.dim() {
-            return Err(LinearSystemError::DimensionChanged {
-                expected: self.dim(),
-                actual: matrix.rows(),
-            });
-        }
-        let mut values = std::mem::take(&mut self.matrix.values);
-        self.source.gather_values(matrix, &mut values)?;
-        self.matrix.values = values;
-        *factorizations += 1;
-        check_feral_status(self.solver.factor(&self.matrix, None))
     }
 
     pub(super) fn refactor_diagonal(
@@ -129,8 +101,6 @@ fn to_feral(matrix: &CscMatrix) -> Result<(FeralCscMatrix, TriangleSource), Line
     let mut rows = vec![0; nnz];
     let mut values = vec![0.0; nnz];
     let mut source = TriangleSource {
-        matrix_nonzeros: nnz,
-        positions: vec![0; nnz],
         diagonal: Vec::with_capacity(n),
     };
     for column in 0..n {
@@ -140,7 +110,6 @@ fn to_feral(matrix: &CscMatrix) -> Result<(FeralCscMatrix, TriangleSource), Line
             next[row] += 1;
             rows[slot] = column;
             values[slot] = matrix.values()[position];
-            source.positions[slot] = position;
             if row == column {
                 source.diagonal.push((slot, column));
             }

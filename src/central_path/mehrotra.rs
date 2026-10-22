@@ -446,11 +446,13 @@ mod tests {
         assert_eq!(*floors.last().unwrap(), 1e-4);
         assert!(floors.len() <= 10);
         assert!(floors.windows(2).all(|w| w[1] > w[0]));
-        let error = MehrotraError::Resolvent(ResolventError::IncorrectRhsLength {
-            argument: "test",
-            expected: 2,
-            actual: 1,
-        });
+        let error = MehrotraError::Resolvent(
+            LinearSystemError::InvalidRightHandSide {
+                expected: 2,
+                actual: 1,
+            }
+            .into(),
+        );
         let mut count = 0;
         let result: Result<(), _> =
             with_clamp_retries(&settings, 1e-14, &mut KktCache::new(), |_, _| {

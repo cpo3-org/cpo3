@@ -35,12 +35,6 @@ pub(crate) enum ResolventError {
     Kkt(#[from] KktError),
     #[error("the resolvent tau polynomial has invalid coefficients")]
     InvalidTauPolynomial,
-    #[error("resolvent right-hand side {argument} has length {actual}, expected {expected}")]
-    IncorrectRhsLength {
-        argument: &'static str,
-        expected: usize,
-        actual: usize,
-    },
 }
 
 impl ResolventError {
@@ -245,8 +239,8 @@ impl<'a> Resolvent<'a> {
     ) -> Result<ResolventSolution, ResolventError> {
         let n = self.problem.variable_count();
         let m = self.problem.constraint_count();
-        ensure_rhs_length("r_x", n, r_x)?;
-        ensure_rhs_length("r_y", m, r_y)?;
+        crate::linear_solvers::validate_rhs(n, r_x)?;
+        crate::linear_solvers::validate_rhs(m, r_y)?;
         let mut rhs = Vec::with_capacity(n + m);
         rhs.extend_from_slice(r_x);
         rhs.extend(r_y.iter().map(|value| -value));
@@ -265,10 +259,7 @@ impl<'a> Resolvent<'a> {
     ) -> Result<ResolventSolution, ResolventError> {
         let n = self.problem.variable_count();
         let m = self.problem.constraint_count();
-        ensure_rhs_length("rhs", n + m, rhs)?;
-        if !r_tau.is_finite() || !mu.is_finite() || mu < 0.0 {
-            return Err(ResolventError::InvalidTauPolynomial);
-        }
+        crate::linear_solvers::validate_rhs(n + m, rhs)?;
 
         let mut residual = rhs.to_vec();
         crate::linear_algebra::add_assign(&mut residual, &self.rhs_offset);
@@ -298,11 +289,6 @@ impl<'a> Resolvent<'a> {
         mu: f64,
     ) -> Result<ResolventSolution, ResolventError> {
         let n = self.problem.variable_count();
-        ensure_rhs_length(
-            "increment rhs",
-            n + self.problem.constraint_count(),
-            residual,
-        )?;
         if !r_tau.is_finite() || !mu.is_finite() || mu < 0.0 {
             return Err(ResolventError::InvalidTauPolynomial);
         }
@@ -438,24 +424,6 @@ fn tau_leading_coefficient(shift: f64, x: &[f64], y: &[f64], d: &[f64]) -> f64 {
 fn q_dot(problem: &Problem, vector: &[f64]) -> f64 {
     let (x, y) = vector.split_at(problem.variable_count());
     dot(problem.c(), x) + dot(problem.b(), y)
-}
-
-fn ensure_rhs_length(
-    argument: &'static str,
-    expected: usize,
-    vector: &[f64],
-) -> Result<(), ResolventError> {
-    if vector.len() != expected {
-        return Err(ResolventError::IncorrectRhsLength {
-            argument,
-            expected,
-            actual: vector.len(),
-        });
-    }
-    if !vector.iter().all(|value| value.is_finite()) {
-        return Err(ResolventError::InvalidTauPolynomial);
-    }
-    Ok(())
 }
 
 /// CPO3's Muller branch for general coefficient signs, without squaring
