@@ -626,150 +626,101 @@ fn solve_core(
         true,
     );
 
-    if recovered.is_solved(settings) {
-        let elapsed = started.elapsed();
-        reporter.finish(SolverStatus::Solved, 0, elapsed, recovered.measures.pobj);
-        return Ok(build_solution(
-            SolverStatus::Solved,
-            recovered,
-            0,
+    let mut iteration = 0;
+    let (status, certificate) = if recovered.is_solved(settings) {
+        (SolverStatus::Solved, None)
+    } else {
+        loop {
+            if iteration == settings.max_iters {
+                break (SolverStatus::MaxIterations, None);
+            }
+            if time_limit_reached(started, settings.time_limit) {
+                break (SolverStatus::TimeLimit, None);
+            }
+
+            // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
+            // complementarity, scaling s by the same factor.
+            state.normalize_sphere(geometry)?;
+            let (next, next_diagnostics) = match predictor_corrector_step(
+                scaled_problem,
+                geometry,
+                &state,
+                &kkt,
+                settings,
+                &mut cache,
+            ) {
+                Ok(step) => step,
+                Err(error) => {
+                    let error = SolveError::from(error);
+                    reporter.iteration(
+                        recovered.iteration_record(iteration, started.elapsed(), diagnostics),
+                        true,
+                    );
+                    reporter.failure(iteration + 1, &error.to_string());
+                    return Err(error);
+                }
+            };
+            state = next;
+            diagnostics = next_diagnostics;
+            iteration += 1;
+            recover_into(
+                problem,
+                &equilibrated,
+                &state,
+                geometry.barrier_parameter(),
+                diagnostics.sy,
+                original,
+                &mut recovered,
+                &mut recovery,
+            );
+            // The ray is only examined past the kappa / tau gate.
+            let ray = (recovered.ktratio > settings.certificate_ktratio)
+                .then(|| Ray::new(problem, &equilibrated, state.x(), state.y(), state.s()));
+            if let Some(status) = recovered.terminal_status(settings, ray.as_ref()) {
+                let certificate = match status {
+                    SolverStatus::PrimalInfeasible | SolverStatus::DualInfeasible => {
+                        Some(ray.expect("a certificate status requires a ray"))
+                    }
+                    _ => None,
+                };
+                break (status, certificate);
+            }
+            reporter.iteration(
+                recovered.iteration_record(iteration, started.elapsed(), diagnostics),
+                false,
+            );
+        }
+    };
+
+    let elapsed = started.elapsed();
+    reporter.iteration(
+        recovered.iteration_record(iteration, elapsed, diagnostics),
+        true,
+    );
+    let solution = match certificate {
+        Some(ray) => build_certificate(
+            status,
+            ray,
+            iteration,
             elapsed,
             linear_solver,
             settings,
             init_report,
             cache.stats(),
-        ));
-    }
-
-    for iteration in 1..=settings.max_iters {
-        if time_limit_reached(started, settings.time_limit) {
-            let elapsed = started.elapsed();
-            reporter.iteration(
-                recovered.iteration_record(iteration - 1, elapsed, diagnostics),
-                true,
-            );
-            reporter.finish(
-                SolverStatus::TimeLimit,
-                iteration - 1,
-                elapsed,
-                recovered.measures.pobj,
-            );
-            return Ok(build_solution(
-                SolverStatus::TimeLimit,
-                recovered,
-                iteration - 1,
-                elapsed,
-                linear_solver,
-                settings,
-                init_report,
-                cache.stats(),
-            ));
-        }
-
-        // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
-        // complementarity, scaling s by the same factor.
-        state.normalize_sphere(geometry)?;
-        let (next, next_diagnostics) = match predictor_corrector_step(
-            scaled_problem,
-            geometry,
-            &state,
-            &kkt,
+        ),
+        None => build_solution(
+            status,
+            recovered,
+            iteration,
+            elapsed,
+            linear_solver,
             settings,
-            &mut cache,
-        ) {
-            Ok(step) => step,
-            Err(error) => {
-                let error = SolveError::from(error);
-                reporter.iteration(
-                    recovered.iteration_record(iteration - 1, started.elapsed(), diagnostics),
-                    true,
-                );
-                reporter.failure(iteration, &error.to_string());
-                return Err(error);
-            }
-        };
-        state = next;
-        diagnostics = next_diagnostics;
-        recover_into(
-            problem,
-            &equilibrated,
-            &state,
-            geometry.barrier_parameter(),
-            diagnostics.sy,
-            original,
-            &mut recovered,
-            &mut recovery,
-        );
-        // The ray is only examined past the kappa / tau gate.
-        let ray = (recovered.ktratio > settings.certificate_ktratio)
-            .then(|| Ray::new(problem, &equilibrated, state.x(), state.y(), state.s()));
-        let status = recovered.terminal_status(settings, ray.as_ref());
-        if let Some(status) = status.filter(|status| *status != SolverStatus::Solved) {
-            let ray = ray.expect("a certificate status requires a ray");
-            let elapsed = started.elapsed();
-            reporter.iteration(
-                recovered.iteration_record(iteration, elapsed, diagnostics),
-                true,
-            );
-            reporter.finish(status, iteration, elapsed, f64::NAN);
-            return Ok(build_certificate(
-                status,
-                ray,
-                iteration,
-                elapsed,
-                linear_solver,
-                settings,
-                init_report,
-                cache.stats(),
-            ));
-        }
-        let solved = status == Some(SolverStatus::Solved);
-        reporter.iteration(
-            recovered.iteration_record(iteration, started.elapsed(), diagnostics),
-            solved,
-        );
-        if solved {
-            let elapsed = started.elapsed();
-            reporter.finish(
-                SolverStatus::Solved,
-                iteration,
-                elapsed,
-                recovered.measures.pobj,
-            );
-            return Ok(build_solution(
-                SolverStatus::Solved,
-                recovered,
-                iteration,
-                elapsed,
-                linear_solver,
-                settings,
-                init_report,
-                cache.stats(),
-            ));
-        }
-    }
-
-    let elapsed = started.elapsed();
-    reporter.iteration(
-        recovered.iteration_record(settings.max_iters, elapsed, diagnostics),
-        true,
-    );
-    reporter.finish(
-        SolverStatus::MaxIterations,
-        settings.max_iters,
-        elapsed,
-        recovered.measures.pobj,
-    );
-    Ok(build_solution(
-        SolverStatus::MaxIterations,
-        recovered,
-        settings.max_iters,
-        elapsed,
-        linear_solver,
-        settings,
-        init_report,
-        cache.stats(),
-    ))
+            init_report,
+            cache.stats(),
+        ),
+    };
+    reporter.finish(status, iteration, elapsed, solution.info.pobj);
+    Ok(solution)
 }
 
 /// One Mehrotra predictor--corrector iteration (paper, Section 4.4).
@@ -1150,6 +1101,34 @@ fn two_norm(vector: &[f64]) -> f64 {
 mod tests {
     use super::*;
     use crate::{Cone, CscMatrix};
+
+    #[test]
+    fn convergence_takes_precedence_over_time_and_iteration_limits() {
+        for (target, time_limit, expected_iters) in [(0.0, Some(Duration::ZERO), 0), (1.0, None, 1)]
+        {
+            let problem = Problem::new(
+                Some(CscMatrix::identity(1).unwrap()),
+                vec![-target],
+                CscMatrix::identity(1).unwrap(),
+                vec![target],
+                vec![Cone::Zero(1)],
+            )
+            .unwrap();
+            let solution = solve(
+                &problem,
+                &Settings {
+                    presolve: false,
+                    max_iters: 1,
+                    time_limit,
+                    ..Settings::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(solution.status(), SolverStatus::Solved);
+            assert_eq!(solution.info().iters, expected_iters);
+            assert!((solution.x()[0] - target).abs() < 1e-8);
+        }
+    }
 
     #[test]
     fn the_core_keeps_time_already_spent_in_presolve() {
