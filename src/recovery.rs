@@ -185,14 +185,28 @@ impl RecoveredSolution {
     }
 
     /// Preserve certificate-first precedence if approximate tests overlap.
-    pub(crate) fn terminal_status(
-        &self,
-        settings: &Settings,
-        ray: Option<&Ray>,
-    ) -> Option<SolverStatus> {
-        ray.and_then(|ray| ray.certificate(settings, self.ktratio))
-            .or_else(|| self.is_solved(settings).then_some(SolverStatus::Solved))
+    pub(crate) fn termination(&self, settings: &Settings, ray: Option<Ray>) -> Option<Termination> {
+        ray.and_then(|ray| ray.into_certificate(settings, self.ktratio))
+            .map(Termination::Certificate)
+            .or_else(|| {
+                self.is_solved(settings)
+                    .then_some(Termination::Point(SolverStatus::Solved))
+            })
     }
+}
+
+/// An ordinary exit returns the current point or an identified certificate.
+#[derive(Debug)]
+pub(crate) enum Termination {
+    Point(SolverStatus),
+    Certificate(Certificate),
+}
+
+/// A ray that passed the corresponding infeasibility test.
+#[derive(Debug)]
+pub(crate) enum Certificate {
+    Primal(Ray),
+    Dual(Ray),
 }
 
 /// Certificate measures of a homogeneous ray `(x, y, s)` in original units.
@@ -242,15 +256,15 @@ impl Ray {
 
     /// Lemma "tau_kappa_cond": a certificate once `kappa / tau` exceeds the
     /// gate and the ray's violations are negligible.
-    fn certificate(&self, settings: &Settings, ktratio: f64) -> Option<SolverStatus> {
+    fn into_certificate(self, settings: &Settings, ktratio: f64) -> Option<Certificate> {
         if ktratio <= settings.certificate_ktratio {
             return None;
         }
         if self.bty < -settings.tol_infeas_abs && self.pinfeas < settings.tol_infeas_rel {
-            return Some(SolverStatus::PrimalInfeasible);
+            return Some(Certificate::Primal(self));
         }
         if self.ctx < -settings.tol_infeas_abs && self.dinfeas < settings.tol_infeas_rel {
-            return Some(SolverStatus::DualInfeasible);
+            return Some(Certificate::Dual(self));
         }
         None
     }
@@ -534,14 +548,14 @@ mod tests {
             pinfeas: 0.0,
             dinfeas: 1.0,
         };
-        assert_eq!(
-            point.terminal_status(&settings, Some(&ray)),
-            Some(SolverStatus::PrimalInfeasible)
-        );
-        assert_eq!(
-            point.terminal_status(&settings, None),
-            Some(SolverStatus::Solved)
-        );
+        assert!(matches!(
+            point.termination(&settings, Some(ray)),
+            Some(Termination::Certificate(Certificate::Primal(_)))
+        ));
+        assert!(matches!(
+            point.termination(&settings, None),
+            Some(Termination::Point(SolverStatus::Solved))
+        ));
         point.ktratio = 0.0;
         point.measures.dres = f64::NAN;
         assert!(!point.is_solved(&settings));
@@ -561,16 +575,16 @@ mod tests {
         let settings = Settings::default();
         let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[2.0]);
         assert_eq!(ray.dinfeas, 1.0 / 3.0);
-        assert_eq!(ray.certificate(&settings, f64::INFINITY), None);
+        assert!(ray.into_certificate(&settings, f64::INFINITY).is_none());
         let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[1.0]);
-        assert_eq!(
-            ray.certificate(&settings, settings.certificate_ktratio),
-            None
+        assert!(
+            ray.into_certificate(&settings, settings.certificate_ktratio)
+                .is_none()
         );
-        assert_eq!(
-            ray.certificate(&settings, f64::INFINITY),
-            Some(SolverStatus::DualInfeasible)
-        );
+        let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[1.0]);
+        let Some(Certificate::Dual(ray)) = ray.into_certificate(&settings, f64::INFINITY) else {
+            panic!("expected a dual infeasibility certificate");
+        };
         assert_eq!(ray.s, vec![1.0]);
     }
 

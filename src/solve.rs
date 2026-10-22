@@ -16,7 +16,7 @@ use crate::{
     linear_algebra::{dot, matrix_mul},
     linear_solvers::KktSettings,
     presolve::{self, PresolveOutcome, Presolved},
-    recovery::{Ray, RecoveredSolution, Recovery},
+    recovery::{Ray, RecoveredSolution, Recovery, Termination},
     ruiz::EquilibratedProblem,
     solution::{build_certificate, build_solution, direct_solution, expand_solution},
 };
@@ -225,15 +225,15 @@ fn solve_core(
     );
 
     let mut iteration = 0;
-    let (status, certificate) = if recovered.is_solved(settings) {
-        (SolverStatus::Solved, None)
+    let termination = if recovered.is_solved(settings) {
+        Termination::Point(SolverStatus::Solved)
     } else {
         loop {
             if iteration == settings.max_iters {
-                break (SolverStatus::MaxIterations, None);
+                break Termination::Point(SolverStatus::MaxIterations);
             }
             if time_limit_reached(started, settings.time_limit) {
-                break (SolverStatus::TimeLimit, None);
+                break Termination::Point(SolverStatus::TimeLimit);
             }
 
             // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
@@ -270,14 +270,8 @@ fn solve_core(
             // The ray is only examined past the kappa / tau gate.
             let ray = (recovered.ktratio > settings.certificate_ktratio)
                 .then(|| Ray::new(problem, &equilibrated, state.x(), state.y(), state.s()));
-            if let Some(status) = recovered.terminal_status(settings, ray.as_ref()) {
-                let certificate = match status {
-                    SolverStatus::PrimalInfeasible | SolverStatus::DualInfeasible => {
-                        Some(ray.expect("a certificate status requires a ray"))
-                    }
-                    _ => None,
-                };
-                break (status, certificate);
+            if let Some(termination) = recovered.termination(settings, ray) {
+                break termination;
             }
             reporter.iteration(
                 recovered.iteration_record(iteration, started.elapsed(), diagnostics),
@@ -297,11 +291,11 @@ fn solve_core(
         linear_algebra: cache.stats(),
         ..SolutionInfo::new(settings, Some(init_report))
     };
-    let solution = match certificate {
-        Some(ray) => build_certificate(status, ray, info),
-        None => build_solution(status, recovery.into_point(), info),
+    let solution = match termination {
+        Termination::Certificate(certificate) => build_certificate(certificate, info),
+        Termination::Point(status) => build_solution(status, recovery.into_point(), info),
     };
-    reporter.finish(status, iteration, elapsed, solution.info.pobj);
+    reporter.finish(solution.status(), iteration, elapsed, solution.info.pobj);
     Ok(solution)
 }
 

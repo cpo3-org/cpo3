@@ -9,7 +9,7 @@ use crate::{
     linear_algebra::matrix_mul,
     linear_solvers::LinearAlgebraStats,
     presolve::Presolved,
-    recovery::{Measures, Ray, RecoveredSolution},
+    recovery::{Certificate, Measures, RecoveredSolution},
 };
 
 /// An ordinary solver termination status. Numerical failures return `SolveError` instead.
@@ -230,18 +230,22 @@ pub(crate) fn build_solution(
 }
 
 /// Package a certificate: the ray scaled to unit slope, the other side NaN.
-pub(crate) fn build_certificate(status: SolverStatus, ray: Ray, info: SolutionInfo) -> Solution {
+pub(crate) fn build_certificate(certificate: Certificate, info: SolutionInfo) -> Solution {
     let nan = |len: usize| vec![f64::NAN; len];
     let scaled = |v: &[f64], slope: f64| v.iter().map(|e| e / slope.abs()).collect::<Vec<_>>();
-    let (x, y, s) = match status {
-        SolverStatus::PrimalInfeasible => {
-            (nan(ray.x.len()), scaled(&ray.y, ray.bty), nan(ray.s.len()))
-        }
-        _ => (
-            scaled(&ray.x, ray.ctx),
-            nan(ray.y.len()),
-            scaled(&ray.s, ray.ctx),
+    let (status, point) = match certificate {
+        Certificate::Primal(ray) => (
+            SolverStatus::PrimalInfeasible,
+            (nan(ray.x.len()), scaled(&ray.y, ray.bty), nan(ray.s.len())),
+        ),
+        Certificate::Dual(ray) => (
+            SolverStatus::DualInfeasible,
+            (
+                scaled(&ray.x, ray.ctx),
+                nan(ray.y.len()),
+                scaled(&ray.s, ray.ctx),
+            ),
         ),
     };
-    Solution::new(status, (x, y, s), Measures::nan(), info)
+    Solution::new(status, point, Measures::nan(), info)
 }
