@@ -178,7 +178,7 @@ pub(crate) fn expand_solution(
             let (x, y) = presolved.expand_point(&reduced.x, &reduced.y);
             let ax = matrix_mul(problem.a(), &x);
             let s = presolved.expand_s_from_ax(problem, geometry, &reduced.s, &ax);
-            let measures = Measures::with_ax(problem, &x, &y, &s, &ax);
+            let measures = Measures::new(problem, &x, &y, &s, ax);
             info.set_measures(measures);
             (x, y, s)
         }
@@ -200,7 +200,8 @@ pub(crate) fn direct_solution(
     info: SolutionInfo,
 ) -> Solution {
     let measures = if status == SolverStatus::Solved {
-        Measures::new(problem, &x, &y, &s)
+        let ax = matrix_mul(problem.a(), &x);
+        Measures::new(problem, &x, &y, &s, ax)
     } else {
         Measures::nan()
     };

@@ -63,40 +63,25 @@ impl DataNorms {
 }
 
 impl Measures {
-    pub(crate) fn new(problem: &Problem, x: &[f64], y: &[f64], s: &[f64]) -> Self {
-        let ax = matrix_mul(problem.a(), x);
-        Self::with_ax(problem, x, y, s, &ax)
+    /// Evaluate a point using its already computed `Ax`.
+    pub(crate) fn new(problem: &Problem, x: &[f64], y: &[f64], s: &[f64], ax: Vec<f64>) -> Self {
+        let products = Products {
+            ax,
+            px: problem.p_mul(x),
+            aty: matrix_transpose_mul(problem.a(), y),
+        };
+        Self::from_products(problem, x, y, s, &products, DataNorms::new(problem))
     }
 
-    pub(crate) fn with_ax(problem: &Problem, x: &[f64], y: &[f64], s: &[f64], ax: &[f64]) -> Self {
-        let px = problem.p_mul(x);
-        let aty = matrix_transpose_mul(problem.a(), y);
-        Self::with_products(problem, x, y, s, ax, &px, &aty)
-    }
-
-    fn with_products(
+    fn from_products(
         problem: &Problem,
         x: &[f64],
         y: &[f64],
         s: &[f64],
-        ax: &[f64],
-        px: &[f64],
-        aty: &[f64],
-    ) -> Self {
-        Self::with_norms(problem, x, y, s, ax, px, aty, DataNorms::new(problem))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn with_norms(
-        problem: &Problem,
-        x: &[f64],
-        y: &[f64],
-        s: &[f64],
-        ax: &[f64],
-        px: &[f64],
-        aty: &[f64],
+        products: &Products,
         norms: DataNorms,
     ) -> Self {
+        let Products { ax, px, aty } = products;
         let (mut pres, mut ax_norm, mut s_norm) = (0.0_f64, 0.0_f64, 0.0_f64);
         for ((ax, s), b) in ax.iter().zip(s).zip(problem.b()) {
             let value = (ax + s - b).abs();
@@ -358,16 +343,7 @@ impl<'a> Recovery<'a> {
                 )
             }
         };
-        point.measures = Measures::with_norms(
-            problem,
-            x,
-            y,
-            s,
-            &self.products.ax,
-            &self.products.px,
-            &self.products.aty,
-            self.norms,
-        );
+        point.measures = Measures::from_products(problem, x, y, s, &self.products, self.norms);
         point
     }
 
@@ -411,7 +387,9 @@ mod tests {
             vec![Cone::Nonnegative(2)],
         )
         .unwrap();
-        let measures = Measures::new(&problem, &[1.0, 2.0], &[3.0, 4.0], &[5.0, 6.0]);
+        let x = [1.0, 2.0];
+        let ax = matrix_mul(problem.a(), &x);
+        let measures = Measures::new(&problem, &x, &[3.0, 4.0], &[5.0, 6.0], ax);
         assert_eq!(measures.pres, 9.0);
         assert_eq!(measures.dres, 20.0);
         assert_eq!(measures.primal_scale, 7.0);
@@ -426,12 +404,30 @@ mod tests {
     #[test]
     fn large_nullspace_iterates_do_not_relax_stationarity() {
         let problem = lp(vec![1.0, -1.0], 2, vec![0.0, 0.0], vec![1e-4]);
-        let small = Measures::new(&problem, &[0.0], &[1.0, 1.0], &[0.0, 0.0]);
-        let large = Measures::new(&problem, &[0.0], &[1e10, 1e10], &[0.0, 0.0]);
+        let small = Measures::new(
+            &problem,
+            &[0.0],
+            &[1.0, 1.0],
+            &[0.0, 0.0],
+            matrix_mul(problem.a(), &[0.0]),
+        );
+        let large = Measures::new(
+            &problem,
+            &[0.0],
+            &[1e10, 1e10],
+            &[0.0, 0.0],
+            matrix_mul(problem.a(), &[0.0]),
+        );
         assert_eq!(small.dres, large.dres);
         assert_eq!(small.dual_scale, large.dual_scale);
         assert!(large.score(1e-8, 1e-8, 1e-8) > 1.0);
-        let invalid = Measures::new(&problem, &[0.0], &[f64::NAN, 1.0], &[0.0, 0.0]);
+        let invalid = Measures::new(
+            &problem,
+            &[0.0],
+            &[f64::NAN, 1.0],
+            &[0.0, 0.0],
+            matrix_mul(problem.a(), &[0.0]),
+        );
         assert_eq!(invalid.score(1e-8, 1e-8, 1e-8), f64::INFINITY);
     }
 
