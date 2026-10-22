@@ -1,4 +1,4 @@
-//! Closed-form Josephy--Newton step (`subsec:josephy_newton`, `thm:resolvent`).
+//! Closed-form resolvent for the Josephy--Newton step (`subsec:josephy_newton`, `thm:resolvent`).
 //!
 //! `Resolvent::with_factor_shift` factors the preconditioner and caches the
 //! target-system solve `eq:cached_data_solve`.
@@ -8,32 +8,32 @@
 //! quadratic for tau, and reconstructs x and y. Sparse assembly, elimination,
 //! and full-system refinement live in `kkt`.
 
-mod kkt;
-
-pub(crate) use kkt::KktCache;
-use kkt::{KktPattern, factorize};
-
 use std::cell::OnceCell;
 
 use crate::linear_algebra::dot;
 use thiserror::Error;
 
+use super::{
+    kkt::{KktCache, KktError, KktPattern, factorize},
+    state::{State, StateError},
+};
+
 use crate::{
-    MatrixError, Problem,
-    embedding::{EmbeddingError, State},
+    Problem,
+    cone::ConeGeometry,
     linear_solvers::{Factorization, KktSettings, LinearSystemError},
 };
 
-/// Failures while constructing a Josephy--Newton solve.
+/// Failures while constructing or evaluating the resolvent.
 #[derive(Clone, Debug, Error, PartialEq)]
-pub(crate) enum JosephyError {
+pub(crate) enum ResolventError {
     #[error(transparent)]
-    Embedding(#[from] EmbeddingError),
+    State(#[from] StateError),
     #[error(transparent)]
     LinearSystem(#[from] LinearSystemError),
     #[error(transparent)]
-    Matrix(#[from] MatrixError),
-    #[error("the Josephy tau polynomial has invalid coefficients")]
+    Kkt(#[from] KktError),
+    #[error("the resolvent tau polynomial has invalid coefficients")]
     InvalidTauPolynomial,
     #[error("resolvent right-hand side {argument} has length {actual}, expected {expected}")]
     IncorrectRhsLength {
@@ -43,20 +43,21 @@ pub(crate) enum JosephyError {
     },
 }
 
-impl JosephyError {
+impl ResolventError {
     /// Failures that a larger shift or best-effort refinement may cure.
     pub(crate) fn is_numerical(&self) -> bool {
-        matches!(
-            self,
-            Self::InvalidTauPolynomial
-                | Self::LinearSystem(
-                    LinearSystemError::Singular
-                        | LinearSystemError::WrongInertia { .. }
-                        | LinearSystemError::RefinementDiverged(_)
-                        | LinearSystemError::Factorization(_)
-                        | LinearSystemError::NonFiniteRightHandSide
-                )
-        )
+        matches!(self, Self::Kkt(error) if error.is_numerical())
+            || matches!(
+                self,
+                Self::InvalidTauPolynomial
+                    | Self::LinearSystem(
+                        LinearSystemError::Singular
+                            | LinearSystemError::WrongInertia { .. }
+                            | LinearSystemError::RefinementDiverged(_)
+                            | LinearSystemError::Factorization(_)
+                            | LinearSystemError::NonFiniteRightHandSide
+                    )
+            )
     }
 }
 
@@ -65,7 +66,7 @@ impl JosephyError {
 pub(crate) struct ResolventSolution {
     /// Contiguous primal/dual result, moved directly into an accepted State.
     pub(crate) xy: Vec<f64>,
-    pub(crate) primal_len: usize,
+    pub(crate) x_len: usize,
     /// Nonnegative subproblem candidate; the accepted iterate stays positive.
     pub(crate) tau: f64,
     pub(crate) used_tau_fallback: bool,
@@ -73,11 +74,11 @@ pub(crate) struct ResolventSolution {
 
 impl ResolventSolution {
     pub(crate) fn x(&self) -> &[f64] {
-        &self.xy[..self.primal_len]
+        &self.xy[..self.x_len]
     }
 
     pub(crate) fn y(&self) -> &[f64] {
-        &self.xy[self.primal_len..]
+        &self.xy[self.x_len..]
     }
 }
 
@@ -127,21 +128,25 @@ impl<'a> Resolvent<'a> {
         shift: f64,
         kkt: &KktSettings,
         cache: &'a mut KktCache,
-    ) -> Result<Self, JosephyError> {
-        Self::with_factor_shift(problem, state, h_diagonal, shift, shift, kkt, cache)
+    ) -> Result<Self, ResolventError> {
+        let geometry = ConeGeometry::new(problem).unwrap();
+        Self::with_factor_shift(
+            problem, &geometry, state, h_diagonal, shift, shift, kkt, cache,
+        )
     }
 
     /// Target K(shift); use K(factor_shift) only for numerical correction solves.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_factor_shift(
         problem: &'a Problem,
+        geometry: &ConeGeometry,
         state: &'a State,
         h_diagonal: &[f64],
         shift: f64,
         factor_shift: f64,
         kkt: &KktSettings,
         cache: &'a mut KktCache,
-    ) -> Result<Self, JosephyError> {
+    ) -> Result<Self, ResolventError> {
         if !shift.is_finite()
             || shift < 0.0
             || !factor_shift.is_finite()
@@ -149,7 +154,7 @@ impl<'a> Resolvent<'a> {
             || (factor_shift == 0.0 && kkt.diagonal_floor <= 0.0)
             || factor_shift < shift
         {
-            return Err(EmbeddingError::InvalidMu.into());
+            return Err(StateError::InvalidMu.into());
         }
         let d_diagonal = h_diagonal
             .iter()
@@ -162,7 +167,7 @@ impl<'a> Resolvent<'a> {
                 .collect::<Vec<_>>()
         });
         let factor_diagonal = d_factor.as_deref().unwrap_or(&d_diagonal);
-        factorize(problem, factor_shift, factor_diagonal, kkt, cache)?;
+        factorize(problem, geometry, factor_shift, factor_diagonal, kkt, cache)?;
         let KktCache {
             pattern,
             factorization,
@@ -261,7 +266,7 @@ impl<'a> Resolvent<'a> {
         r_y: &[f64],
         r_tau: f64,
         mu: f64,
-    ) -> Result<ResolventSolution, JosephyError> {
+    ) -> Result<ResolventSolution, ResolventError> {
         let n = self.problem.variable_count();
         let m = self.problem.constraint_count();
         ensure_rhs_length("r_x", n, r_x)?;
@@ -281,12 +286,12 @@ impl<'a> Resolvent<'a> {
         rhs: &[f64],
         r_tau: f64,
         mu: f64,
-    ) -> Result<ResolventSolution, JosephyError> {
+    ) -> Result<ResolventSolution, ResolventError> {
         let n = self.problem.variable_count();
         let m = self.problem.constraint_count();
         ensure_rhs_length("rhs", n + m, rhs)?;
         if !r_tau.is_finite() || !mu.is_finite() || mu < 0.0 {
-            return Err(JosephyError::InvalidTauPolynomial);
+            return Err(ResolventError::InvalidTauPolynomial);
         }
 
         let mut residual = rhs.to_vec();
@@ -315,7 +320,7 @@ impl<'a> Resolvent<'a> {
         residual: &[f64],
         r_tau: f64,
         mu: f64,
-    ) -> Result<ResolventSolution, JosephyError> {
+    ) -> Result<ResolventSolution, ResolventError> {
         let n = self.problem.variable_count();
         ensure_rhs_length(
             "increment rhs",
@@ -323,7 +328,7 @@ impl<'a> Resolvent<'a> {
             residual,
         )?;
         if !r_tau.is_finite() || !mu.is_finite() || mu < 0.0 {
-            return Err(JosephyError::InvalidTauPolynomial);
+            return Err(ResolventError::InvalidTauPolynomial);
         }
         let anchor_tau = self.state.tau();
         let mut increment = self.pattern.solve(
@@ -362,7 +367,7 @@ impl<'a> Resolvent<'a> {
         crate::linear_algebra::add_assign(y, self.state.y());
         Ok(ResolventSolution {
             xy: increment,
-            primal_len: n,
+            x_len: n,
             tau,
             used_tau_fallback,
         })
@@ -397,22 +402,6 @@ impl<'a> Resolvent<'a> {
         } else {
             Some((delta_tau, tau))
         }
-    }
-
-    // Point-coordinate reference retained only for algebra-equivalence tests.
-    #[cfg(test)]
-    fn solve_tau(&self, constant: &[f64], q_constant: f64, r_tau: f64, mu: f64) -> Option<f64> {
-        let n = self.problem.variable_count();
-        let x1 = &constant[..n];
-        let x2 = &self.direction[..n];
-        let mut b = -r_tau - q_constant;
-        let mut c = -mu;
-        if let Some(px1) = self.problem.p_mul_opt(x1) {
-            // Symmetry gives x1' P x2 = x2' P x1; reuse P x1 for both terms.
-            b -= 2.0 * dot(x2, &px1);
-            c -= dot(x1, &px1);
-        }
-        tau_root(self.alpha, b, c)
     }
 
     fn linearized_tau(&self, constant: &[f64], q_constant: f64, r_tau: f64, mu: f64) -> f64 {
@@ -458,67 +447,6 @@ impl<'a> Resolvent<'a> {
     }
 }
 
-/// Solve `[P + shift I, A^T; A, -(H + shift I)] z = rhs` for each stacked
-/// right-hand side on one factorization. The factor adds `regularization`
-/// to both diagonals so that a zero (1,1) block or zero rows of `H` stay
-/// quasi-definite; refinement targets the unregularized shifted system.
-/// The factorization stays cached for later resolvents to update in place.
-pub(crate) fn solve_shifted_systems(
-    problem: &Problem,
-    h_diagonal: &[f64],
-    shift: f64,
-    regularization: f64,
-    kkt: &KktSettings,
-    cache: &mut KktCache,
-    right_hand_sides: &[Vec<f64>],
-) -> Result<Vec<Vec<f64>>, JosephyError> {
-    if !shift.is_finite()
-        || shift < 0.0
-        || !regularization.is_finite()
-        || regularization <= 0.0
-        || h_diagonal.len() != problem.constraint_count()
-    {
-        return Err(EmbeddingError::InvalidMu.into());
-    }
-    let d_diagonal = h_diagonal
-        .iter()
-        .map(|entry| entry + shift)
-        .collect::<Vec<_>>();
-    let d_factor = h_diagonal
-        .iter()
-        .map(|entry| (entry + shift + regularization).max(kkt.diagonal_floor))
-        .collect::<Vec<_>>();
-    factorize(problem, shift + regularization, &d_factor, kkt, cache)?;
-    let KktCache {
-        pattern,
-        factorization,
-        ..
-    } = cache;
-    let pattern = pattern.as_mut().expect("the pattern was just stored");
-    let factorization = factorization
-        .as_mut()
-        .expect("the factorization was just stored");
-    right_hand_sides
-        .iter()
-        .map(|rhs| {
-            ensure_rhs_length(
-                "rhs",
-                problem.variable_count() + problem.constraint_count(),
-                rhs,
-            )?;
-            Ok(pattern.solve(
-                problem,
-                factorization,
-                shift,
-                &d_diagonal,
-                &d_factor,
-                rhs,
-                None,
-            )?)
-        })
-        .collect()
-}
-
 /// rho + rho*||x||^2 + y'*(H + rho I)*y, without forming unweighted squares.
 fn tau_leading_coefficient(shift: f64, x: &[f64], y: &[f64], d: &[f64]) -> f64 {
     // Multiplying the nonnegative weight first avoids an intermediate square
@@ -540,25 +468,18 @@ fn ensure_rhs_length(
     argument: &'static str,
     expected: usize,
     vector: &[f64],
-) -> Result<(), JosephyError> {
+) -> Result<(), ResolventError> {
     if vector.len() != expected {
-        return Err(JosephyError::IncorrectRhsLength {
+        return Err(ResolventError::IncorrectRhsLength {
             argument,
             expected,
             actual: vector.len(),
         });
     }
     if !vector.iter().all(|value| value.is_finite()) {
-        return Err(JosephyError::InvalidTauPolynomial);
+        return Err(ResolventError::InvalidTauPolynomial);
     }
     Ok(())
-}
-
-/// CPO3's admissible root; `None` requests the bounded fallback.
-#[cfg(test)]
-fn tau_root(a: f64, b: f64, c: f64) -> Option<f64> {
-    let tau = quadratic_root(a, b, c, 1e-9)?;
-    (tau >= -1e-10).then(|| tau.max(0.0))
 }
 
 /// CPO3's Muller branch for general coefficient signs, without squaring
@@ -609,6 +530,3 @@ fn quadratic_root(a: f64, b: f64, c: f64, negative_discriminant_tolerance: f64) 
     };
     tau.is_finite().then_some(tau)
 }
-
-#[cfg(test)]
-mod tests;

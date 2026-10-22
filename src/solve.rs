@@ -5,13 +5,16 @@ use thiserror::Error;
 
 use crate::{
     LinearSolver, Problem, Settings,
-    embedding::{Embedding, EmbeddingError, State},
-    init::{self, WarmStart},
+    central_path::{
+        init::{self, WarmStart},
+        kkt::KktCache,
+        mehrotra::{self, MehrotraError},
+        state::{State, StateError},
+    },
+    cone::{ConeBlock, ConeGeometry, ConeGeometryError},
     io::progress::{IterationRecord, ProgressReporter},
-    josephy::KktCache,
     linear_algebra::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
     linear_solvers::{KktSettings, LinearAlgebraStats},
-    mehrotra::{self, MehrotraError},
     presolve::{self, PresolveOutcome, Presolved},
     ruiz::EquilibratedProblem,
 };
@@ -152,9 +155,20 @@ pub enum SolveError {
     Numerical(String),
 }
 
-impl From<EmbeddingError> for SolveError {
-    fn from(error: EmbeddingError) -> Self {
+impl From<StateError> for SolveError {
+    fn from(error: StateError) -> Self {
         Self::Numerical(error.to_string())
+    }
+}
+
+impl From<ConeGeometryError> for SolveError {
+    fn from(error: ConeGeometryError) -> Self {
+        match error {
+            ConeGeometryError::UnsupportedCone { block, name } => {
+                Self::Unimplemented(format!("{name} cone in block {block}"))
+            }
+            error => Self::Numerical(error.to_string()),
+        }
     }
 }
 
@@ -177,18 +191,13 @@ pub fn solve_from(
 ) -> Result<Solution, SolveError> {
     settings.validate()?;
     validate_warm_start(problem, warm_start)?;
-    // Check cone support before presolve can return without building an embedding.
-    for (block, cone) in problem.cones().iter().enumerate() {
-        if !matches!(cone, crate::Cone::Zero(_) | crate::Cone::Nonnegative(_)) {
-            return Err(SolveError::Unimplemented(format!(
-                "{} cone in block {block}",
-                cone.name(),
-            )));
-        }
-    }
+    // Establish the supported layout before presolve can return a solution.
+    let geometry = ConeGeometry::new(problem)?;
     let started = Instant::now();
     if !settings.presolve {
-        return solve_core(problem, settings, warm_start, None, None, started);
+        return solve_core(
+            problem, &geometry, settings, warm_start, None, None, started,
+        );
     }
     let linear_solver = settings.linear_solver;
     let outcome = presolve::presolve(problem, settings.time_limit)
@@ -198,19 +207,15 @@ pub fn solve_from(
         PresolveOutcome::Solved(x, y) => {
             let ax = matrix_mul(problem.a(), &x);
             let mut s: Vec<_> = problem.b().iter().zip(ax).map(|(b, ax)| b - ax).collect();
-            let mut offset = 0;
-            for cone in problem.cones() {
-                let dim = cone.vector_dim();
-                match cone {
-                    crate::Cone::Zero(_) => s[offset..offset + dim].fill(0.0),
-                    crate::Cone::Nonnegative(_) => {
-                        for value in &mut s[offset..offset + dim] {
+            for block in geometry.blocks() {
+                match block {
+                    ConeBlock::Zero(range) => s[range.clone()].fill(0.0),
+                    ConeBlock::Nonnegative(range) => {
+                        for value in &mut s[range.clone()] {
                             *value = value.max(0.0);
                         }
                     }
-                    _ => {}
                 }
-                offset += dim;
             }
             return Ok(direct_solution(
                 problem,
@@ -251,8 +256,15 @@ pub fn solve_from(
             ));
         }
         PresolveOutcome::Unchanged(comparisons) => {
-            let mut solution =
-                solve_core(problem, settings, warm_start, Some((0, 0)), None, started)?;
+            let mut solution = solve_core(
+                problem,
+                &geometry,
+                settings,
+                warm_start,
+                Some((0, 0)),
+                None,
+                started,
+            )?;
             solution.info.presolve_time = presolve_time;
             solution.info.presolve_parallel_comparisons = Some(comparisons);
             solution.info.solve_time = started.elapsed();
@@ -264,7 +276,7 @@ pub fn solve_from(
     if presolved.problem().variable_count() == 0 {
         let (x, y) = presolved.expand_point(&[], &[]);
         let ax = matrix_mul(problem.a(), &x);
-        let s = presolved.expand_s_from_ax(problem, &[], &ax);
+        let s = presolved.expand_s_from_ax(problem, &geometry, &[], &ax);
         return Ok(direct_solution(
             problem,
             settings,
@@ -275,16 +287,18 @@ pub fn solve_from(
             linear_solver,
         ));
     }
-    let warm = warm_start.map(|warm| presolved.reduce_warm_start(warm));
+    let reduced_geometry = ConeGeometry::new(presolved.problem())?;
+    let warm = warm_start.map(|warm| presolved.reduce_warm_start(&reduced_geometry, warm));
     let reduced = solve_core(
         presolved.problem(),
+        &reduced_geometry,
         settings,
         warm.as_ref(),
         Some(summary),
-        Some((problem, &presolved)),
+        Some((problem, &presolved, &geometry)),
         started,
     )?;
-    let mut solution = expand_solution(problem, &presolved, reduced);
+    let mut solution = expand_solution(problem, &geometry, &presolved, reduced);
     solution.info.presolve_time = presolve_time;
     solution.info.presolve_parallel_comparisons = Some(presolved.parallel_comparisons);
     solution.info.solve_time = started.elapsed();
@@ -318,7 +332,12 @@ fn validate_warm_start(
 }
 
 /// Map a solution of the presolved problem back to `problem`.
-fn expand_solution(problem: &Problem, presolved: &Presolved, reduced: Solution) -> Solution {
+fn expand_solution(
+    problem: &Problem,
+    geometry: &ConeGeometry,
+    presolved: &Presolved,
+    reduced: Solution,
+) -> Solution {
     let nan = |len: usize| vec![f64::NAN; len];
     let mut info = reduced.info;
     info.presolve_rows_removed = presolved.rows_removed();
@@ -337,7 +356,7 @@ fn expand_solution(problem: &Problem, presolved: &Presolved, reduced: Solution) 
         _ => {
             let (x, y) = presolved.expand_point(&reduced.x, &reduced.y);
             let ax = matrix_mul(problem.a(), &x);
-            let s = presolved.expand_s_from_ax(problem, &reduced.s, &ax);
+            let s = presolved.expand_s_from_ax(problem, geometry, &reduced.s, &ax);
             let measures = Measures::with_ax(problem, &x, &y, &s, &ax);
             info.pobj = measures.pobj;
             info.dobj = measures.dobj;
@@ -461,7 +480,8 @@ impl Measures {
     ) -> Self {
         let (x, y) = presolved.expand_point(x, y);
         let ax = matrix_mul(problem.a(), &x);
-        let s = presolved.expand_s_from_ax(problem, s, &ax);
+        let geometry = ConeGeometry::new(problem).unwrap();
+        let s = presolved.expand_s_from_ax(problem, &geometry, s, &ax);
         Self::with_ax(problem, &x, &y, &s, &ax)
     }
 
@@ -566,41 +586,34 @@ impl Measures {
 /// Solve `problem` as given, without presolve.
 fn solve_core(
     problem: &Problem,
+    geometry: &ConeGeometry,
     settings: &Settings,
     warm_start: Option<&WarmStart>,
     presolve_summary: Option<(usize, usize)>,
-    original: Option<(&Problem, &Presolved)>,
+    original: Option<(&Problem, &Presolved, &ConeGeometry)>,
     started: Instant,
 ) -> Result<Solution, SolveError> {
     let linear_solver = settings.linear_solver;
     let kkt = KktSettings::from(settings);
     let mut cache = KktCache::new();
     let equilibrated = EquilibratedProblem::new(problem, settings)?;
-    let embedding = Embedding::new(equilibrated.problem())?;
-    let mut identity = vec![0.0; problem.constraint_count()];
-    embedding
-        .geometry()
-        .canonical_identity(&mut identity)
-        .map_err(|error| SolveError::Numerical(error.to_string()))?;
-    let cone_rows = identity.iter().map(|e| *e > 0.0).collect::<Vec<_>>();
-    drop(identity);
+    let scaled_problem = equilibrated.problem();
     let (mut state, init_report) = init::initial_state(
-        &embedding,
+        geometry,
         &equilibrated,
-        &cone_rows,
         warm_start,
         settings,
         &kkt,
         &mut cache,
     )?;
-    let mut diagnostics = StepDiagnostics::initial(&embedding, &state);
+    let mut diagnostics = StepDiagnostics::initial(geometry, &state);
     let mut recovery = RecoveryWorkspace::new(problem, original);
     let mut recovered = RecoveredSolution::empty();
     recover_into(
         problem,
         &equilibrated,
         &state,
-        embedding.nu(),
+        geometry.barrier_parameter(),
         diagnostics.sy,
         original,
         &mut recovered,
@@ -655,27 +668,33 @@ fn solve_core(
 
         // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
         // complementarity, scaling s by the same factor.
-        state.normalize_sphere(embedding.nu())?;
-        let (next, next_diagnostics) =
-            match predictor_corrector_step(&embedding, &state, &kkt, settings, &mut cache) {
-                Ok(step) => step,
-                Err(error) => {
-                    let error = SolveError::from(error);
-                    reporter.iteration(
-                        recovered.iteration_record(iteration - 1, started.elapsed(), diagnostics),
-                        true,
-                    );
-                    reporter.failure(iteration, &error.to_string());
-                    return Err(error);
-                }
-            };
+        state.normalize_sphere(geometry)?;
+        let (next, next_diagnostics) = match predictor_corrector_step(
+            scaled_problem,
+            geometry,
+            &state,
+            &kkt,
+            settings,
+            &mut cache,
+        ) {
+            Ok(step) => step,
+            Err(error) => {
+                let error = SolveError::from(error);
+                reporter.iteration(
+                    recovered.iteration_record(iteration - 1, started.elapsed(), diagnostics),
+                    true,
+                );
+                reporter.failure(iteration, &error.to_string());
+                return Err(error);
+            }
+        };
         state = next;
         diagnostics = next_diagnostics;
         recover_into(
             problem,
             &equilibrated,
             &state,
-            embedding.nu(),
+            geometry.barrier_parameter(),
             diagnostics.sy,
             original,
             &mut recovered,
@@ -755,14 +774,15 @@ fn solve_core(
 
 /// One Mehrotra predictor--corrector iteration (paper, Section 4.4).
 fn predictor_corrector_step(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
+    geometry: &ConeGeometry,
     state: &State,
     kkt: &KktSettings,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<(State, StepDiagnostics), MehrotraError> {
-    let step = mehrotra::step(embedding, state, kkt, settings, cache)?;
-    let sy = if embedding.nu() == 0 {
+    let step = mehrotra::step(problem, geometry, state, kkt, settings, cache)?;
+    let sy = if geometry.barrier_parameter() == 0 {
         0.0
     } else {
         dot(step.state.s(), step.state.y())
@@ -770,10 +790,10 @@ fn predictor_corrector_step(
     debug_assert_eq!(step.rho, step.mu_before);
     let diagnostics = StepDiagnostics {
         sy,
-        mu: if embedding.nu() == 0 {
+        mu: if geometry.barrier_parameter() == 0 {
             0.0
         } else {
-            sy / embedding.nu() as f64
+            sy / geometry.barrier_parameter() as f64
         },
         tau: step.state.tau(),
         sigma: Some(step.sigma),
@@ -804,18 +824,18 @@ struct StepDiagnostics {
 }
 
 impl StepDiagnostics {
-    fn initial(embedding: &Embedding<'_>, state: &State) -> Self {
-        let sy = if embedding.nu() == 0 {
+    fn initial(geometry: &ConeGeometry, state: &State) -> Self {
+        let sy = if geometry.barrier_parameter() == 0 {
             0.0
         } else {
             dot(state.s(), state.y())
         };
         Self {
             sy,
-            mu: if embedding.nu() == 0 {
+            mu: if geometry.barrier_parameter() == 0 {
                 0.0
             } else {
-                sy / embedding.nu() as f64
+                sy / geometry.barrier_parameter() as f64
             },
             tau: state.tau(),
             sigma: None,
@@ -946,12 +966,12 @@ struct RecoveryWorkspace {
 }
 
 impl RecoveryWorkspace {
-    fn new(problem: &Problem, original: Option<(&Problem, &Presolved)>) -> Self {
+    fn new(problem: &Problem, original: Option<(&Problem, &Presolved, &ConeGeometry)>) -> Self {
         Self {
-            expanded: original.map(|(_, presolved)| presolved.recovery_workspace()),
+            expanded: original.map(|(_, presolved, _)| presolved.recovery_workspace()),
             products: Products::default(),
             slack: Vec::new(),
-            norms: DataNorms::new(original.map_or(problem, |(problem, _)| problem)),
+            norms: DataNorms::new(original.map_or(problem, |(problem, _, _)| problem)),
         }
     }
 }
@@ -965,6 +985,9 @@ fn recover(
     sy: f64,
     original: Option<(&Problem, &Presolved)>,
 ) -> RecoveredSolution {
+    let geometry = original.map(|(problem, _)| ConeGeometry::new(problem).unwrap());
+    let original =
+        original.map(|(problem, presolved)| (problem, presolved, geometry.as_ref().unwrap()));
     let mut out = RecoveredSolution::empty();
     recover_into(
         problem,
@@ -986,7 +1009,7 @@ fn recover_into(
     state: &State,
     nu: usize,
     sy: f64,
-    original: Option<(&Problem, &Presolved)>,
+    original: Option<(&Problem, &Presolved, &ConeGeometry)>,
     out: &mut RecoveredSolution,
     workspace: &mut RecoveryWorkspace,
 ) {
@@ -1001,7 +1024,7 @@ fn recover_into(
     equilibrated.unscale_y_into(state.y(), inverse_tau, &mut out.y);
     equilibrated.unscale_s_into(state.s(), inverse_tau, &mut out.s);
     out.measures = match original {
-        Some((problem, presolved)) => {
+        Some((problem, presolved, geometry)) => {
             let expanded = workspace
                 .expanded
                 .as_mut()
@@ -1009,7 +1032,13 @@ fn recover_into(
             let (x, y) = presolved.expand_point_into(&out.x, &out.y, expanded);
             workspace.products.update(problem, x, y);
             let products = &workspace.products;
-            presolved.expand_s_into(problem, &out.s, &products.ax, &mut workspace.slack);
+            presolved.expand_s_into(
+                problem,
+                geometry,
+                &out.s,
+                &products.ax,
+                &mut workspace.slack,
+            );
             Measures::with_norms(
                 problem,
                 x,
@@ -1131,7 +1160,17 @@ mod tests {
             ..Settings::default()
         };
         let started = Instant::now() - Duration::from_secs(2);
-        let result = solve_core(&problem, &settings, None, Some((0, 0)), None, started).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let result = solve_core(
+            &problem,
+            &geometry,
+            &settings,
+            None,
+            Some((0, 0)),
+            None,
+            started,
+        )
+        .unwrap();
         assert_eq!(result.status(), SolverStatus::TimeLimit);
         assert_eq!(result.info().iters, 0);
         assert!(result.info().solve_time >= Duration::from_secs(2));
@@ -1200,11 +1239,15 @@ mod tests {
             panic!("expected singleton substitution");
         };
         assert_eq!(presolved.problem().variable_count(), 2);
-        let WarmStart { x, y, s } = presolved.reduce_warm_start(&WarmStart {
-            x: vec![-1e6, 1.0, 0.0],
-            y: vec![-1.0, 1e6 - 2.0 + 1e-4, 0.0, 1e6 - 1.0 + 1e-4],
-            s: vec![0.0, 0.0, 1.0, 0.0],
-        });
+        let geometry = ConeGeometry::new(presolved.problem()).unwrap();
+        let WarmStart { x, y, s } = presolved.reduce_warm_start(
+            &geometry,
+            &WarmStart {
+                x: vec![-1e6, 1.0, 0.0],
+                y: vec![-1.0, 1e6 - 2.0 + 1e-4, 0.0, 1e6 - 1.0 + 1e-4],
+                s: vec![0.0, 0.0, 1.0, 0.0],
+            },
+        );
         let mut point = RecoveredSolution {
             measures: Measures::new(presolved.problem(), &x, &y, &s),
             x,

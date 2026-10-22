@@ -1,8 +1,8 @@
-// Scaling helpers are added here as the predictor--corrector step lands.
-#[allow(dead_code)]
 mod geometry;
 
-pub(crate) use geometry::{ConeGeometry, ConeGeometryError};
+pub(crate) use geometry::{ConeBlock, ConeGeometry, ConeGeometryError};
+
+pub(crate) const INTERIOR_FLOOR: f64 = 1e-32;
 
 /// A cone block occupying consecutive rows of `A` and `b`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,4 +46,18 @@ impl Cone {
             Self::PositiveSemidefinite(_) => "positive_semidefinite",
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn test_geometry(cones: Vec<Cone>) -> ConeGeometry {
+    let dim = cones.iter().map(Cone::vector_dim).sum();
+    let problem = crate::Problem::new(
+        None,
+        vec![],
+        crate::CscMatrix::zeros(dim, 0).unwrap(),
+        vec![0.0; dim],
+        cones,
+    )
+    .unwrap();
+    ConeGeometry::new(&problem).unwrap()
 }

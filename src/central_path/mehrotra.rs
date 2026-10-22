@@ -7,10 +7,15 @@
 
 use thiserror::Error;
 
+use super::{
+    kkt::KktCache,
+    resolvent::{Resolvent, ResolventError, ResolventSolution},
+    state::{State, StateError},
+};
+
 use crate::{
-    cone::ConeGeometryError,
-    embedding::{Embedding, EmbeddingError, State},
-    josephy::{JosephyError, KktCache, Resolvent, ResolventSolution},
+    Problem,
+    cone::{ConeGeometry, ConeGeometryError, INTERIOR_FLOOR},
     linear_solvers::KktSettings,
     settings::Settings,
 };
@@ -18,11 +23,11 @@ use crate::{
 #[derive(Clone, Debug, Error, PartialEq)]
 pub(crate) enum MehrotraError {
     #[error(transparent)]
-    Embedding(#[from] EmbeddingError),
+    State(#[from] StateError),
     #[error(transparent)]
     ConeGeometry(#[from] ConeGeometryError),
     #[error(transparent)]
-    Josephy(#[from] JosephyError),
+    Resolvent(#[from] ResolventError),
     #[error("the duality measure {0} must be finite and strictly positive")]
     InvalidDualityMeasure(f64),
 }
@@ -41,16 +46,19 @@ pub(crate) struct Step {
 
 /// One outer iteration, sharing a factorization unless a numerical retry is needed.
 pub(crate) fn step(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
+    geometry: &ConeGeometry,
     state: &State,
     kkt: &KktSettings,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
-    let scaling = Scaling::new(embedding, state)?;
+    let scaling = Scaling::new(problem, geometry, state)?;
     let raw_mu = scaling.mu;
     with_clamp_retries(kkt, raw_mu, cache, |trial, rho, cache| {
-        step_attempt(embedding, state, trial, rho, &scaling, settings, cache)
+        step_attempt(
+            problem, geometry, state, trial, rho, &scaling, settings, cache,
+        )
     })
 }
 
@@ -121,12 +129,13 @@ fn with_clamp_retries<T>(
 }
 
 fn retryable(error: &MehrotraError) -> bool {
-    matches!(error, MehrotraError::Josephy(inner) if inner.is_numerical())
+    matches!(error, MehrotraError::Resolvent(inner) if inner.is_numerical())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn step_attempt(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
+    geometry: &ConeGeometry,
     state: &State,
     kkt: &KktSettings,
     rho: f64,
@@ -136,22 +145,17 @@ fn step_attempt(
 ) -> Result<Step, MehrotraError> {
     let raw_mu = scaling.mu;
     let mut resolvent = Resolvent::with_factor_shift(
-        embedding.problem(),
-        state,
-        &scaling.d,
-        raw_mu,
-        rho,
-        kkt,
-        cache,
+        problem, geometry, state, &scaling.d, raw_mu, rho, kkt, cache,
     )?;
-    if embedding.nu() == 0 {
+    if geometry.barrier_parameter() == 0 {
         // At mu=0 with only equality rows, the constant KKT column is the
         // original primal-dual solution. Its homogeneous scale is arbitrary.
-        let point = embedding.accept_state(
+        let point = State::from_stacked(
             resolvent.constant_direction().to_vec(),
             state.x().len(),
             vec![0.0; state.s().len()],
             1.0,
+            geometry,
         )?;
         return Ok(Step {
             state: point,
@@ -162,8 +166,7 @@ fn step_attempt(
             alpha: 1.0,
         });
     }
-    let geometry = embedding.geometry();
-    let mut first = predictor(embedding, state, raw_mu, scaling, &mut resolvent)?;
+    let mut first = predictor(geometry, state, raw_mu, scaling, &mut resolvent)?;
     let second = corrector(state, raw_mu, scaling, &mut first, &mut resolvent)?;
     let boundary = geometry
         .step_to_boundary_toward(state.s(), &second.s_centered)?
@@ -178,15 +181,16 @@ fn step_attempt(
             alpha.mul_add(target - base, base)
         });
     };
-    let (x, y) = centered.xy.split_at_mut(centered.primal_len);
+    let (x, y) = centered.xy.split_at_mut(centered.x_len);
     step_toward(state.x(), x);
     step_toward(state.s(), &mut slack);
     step_toward(state.y(), y);
-    let next = embedding.accept_state(
+    let next = State::from_stacked(
         centered.xy,
-        centered.primal_len,
+        centered.x_len,
         slack,
         accepted_tau(state.tau(), centered.tau, alpha)?,
+        geometry,
     )?;
 
     Ok(Step {
@@ -201,12 +205,12 @@ fn step_attempt(
 
 /// Keep zero subproblem roots admissible while the updated iterate stays
 /// strictly positive. Check finiteness before `max`, which would hide NaNs.
-fn accepted_tau(current: f64, candidate: f64, alpha: f64) -> Result<f64, EmbeddingError> {
+fn accepted_tau(current: f64, candidate: f64, alpha: f64) -> Result<f64, StateError> {
     let tau = current + alpha * (candidate - current);
     if !tau.is_finite() {
-        return Err(EmbeddingError::NonFiniteResult);
+        return Err(StateError::NonFiniteResult);
     }
-    Ok(tau.max(1e-30))
+    Ok(tau.max(INTERIOR_FLOOR))
 }
 
 /// Diagonal barrier scaling `D_k` and Jordan inverse `y_k^{-1}` at one iterate.
@@ -218,19 +222,21 @@ pub(crate) struct Scaling {
 }
 
 impl Scaling {
-    pub(crate) fn new(embedding: &Embedding<'_>, state: &State) -> Result<Self, MehrotraError> {
-        let mu = embedding.duality_measure(state);
+    pub(crate) fn new(
+        problem: &Problem,
+        geometry: &ConeGeometry,
+        state: &State,
+    ) -> Result<Self, MehrotraError> {
+        let mu = state.duality_measure(geometry);
         if !mu.is_finite() || mu < 0.0 {
             return Err(MehrotraError::InvalidDualityMeasure(mu));
         }
         // Initialization and acceptance establish the interior invariant;
         // checked sphere normalization preserves it between iterations.
-        debug_assert!(embedding.ensure_domain(state).is_ok());
+        debug_assert!(state.validate(problem, geometry).is_ok());
         let mut d = vec![0.0; state.s().len()];
         let mut y_inverse = vec![0.0; state.y().len()];
-        embedding
-            .geometry()
-            .scaling_and_inverse(state.s(), state.y(), &mut d, &mut y_inverse)?;
+        geometry.scaling_and_inverse(state.s(), state.y(), &mut d, &mut y_inverse)?;
         Ok(Self { mu, d, y_inverse })
     }
 }
@@ -252,7 +258,7 @@ pub(crate) struct Predictor {
 /// The numerical shift `rho` is also the predictor anchor weight.
 /// Centering uses complementarity, independently of numerical shift retries.
 pub(crate) fn predictor(
-    embedding: &Embedding<'_>,
+    geometry: &ConeGeometry,
     state: &State,
     rho: f64,
     scaling: &Scaling,
@@ -279,7 +285,6 @@ pub(crate) fn predictor(
     #[cfg(test)]
     let s_affine = dy.iter().zip(&scaling.d).map(|(dy, h)| -h * dy).collect();
 
-    let geometry = embedding.geometry();
     let alpha_affine = geometry
         .step_to_boundary_from_interior(state.s(), &ds)?
         .min(geometry.step_to_boundary_from_interior(state.y(), &dy)?);
@@ -292,12 +297,12 @@ pub(crate) fn predictor(
         0.0
     };
     if !sigma.is_finite() {
-        return Err(EmbeddingError::NonFiniteResult.into());
+        return Err(StateError::NonFiniteResult.into());
     }
 
     // The affine boundary is complete. Reuse
     // ds for the correction and release dy before any centered solve.
-    if embedding.nu() > 0 {
+    if geometry.barrier_parameter() > 0 {
         geometry.negated_triple_product_in_place(&scaling.y_inverse, &mut ds, &dy)?;
     } else {
         ds.fill(0.0);
@@ -430,7 +435,7 @@ mod tests {
                 assert!(!trial.strict_refinement);
                 floors.push(trial.diagonal_floor);
                 if floors.len() < 3 {
-                    Err(JosephyError::InvalidTauPolynomial.into())
+                    Err(ResolventError::InvalidTauPolynomial.into())
                 } else {
                     Ok(())
                 }
@@ -461,7 +466,7 @@ mod tests {
     fn adaptive_clamp_is_bounded_and_skips_nonnumerical_failures() {
         let settings = KktSettings::new(LinearSolver::Faer);
         let mut cache = KktCache::new();
-        let error = MehrotraError::Josephy(LinearSystemError::Singular.into());
+        let error = MehrotraError::Resolvent(LinearSystemError::Singular.into());
         let mut floors = Vec::new();
         let result: Result<(), _> =
             with_clamp_retries(&settings, 1e-14, &mut cache, |trial, _, _| {
@@ -472,7 +477,7 @@ mod tests {
         assert_eq!(*floors.last().unwrap(), 1e-4);
         assert!(floors.len() <= 10);
         assert!(floors.windows(2).all(|w| w[1] > w[0]));
-        let error = MehrotraError::Josephy(JosephyError::IncorrectRhsLength {
+        let error = MehrotraError::Resolvent(ResolventError::IncorrectRhsLength {
             argument: "test",
             expected: 2,
             actual: 1,
@@ -498,6 +503,7 @@ mod tests {
         )
         .unwrap();
         let state = State::new(vec![0.0], vec![], vec![], 1.0).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let settings = KktSettings {
             refine_iters: 0,
             ..KktSettings::new(LinearSolver::Faer)
@@ -507,8 +513,16 @@ mod tests {
         let mut calls = 0;
         with_clamp_retries(&settings, 1e-14, &mut cache, |trial, rho, cache| {
             calls += 1;
-            let _resolvent =
-                Resolvent::with_factor_shift(&problem, &state, &[], 1e-14, rho, trial, cache)?;
+            let _resolvent = Resolvent::with_factor_shift(
+                &problem,
+                &geometry,
+                &state,
+                &[],
+                1e-14,
+                rho,
+                trial,
+                cache,
+            )?;
             Ok(())
         })
         .unwrap();
@@ -520,10 +534,10 @@ mod tests {
     #[test]
     fn corrector_uses_full_affine_anchor_even_when_working_mu_is_floored() {
         let problem = quadratic_problem();
-        let embedding = Embedding::new(&problem).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
         let mu = 0.7; // Different from the state's raw complementarity.
-        let scaling = Scaling::new(&embedding, &state).unwrap();
+        let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
         let mut resolvent = Resolvent::new(
             &problem,
@@ -534,12 +548,12 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let mut first = predictor(&embedding, &state, mu, &scaling, &mut resolvent).unwrap();
+        let mut first = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
         // The corrector must use the full anchor independently of the
         // reachable fraction (even when this particular predictor is interior).
         first.alpha_affine = 0.25;
         let result = corrector(&state, mu, &scaling, &mut first, &mut resolvent).unwrap();
-        let target = first.sigma * embedding.duality_measure(&state);
+        let target = first.sigma * state.duality_measure(&geometry);
         let weight = mu - target;
         let rx = first
             .affine
@@ -583,12 +597,13 @@ mod tests {
     #[test]
     fn predictor_corrector_share_one_factorization_and_three_solves() {
         let problem = quadratic_problem();
-        let embedding = Embedding::new(&problem).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let mut state = interior_state(&problem);
-        state.normalize_sphere(embedding.nu()).unwrap();
+        state.normalize_sphere(&geometry).unwrap();
         let mut cache = KktCache::new();
         let result = step(
-            &embedding,
+            &problem,
+            &geometry,
             &state,
             &KktSettings::new(LinearSolver::Faer),
             &Settings::default(),
@@ -603,12 +618,12 @@ mod tests {
     #[test]
     fn accepted_tau_damps_zero_candidates_and_rejects_nonfinite_updates() {
         assert!((accepted_tau(1.0, 0.0, 0.99).unwrap() - 0.01).abs() < 1e-15);
-        assert_eq!(accepted_tau(1e-30, 0.0, 0.99), Ok(1e-30));
-        assert_eq!(accepted_tau(1.0, 0.0, 1.0), Ok(1e-30));
+        assert_eq!(accepted_tau(INTERIOR_FLOOR, 0.0, 0.99), Ok(INTERIOR_FLOOR));
+        assert_eq!(accepted_tau(1.0, 0.0, 1.0), Ok(INTERIOR_FLOOR));
         for candidate in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert_eq!(
                 accepted_tau(1.0, candidate, 0.99),
-                Err(EmbeddingError::NonFiniteResult)
+                Err(StateError::NonFiniteResult)
             );
         }
     }
@@ -664,10 +679,10 @@ mod tests {
     }
 
     fn run_predictor(problem: &Problem) -> (State, f64, Scaling, Predictor) {
-        let embedding = Embedding::new(problem).unwrap();
+        let geometry = ConeGeometry::new(problem).unwrap();
         let state = interior_state(problem);
-        let mu = embedding.duality_measure(&state);
-        let scaling = Scaling::new(&embedding, &state).unwrap();
+        let mu = state.duality_measure(&geometry);
+        let scaling = Scaling::new(problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
         let mut resolvent = Resolvent::new(
             problem,
@@ -678,15 +693,15 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let result = predictor(&embedding, &state, mu, &scaling, &mut resolvent).unwrap();
+        let result = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
         (state, mu, scaling, result)
     }
 
     fn run_both(problem: &Problem) -> (State, f64, Predictor, Corrector) {
-        let embedding = Embedding::new(problem).unwrap();
+        let geometry = ConeGeometry::new(problem).unwrap();
         let state = interior_state(problem);
-        let mu = embedding.duality_measure(&state);
-        let scaling = Scaling::new(&embedding, &state).unwrap();
+        let mu = state.duality_measure(&geometry);
+        let scaling = Scaling::new(problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
         let mut resolvent = Resolvent::new(
             problem,
@@ -697,7 +712,7 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let mut first = predictor(&embedding, &state, mu, &scaling, &mut resolvent).unwrap();
+        let mut first = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
         let correction_allocation = first.correction.as_ptr();
         let second = corrector(&state, mu, &scaling, &mut first, &mut resolvent).unwrap();
         assert_eq!(second.s_centered.as_ptr(), correction_allocation);
@@ -752,10 +767,10 @@ mod tests {
     #[test]
     fn corrector_with_unit_sigma_and_zero_displacement_is_pure_centering() {
         let problem = linear_problem();
-        let embedding = Embedding::new(&problem).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
-        let mu = embedding.duality_measure(&state);
-        let scaling = Scaling::new(&embedding, &state).unwrap();
+        let mu = state.duality_measure(&geometry);
+        let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
         let mut resolvent = Resolvent::new(
             &problem,
@@ -766,13 +781,13 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let first = predictor(&embedding, &state, mu, &scaling, &mut resolvent).unwrap();
+        let first = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
         // Force sigma = 1 with a zero affine displacement: the corrector must
         // then be the pure centering step at target mu, i.e. r = (0, s + mu y^-1, 0).
         let mut pure = Predictor {
             affine: ResolventSolution {
                 xy: state.x().iter().chain(state.y()).copied().collect(),
-                primal_len: state.x().len(),
+                x_len: state.x().len(),
                 tau: state.tau(),
                 used_tau_fallback: false,
             },
@@ -800,14 +815,15 @@ mod tests {
     #[test]
     fn step_stays_interior_and_reduces_the_duality_measure() {
         for problem in [quadratic_problem(), linear_problem()] {
-            let embedding = Embedding::new(&problem).unwrap();
+            let geometry = ConeGeometry::new(&problem).unwrap();
             let mut state = interior_state(&problem);
             let mut cache = KktCache::new();
             for _ in 0..5 {
-                state.normalize_sphere(embedding.nu()).unwrap();
-                let mu = embedding.duality_measure(&state);
+                state.normalize_sphere(&geometry).unwrap();
+                let mu = state.duality_measure(&geometry);
                 let result = step(
-                    &embedding,
+                    &problem,
+                    &geometry,
                     &state,
                     &KktSettings::new(LinearSolver::Faer),
                     &Settings::default(),
@@ -817,15 +833,10 @@ mod tests {
                 assert!(result.alpha > 0.0 && result.alpha <= 1.0);
                 assert!(result.alpha_affine > 0.0 && result.alpha_affine <= 1.0);
                 assert!((0.0..=1.0).contains(&result.sigma));
-                embedding.ensure_domain(&result.state).unwrap();
-                assert!(
-                    embedding
-                        .geometry()
-                        .is_dual_interior(result.state.y())
-                        .unwrap()
-                );
+                result.state.validate(&problem, &geometry).unwrap();
+                assert!(geometry.is_dual_interior(result.state.y()).unwrap());
                 assert!(result.state.tau() > 0.0);
-                let next_mu = embedding.duality_measure(&result.state);
+                let next_mu = result.state.duality_measure(&geometry);
                 assert!(next_mu < mu, "mu {mu} -> {next_mu}");
                 state = result.state;
             }
@@ -835,9 +846,9 @@ mod tests {
     #[test]
     fn predictor_rejects_a_negative_duality_measure() {
         let problem = linear_problem();
-        let embedding = Embedding::new(&problem).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
-        let scaling = Scaling::new(&embedding, &state).unwrap();
+        let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
         let mut resolvent = Resolvent::new(
             &problem,
@@ -849,7 +860,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            predictor(&embedding, &state, -1.0, &scaling, &mut resolvent).err(),
+            predictor(&geometry, &state, -1.0, &scaling, &mut resolvent).err(),
             Some(MehrotraError::InvalidDualityMeasure(-1.0))
         );
     }
