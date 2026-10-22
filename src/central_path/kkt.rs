@@ -414,8 +414,7 @@ fn assemble_preconditioner(
     // Assembly owns the only full CSC matrix; the cache retains just the
     // metadata needed for diagonal updates and bound-row reconstruction.
     // A failed initial factorization can rebuild this same pattern on retry.
-    let (mut matrix, pattern) =
-        build_pattern(problem, geometry, shift, d_diagonal, eliminate_bound_rows)?;
+    let (mut matrix, pattern) = build_pattern(problem, geometry, eliminate_bound_rows)?;
     let values = matrix.values_mut();
     pattern.write_diagonal(
         values,
@@ -600,51 +599,14 @@ impl KktWorkspace {
     }
 }
 
+/// Assemble fixed off-diagonal entries and retain zero-valued diagonal slots.
 fn build_pattern(
     problem: &Problem,
     geometry: &ConeGeometry,
-    shift: f64,
-    d_diagonal: &[f64],
     eliminate_bound_rows: bool,
 ) -> Result<(CscMatrix, KktPattern), KktError> {
     let n = problem.variable_count();
     let bound_rows = BoundRows::detect(problem, geometry, eliminate_bound_rows);
-    let matrix = assemble_sparse_k(problem, shift, d_diagonal, &bound_rows)?;
-    let dim = n + bound_rows.kept.len();
-    let diagonal_positions = {
-        let matrix = &matrix;
-        (0..dim)
-            .map(|column| {
-                (matrix.column_pointers()[column]..matrix.column_pointers()[column + 1])
-                    .find(|index| matrix.row_indices()[*index] == column)
-                    .expect("assembly stores every diagonal entry")
-            })
-            .collect()
-    };
-    let mut p_diagonal = vec![0.0; n];
-    if let Some(p) = problem.p() {
-        for (index, value) in p_diagonal.iter_mut().enumerate() {
-            *value = p.get(index, index).unwrap_or(0.0);
-        }
-    }
-    Ok((
-        matrix,
-        KktPattern {
-            variable_count: n,
-            diagonal_positions,
-            p_diagonal,
-            bound_rows,
-        },
-    ))
-}
-
-fn assemble_sparse_k(
-    problem: &Problem,
-    shift: f64,
-    d_diagonal: &[f64],
-    bound_rows: &BoundRows,
-) -> Result<CscMatrix, KktError> {
-    let n = problem.variable_count();
     let m = bound_rows.kept.len();
     let dim = n.checked_add(m).ok_or(MatrixError::DimensionOverflow)?;
     // Every column has a diagonal. Count the remaining upper-triangle entries
@@ -678,14 +640,15 @@ fn assemble_sparse_k(
     let mut rows = vec![0; pointers[dim]];
     let mut values = vec![0.0; pointers[dim]];
     let mut next = pointers[..dim].to_vec();
+    let mut diagonal_positions = vec![0; dim];
+    let mut p_diagonal = vec![0.0; n];
     for column in 0..n {
-        let mut diagonal = shift;
         if let Some(p) = problem.p() {
             for at in p.column_pointers()[column]..p.column_pointers()[column + 1] {
                 let row = p.row_indices()[at];
                 let value = p.values()[at];
                 if row == column {
-                    diagonal += value;
+                    p_diagonal[column] = value;
                 } else if value != 0.0 {
                     rows[next[column]] = row;
                     values[next[column]] = value;
@@ -694,8 +657,7 @@ fn assemble_sparse_k(
             }
         }
         rows[next[column]] = column;
-        values[next[column]] = diagonal;
-        next[column] += 1;
+        diagonal_positions[column] = next[column];
     }
     // A is visited in primal-column order, so each column of A^T is sorted.
     crate::linear_algebra::visit_entries(problem.a(), |source, row, value| {
@@ -706,12 +668,20 @@ fn assemble_sparse_k(
             next[column] += 1;
         }
     });
-    for (row, &source) in bound_rows.kept.iter().enumerate() {
-        let column = n + row;
+    for column in n..dim {
         rows[next[column]] = column;
-        values[next[column]] = -d_diagonal[source];
+        diagonal_positions[column] = next[column];
     }
-    Ok(CscMatrix::new(dim, dim, pointers, rows, values)?)
+    let matrix = CscMatrix::new(dim, dim, pointers, rows, values)?;
+    Ok((
+        matrix,
+        KktPattern {
+            variable_count: n,
+            diagonal_positions,
+            p_diagonal,
+            bound_rows,
+        },
+    ))
 }
 
 /// `out -= K u` for the full shifted matrix `K = [P + shift I, A^T; A, -diag(d)]`.
@@ -790,6 +760,49 @@ pub(crate) fn full_residual_and_denominator(
 mod cache_tests {
     use super::*;
     use crate::{Cone, LinearSolver};
+
+    #[test]
+    fn cached_diagonal_updates_preserve_full_and_reduced_solves() {
+        let problem = Problem::from_upper_triangle(
+            Some(CscMatrix::from_triplets(2, 2, vec![0, 0], vec![0, 1], vec![2.0, 1.0]).unwrap()),
+            vec![0.0; 2],
+            crate::linear_algebra::test_matrix(3, 2, vec![1.0, 2.0, -3.0, 0.0, 4.0, -1.0]).unwrap(),
+            vec![0.0; 3],
+            vec![Cone::Zero(1), Cone::Nonnegative(2)],
+        )
+        .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+            for eliminate_bound_rows in [false, true] {
+                let settings = KktSettings {
+                    eliminate_bound_rows,
+                    ..KktSettings::new(solver)
+                };
+                let mut cache = KktCache::new();
+                for shift in [1.0, 3.0] {
+                    let diagonal = [shift, shift + 1.0, shift + 2.0];
+                    // K * (1, -2, 3, -1, 2), including the missing P[1, 1] entry.
+                    let rhs = [
+                        14.0 + shift,
+                        5.0 - 2.0 * shift,
+                        -3.0 - 3.0 * shift,
+                        shift - 2.0,
+                        2.0 - 2.0 * shift,
+                    ];
+                    cache
+                        .prepare(&problem, &geometry, shift, &diagonal, &settings)
+                        .unwrap();
+                    let solution = cache
+                        .solve(&problem, shift, &diagonal, &diagonal, &rhs)
+                        .unwrap();
+                    for (actual, expected) in solution.iter().zip([1.0, -2.0, 3.0, -1.0, 2.0]) {
+                        assert!((actual - expected).abs() < 1e-12);
+                    }
+                }
+                assert_eq!(cache.stats().factorizations, 2);
+            }
+        }
+    }
 
     #[test]
     fn clamp_adjustment_uses_only_the_current_steps_diagnostics() {
