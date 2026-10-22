@@ -93,7 +93,6 @@ pub fn solve_from(
         reporter.header(
             problem,
             settings,
-            settings.linear_solver,
             Some((problem.constraint_count(), problem.variable_count())),
         );
         reporter.finish(status, 0, elapsed, solution.info.pobj);
@@ -201,7 +200,6 @@ fn solve_core(
     original: Option<(&Problem, &Presolved, &ConeGeometry)>,
     started: Instant,
 ) -> Result<Solution, SolveError> {
-    let linear_solver = settings.linear_solver;
     let kkt = KktSettings::from(settings);
     let mut cache = KktCache::new();
     let equilibrated = EquilibratedProblem::new(problem, settings)?;
@@ -218,7 +216,7 @@ fn solve_core(
     let mut recovery = Recovery::new(problem, &equilibrated, geometry, original);
     let mut recovered = recovery.update(&state, diagnostics.sy);
     let mut reporter = ProgressReporter::new(settings.verbose);
-    reporter.header(problem, settings, linear_solver, presolve_summary);
+    reporter.header(problem, settings, presolve_summary);
     reporter.iteration(
         recovered.iteration_record(0, started.elapsed(), diagnostics),
         true,
@@ -340,15 +338,15 @@ impl RecoveredSolution {
             iteration,
             elapsed,
             mu: diagnostics.mu,
-            tau: Some(diagnostics.tau),
+            tau: diagnostics.tau,
             sigma: diagnostics.sigma,
             alpha_aff: diagnostics.alpha_aff,
             alpha: diagnostics.alpha,
-            pobj: Some(self.measures.pobj),
-            dobj: Some(self.measures.dobj),
-            pres: Some(self.measures.pres),
-            dres: Some(self.measures.dres),
-            comp: Some(self.measures.comp),
+            pobj: self.measures.pobj,
+            dobj: self.measures.dobj,
+            pres: self.measures.pres,
+            dres: self.measures.dres,
+            comp: self.measures.comp,
         }
     }
 }

@@ -5,7 +5,7 @@ use tabled::{
     tables::CompactTable,
 };
 
-use crate::{LinearSolver, Problem, Settings, SolverStatus};
+use crate::{Problem, Settings, SolverStatus};
 
 const TABLE_LABELS: [&str; 12] = [
     "iter",
@@ -28,15 +28,15 @@ pub(crate) struct IterationRecord {
     pub iteration: usize,
     pub elapsed: Duration,
     pub mu: f64,
-    pub tau: Option<f64>,
+    pub tau: f64,
     pub sigma: Option<f64>,
     pub alpha_aff: Option<f64>,
     pub alpha: Option<f64>,
-    pub pobj: Option<f64>,
-    pub dobj: Option<f64>,
-    pub pres: Option<f64>,
-    pub dres: Option<f64>,
-    pub comp: Option<f64>,
+    pub pobj: f64,
+    pub dobj: f64,
+    pub pres: f64,
+    pub dres: f64,
+    pub comp: f64,
 }
 
 pub(crate) struct ProgressReporter {
@@ -60,7 +60,6 @@ impl ProgressReporter {
         &self,
         problem: &Problem,
         settings: &Settings,
-        linear_solver: LinearSolver,
         presolve: Option<(usize, usize)>,
     ) {
         if !self.enabled {
@@ -98,7 +97,8 @@ impl ProgressReporter {
             fill(a_nnz, m as f64 * n as f64),
         );
         eprintln!(
-            "Solver    {linear_solver} {separator} presolve {} {separator} {} Ruiz passes",
+            "Solver    {} {separator} presolve {} {separator} {} Ruiz passes",
+            settings.linear_solver,
             if settings.presolve { "on" } else { "off" },
             settings.ruiz_iters,
         );
@@ -200,20 +200,20 @@ impl ProgressReporter {
     }
 
     fn format_iteration(&self, record: IterationRecord) -> String {
-        let number = |value: Option<f64>, precision| {
+        let optional_number = |value: Option<f64>| {
             value.map_or_else(
                 || if self.unicode { "—" } else { "-" }.into(),
-                |value| format!("{value:.precision$e}"),
+                |value| format!("{value:.3e}"),
             )
         };
         let mut cells = vec![
             record.iteration.to_string(),
             format!("{:.2}s", record.elapsed.as_secs_f64()),
-            number(record.pobj, 6),
-            number(record.dobj, 6),
-            number(record.pres, 3),
-            number(record.dres, 3),
-            number(record.comp, 3),
+            format!("{:.6e}", record.pobj),
+            format!("{:.6e}", record.dobj),
+            format!("{:.3e}", record.pres),
+            format!("{:.3e}", record.dres),
+            format!("{:.3e}", record.comp),
             record.alpha.map_or_else(
                 || if self.unicode { "—" } else { "-" }.into(),
                 |value| format!("{value:.3}"),
@@ -221,10 +221,10 @@ impl ProgressReporter {
         ];
         if self.details {
             cells.extend([
-                number(Some(record.mu), 3),
-                number(record.tau, 3),
-                number(record.sigma, 3),
-                number(record.alpha_aff, 3),
+                format!("{:.3e}", record.mu),
+                format!("{:.3e}", record.tau),
+                optional_number(record.sigma),
+                optional_number(record.alpha_aff),
             ]);
         }
         self.table_row(cells, false)
