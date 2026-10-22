@@ -29,17 +29,11 @@ pub(crate) enum KktError {
 
 impl KktError {
     pub(crate) fn is_numerical(&self) -> bool {
-        matches!(
-            self,
-            Self::InvalidDiagonal
-                | Self::LinearSystem(
-                    LinearSystemError::Singular
-                        | LinearSystemError::WrongInertia { .. }
-                        | LinearSystemError::RefinementDiverged(_)
-                        | LinearSystemError::Factorization(_)
-                        | LinearSystemError::NonFiniteRightHandSide
-                )
-        )
+        match self {
+            Self::LinearSystem(error) => error.is_numerical(),
+            Self::InvalidDiagonal => true,
+            Self::Matrix(_) | Self::InvalidParameters => false,
+        }
     }
 }
 

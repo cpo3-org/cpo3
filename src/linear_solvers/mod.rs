@@ -105,14 +105,12 @@ pub struct LinearAlgebraStats {
     pub inertia_failures: usize,
 }
 
-/// Inertia and pivot extremes of the most recent factorization.
+/// Inertia of the most recent factorization.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct PivotReport {
     pub(crate) positive: usize,
     pub(crate) negative: usize,
     pub(crate) zero: usize,
-    pub(crate) min_abs: f64,
-    pub(crate) max_abs: f64,
 }
 
 impl LinearAlgebraStats {
@@ -186,9 +184,8 @@ impl Factorization {
         self.stats
     }
 
-    /// Inertia and pivot extremes of the current factor, when the backend
-    /// exposes them.
-    pub(crate) fn pivot_report(&self) -> Option<PivotReport> {
+    /// Inertia of the current factor, when the backend exposes it.
+    fn pivot_report(&self) -> Option<PivotReport> {
         self.inner.pivot_report()
     }
 
@@ -604,6 +601,24 @@ pub(crate) enum LinearSystemError {
     NonFiniteRightHandSide,
     #[error("linear-system solution must have length {expected}, received {actual}")]
     InvalidSolutionDimension { expected: usize, actual: usize },
+}
+
+impl LinearSystemError {
+    /// Failures eligible for retry with different numerical solve parameters.
+    pub(crate) fn is_numerical(&self) -> bool {
+        match self {
+            Self::Singular
+            | Self::WrongInertia { .. }
+            | Self::RefinementDiverged(_)
+            | Self::Factorization(_)
+            | Self::NonFiniteRightHandSide => true,
+            Self::NotSquare { .. }
+            | Self::Empty
+            | Self::NotUpperTriangle
+            | Self::InvalidRightHandSide { .. }
+            | Self::InvalidSolutionDimension { .. } => false,
+        }
+    }
 }
 
 #[cfg(test)]

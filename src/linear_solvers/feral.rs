@@ -58,8 +58,6 @@ impl FeralFactorization {
             positive: inertia.positive,
             negative: inertia.negative,
             zero: inertia.zero,
-            min_abs: self.solver.min_pivot_magnitude()?,
-            max_abs: self.solver.max_pivot_magnitude()?,
         })
     }
 

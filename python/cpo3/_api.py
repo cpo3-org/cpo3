@@ -445,7 +445,7 @@ def solve(
     """Solve a previously constructed problem.
 
     ``warm_start`` is a tuple of NumPy arrays ``(x, y, s)`` in original
-    units. Four interior candidates are screened by a local residual score;
+    units. Three interior candidates are screened by a local residual score;
     the best is used when its score is at most 100. With
     ``settings.force_warm_start=True``, the best finite candidate is used
     regardless of score. All-equality problems skip warm screening.

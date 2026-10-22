@@ -40,18 +40,12 @@ pub(crate) enum ResolventError {
 impl ResolventError {
     /// Failures that a larger shift or best-effort refinement may cure.
     pub(crate) fn is_numerical(&self) -> bool {
-        matches!(self, Self::Kkt(error) if error.is_numerical())
-            || matches!(
-                self,
-                Self::InvalidTauPolynomial
-                    | Self::LinearSystem(
-                        LinearSystemError::Singular
-                            | LinearSystemError::WrongInertia { .. }
-                            | LinearSystemError::RefinementDiverged(_)
-                            | LinearSystemError::Factorization(_)
-                            | LinearSystemError::NonFiniteRightHandSide
-                    )
-            )
+        match self {
+            Self::LinearSystem(error) => error.is_numerical(),
+            Self::Kkt(error) => error.is_numerical(),
+            Self::InvalidTauPolynomial => true,
+            Self::State(_) => false,
+        }
     }
 }
 
@@ -63,7 +57,6 @@ pub(crate) struct ResolventSolution {
     pub(crate) x_len: usize,
     /// Nonnegative subproblem candidate; the accepted iterate stays positive.
     pub(crate) tau: f64,
-    pub(crate) used_tau_fallback: bool,
 }
 
 impl ResolventSolution {
@@ -273,8 +266,8 @@ impl<'a> Resolvent<'a> {
         let (base_x, base_y) = base.split_at_mut(n);
         crate::linear_algebra::add_assign(base_x, self.state.x());
         crate::linear_algebra::add_assign(base_y, self.state.y());
-        let (delta_tau, tau, used_tau_fallback) = match self.solve_tau_increment(&base, r_tau, mu) {
-            Some((delta_tau, tau)) => (delta_tau, tau, false),
+        let (delta_tau, tau) = match self.solve_tau_increment(&base, r_tau, mu) {
+            Some(solution) => solution,
             None => {
                 // The fallback expects the point-coordinate particular solution.
                 crate::linear_algebra::update(
@@ -284,7 +277,7 @@ impl<'a> Resolvent<'a> {
                 );
                 let q_constant = q_dot(self.problem, &base);
                 let tau = self.linearized_tau(&base, q_constant, r_tau, mu);
-                (tau - anchor_tau, tau, true)
+                (tau - anchor_tau, tau)
             }
         };
         self.cache.put_reconstruction(base);
@@ -300,7 +293,6 @@ impl<'a> Resolvent<'a> {
             xy: increment,
             x_len: n,
             tau,
-            used_tau_fallback,
         })
     }
 

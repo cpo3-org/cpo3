@@ -32,6 +32,16 @@ pub(crate) enum MehrotraError {
     InvalidDualityMeasure(f64),
 }
 
+impl MehrotraError {
+    /// Failures eligible for another step with a larger diagonal clamp.
+    fn is_numerical(&self) -> bool {
+        match self {
+            Self::Resolvent(error) => error.is_numerical(),
+            Self::State(_) | Self::ConeGeometry(_) | Self::InvalidDualityMeasure(_) => false,
+        }
+    }
+}
+
 /// One accepted outer iterate and the scalars that produced it.
 pub(crate) struct Step {
     pub(crate) state: State,
@@ -78,7 +88,7 @@ fn with_clamp_retries<T>(
         let result = attempt(&trial, cache);
         cache.finish_step(result.is_ok());
         match result {
-            Err(error) if retryable(&error) && floor < MAX_CLAMP => {
+            Err(error) if error.is_numerical() && floor < MAX_CLAMP => {
                 // h_i is nonnegative at an interior point. Also account for
                 // negative primal diagonals rather than assuming convex input.
                 let limit = cache.nonbinding_floor_limit(mu);
@@ -118,10 +128,6 @@ fn with_clamp_retries<T>(
             Err(error) => return Err(error),
         }
     }
-}
-
-fn retryable(error: &MehrotraError) -> bool {
-    matches!(error, MehrotraError::Resolvent(inner) if inner.is_numerical())
 }
 
 fn step_attempt(
@@ -446,21 +452,47 @@ mod tests {
         assert_eq!(*floors.last().unwrap(), 1e-4);
         assert!(floors.len() <= 10);
         assert!(floors.windows(2).all(|w| w[1] > w[0]));
-        let error = MehrotraError::Resolvent(
-            LinearSystemError::InvalidRightHandSide {
-                expected: 2,
-                actual: 1,
+        for (error, numerical) in [
+            (LinearSystemError::Singular, true),
+            (
+                LinearSystemError::WrongInertia {
+                    positive: 0,
+                    expected: 1,
+                },
+                true,
+            ),
+            (LinearSystemError::RefinementDiverged(1.0), true),
+            (LinearSystemError::Factorization("failed".into()), true),
+            (LinearSystemError::NonFiniteRightHandSide, true),
+            (
+                LinearSystemError::InvalidRightHandSide {
+                    expected: 2,
+                    actual: 1,
+                },
+                false,
+            ),
+            (LinearSystemError::Empty, false),
+        ] {
+            for wrapped in [
+                ResolventError::LinearSystem(error.clone()),
+                ResolventError::Kkt(crate::central_path::kkt::KktError::LinearSystem(
+                    error.clone(),
+                )),
+            ] {
+                let error = MehrotraError::Resolvent(wrapped);
+                let mut count = 0;
+                let result = with_clamp_retries(&settings, 1e-14, &mut KktCache::new(), |_, _| {
+                    count += 1;
+                    if count == 1 {
+                        Err(error.clone())
+                    } else {
+                        Ok(())
+                    }
+                });
+                assert_eq!(count, if numerical { 2 } else { 1 }, "{error:?}");
+                assert_eq!(result, if numerical { Ok(()) } else { Err(error) });
             }
-            .into(),
-        );
-        let mut count = 0;
-        let result: Result<(), _> =
-            with_clamp_retries(&settings, 1e-14, &mut KktCache::new(), |_, _| {
-                count += 1;
-                Err(error.clone())
-            });
-        assert_eq!(count, 1);
-        assert_eq!(result, Err(error));
+        }
     }
 
     #[test]
@@ -755,7 +787,6 @@ mod tests {
                 xy: state.x().iter().chain(state.y()).copied().collect(),
                 x_len: state.x().len(),
                 tau: state.tau(),
-                used_tau_fallback: false,
             },
             s_affine: state.s().to_vec(),
             correction: vec![-0.0; state.s().len()],
