@@ -277,15 +277,16 @@ impl KktCache {
         )
     }
 
-    /// Refresh the constant column while retaining the accepted step's seed.
+    /// Refresh the constant column and solve the predictor together, retaining
+    /// the accepted step's constant-column seed.
     pub(crate) fn prepare_direction(
         &mut self,
         problem: &Problem,
         shift: f64,
         d_diagonal: &[f64],
         d_factor: &[f64],
-        predictor_rhs: Option<&[f64]>,
-    ) -> Result<Option<Vec<f64>>, LinearSystemError> {
+        predictor_rhs: &[f64],
+    ) -> Result<Vec<f64>, LinearSystemError> {
         let n = problem.variable_count();
         if self.constant_rhs.is_empty() {
             self.constant_rhs.reserve(n + problem.constraint_count());
@@ -302,35 +303,17 @@ impl KktCache {
             .factorization
             .as_mut()
             .expect("prepare stores the KKT factors");
-        let (next, predictor) = match predictor_rhs {
-            Some(rhs) => {
-                let (next, predictor) = self.workspace.solve_pair(
-                    pattern,
-                    problem,
-                    factorization,
-                    shift,
-                    d_diagonal,
-                    d_factor,
-                    &self.constant_rhs,
-                    initial,
-                    rhs,
-                )?;
-                (next, Some(predictor))
-            }
-            None => (
-                self.workspace.solve(
-                    pattern,
-                    problem,
-                    factorization,
-                    shift,
-                    d_diagonal,
-                    d_factor,
-                    &self.constant_rhs,
-                    initial,
-                )?,
-                None,
-            ),
-        };
+        let (next, predictor) = self.workspace.solve_pair(
+            pattern,
+            problem,
+            factorization,
+            shift,
+            d_diagonal,
+            d_factor,
+            &self.constant_rhs,
+            initial,
+            predictor_rhs,
+        )?;
         self.direction_before_step = Some(std::mem::replace(&mut self.direction, next));
         Ok(predictor)
     }
@@ -1053,14 +1036,14 @@ mod cache_tests {
                 .prepare(&problem, &geometry, shift, &[shift], &settings)
                 .unwrap();
             cache
-                .prepare_direction(&problem, shift, &[shift], &[shift], None)
+                .prepare_direction(&problem, shift, &[shift], &[shift], &[0.0; 2])
                 .unwrap();
             assert_eq!(cache.direction(), &[2.0 / shift, -1.0 / shift]);
             cache.finish_step(accepted);
             assert_eq!(cache.direction(), expected);
         }
         assert_eq!(cache.stats().factorizations, 4);
-        assert_eq!(cache.stats().primary_solves, 4);
+        assert_eq!(cache.stats().primary_solves, 8);
     }
 
     #[test]
@@ -1091,15 +1074,28 @@ mod cache_tests {
                             .prepare(&problem, &geometry, shift, &factor, &settings)
                             .unwrap();
                     }
-                    separate
-                        .prepare_direction(&problem, shift, &target, &factor, None)
+                    let data_rhs = [1.0, -2.0, 1.0, 0.0, 2.0];
+                    let seed = (!separate.direction.is_empty())
+                        .then(|| separate.direction.split_at(problem.variable_count()));
+                    let next = separate
+                        .workspace
+                        .solve(
+                            separate.pattern.as_ref().unwrap(),
+                            &problem,
+                            separate.factorization.as_mut().unwrap(),
+                            shift,
+                            &target,
+                            &factor,
+                            &data_rhs,
+                            seed,
+                        )
                         .unwrap();
+                    separate.direction = next;
                     let expected = separate
                         .solve(&problem, shift, &target, &factor, &rhs)
                         .unwrap();
                     let actual = paired
-                        .prepare_direction(&problem, shift, &target, &factor, Some(&rhs))
-                        .unwrap()
+                        .prepare_direction(&problem, shift, &target, &factor, &rhs)
                         .unwrap();
                     for (a, b) in actual
                         .iter()

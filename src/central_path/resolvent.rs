@@ -1,7 +1,8 @@
 //! Closed-form resolvent for the Josephy--Newton step (`subsec:josephy_newton`, `thm:resolvent`).
 //!
 //! `Resolvent::new` factors the preconditioner and caches the
-//! target-system solve `eq:cached_data_solve`.
+//! target-system solve `eq:cached_data_solve`, returning the predictor increment
+//! computed alongside it.
 //! Each target/surrogate supplies the changing right-hand side of
 //! `eq:surrogate_rhs`. `solve_increment_rhs` evaluates the same equations in
 //! increments about the current iterate to avoid cancellation, solves the scalar
@@ -82,8 +83,6 @@ pub(crate) struct Resolvent<'a> {
     dual_residual: Vec<f64>,
     /// b tau_a - A x_a, without forming and then subtracting the slack.
     primal_rhs: Vec<f64>,
-    /// Predictor increment solved alongside the constant column.
-    predictor_increment: Option<Vec<f64>>,
     /// d_x' P d_x, shared by every increment polynomial.
     direction_quadratic: f64,
     /// Current iterate, not the corrector surrogate, for the tau fallback.
@@ -102,7 +101,8 @@ struct TauFallback {
 
 impl<'a> Resolvent<'a> {
     /// Factorize a diagonally clamped preconditioner for the true system
-    /// `[P + shift I, A^T; A, -(H + shift I)]`, then refine its `(-c, b)` solve.
+    /// `[P + shift I, A^T; A, -(H + shift I)]`, then refine its `(-c, b)` and
+    /// predictor solves. Return the predictor increment for reconstruction.
     pub(crate) fn new(
         problem: &'a Problem,
         geometry: &ConeGeometry,
@@ -111,8 +111,8 @@ impl<'a> Resolvent<'a> {
         shift: f64,
         kkt: &KktSettings,
         cache: &'a mut KktCache,
-    ) -> Result<Self, ResolventError> {
-        if !shift.is_finite() || shift < 0.0 || (shift == 0.0 && kkt.diagonal_floor <= 0.0) {
+    ) -> Result<(Self, Vec<f64>), ResolventError> {
+        if !shift.is_finite() || shift <= 0.0 {
             return Err(StateError::InvalidMu.into());
         }
         let d_diagonal = h_diagonal
@@ -142,19 +142,17 @@ impl<'a> Resolvent<'a> {
             |product| [product],
         );
         crate::linear_algebra::scale(&mut primal_rhs, -1.0);
-        let predictor_rhs = (geometry.barrier_parameter() > 0).then(|| {
-            dual_residual
-                .iter()
-                .map(|rd| -rd)
-                .chain(primal_rhs.iter().copied())
-                .collect::<Vec<_>>()
-        });
+        let predictor_rhs = dual_residual
+            .iter()
+            .map(|rd| -rd)
+            .chain(primal_rhs.iter().copied())
+            .collect::<Vec<_>>();
         let predictor_increment = cache.prepare_direction(
             problem,
             shift,
             &d_diagonal,
             factor_diagonal,
-            predictor_rhs.as_deref(),
+            &predictor_rhs,
         )?;
         let (x2, y2) = cache.direction().split_at(n);
         // Positive identity from the KKT equations, with d = H + shift I.
@@ -163,25 +161,22 @@ impl<'a> Resolvent<'a> {
             .p_mul_opt(x2)
             .as_ref()
             .map_or(0.0, |px2| dot(x2, px2));
-        Ok(Self {
-            problem,
-            cache,
-            shift,
-            d_diagonal,
-            d_factor,
-            alpha,
-            dual_residual,
-            primal_rhs,
+        Ok((
+            Self {
+                problem,
+                cache,
+                shift,
+                d_diagonal,
+                d_factor,
+                alpha,
+                dual_residual,
+                primal_rhs,
+                direction_quadratic,
+                state,
+                fallback: OnceCell::new(),
+            },
             predictor_increment,
-            direction_quadratic,
-            state,
-            fallback: OnceCell::new(),
-        })
-    }
-
-    /// The cached mu-target solution of K z = (-c, b).
-    pub(crate) fn constant_direction(&self) -> &[f64] {
-        self.cache.direction()
+        ))
     }
 
     pub(crate) fn dual_residual(&self) -> &[f64] {
@@ -190,17 +185,6 @@ impl<'a> Resolvent<'a> {
 
     pub(crate) fn primal_rhs(&self) -> &[f64] {
         &self.primal_rhs
-    }
-
-    pub(crate) fn solve_predictor(
-        &mut self,
-        r_tau: f64,
-    ) -> Result<ResolventSolution, ResolventError> {
-        let increment = self
-            .predictor_increment
-            .take()
-            .expect("the predictor was solved with the constant column");
-        self.reconstruct_increment(increment, r_tau, 0.0)
     }
 
     /// Solve K u = residual about the current iterate and recover
@@ -225,7 +209,7 @@ impl<'a> Resolvent<'a> {
         self.reconstruct_increment(increment, r_tau, mu)
     }
 
-    fn reconstruct_increment(
+    pub(crate) fn reconstruct_increment(
         &mut self,
         mut increment: Vec<f64>,
         r_tau: f64,

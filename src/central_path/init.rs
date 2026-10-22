@@ -149,13 +149,10 @@ fn local_score(
 
 /// Factor placing `(x, s, y, 1)` on the embedding sphere
 /// `||(x, y, tau)|| = sqrt(nu + 1)`, as `State::normalize_sphere` does for
-/// warm starts; one for equality-only problems. The canonical point already
+/// warm starts. The canonical point already
 /// lies on the sphere, so cold starts of either strategy enter the loop at
 /// the same radius.
 fn sphere_factor(geometry: &ConeGeometry, x: &[f64], y: &[f64]) -> f64 {
-    if geometry.barrier_parameter() == 0 {
-        return 1.0;
-    }
     let norm = stable_norm(x.iter().chain(y).copied().chain(std::iter::once(1.0)));
     (geometry.barrier_parameter() as f64 + 1.0).sqrt() / norm
 }
@@ -353,10 +350,10 @@ pub(crate) fn initial_state(
     kkt: &KktSettings,
     cache: &mut KktCache,
 ) -> Result<(State, InitReport), StateError> {
+    debug_assert!(geometry.barrier_parameter() > 0);
     let problem = equilibrated.problem();
     let mut warm_start_score = None;
-    // The local score is undefined without inequality pairs.
-    if let Some(warm) = warm.filter(|_| geometry.barrier_parameter() > 0) {
+    if let Some(warm) = warm {
         if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm) {
             warm_start_score = Some(score);
             if settings.force_warm_start || score <= WARM_THRESHOLD {
@@ -546,26 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn cvxopt_equality_only_start_is_the_kkt_point_at_unit_scale() {
-        // x + A' y = -c and A x = b give x = (1, 0), y = -2.
-        let problem = Problem::new(
-            Some(crate::linear_algebra::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap()),
-            vec![1.0, 2.0],
-            crate::linear_algebra::test_matrix(1, 2, vec![1.0, 1.0]).unwrap(),
-            vec![1.0],
-            vec![Cone::Zero(1)],
-        )
-        .unwrap();
-        let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.start, InitialStart::Cvxopt);
-        assert_eq!(state.tau(), 1.0);
-        assert_close(state.x()[0], 1.0, 1e-6);
-        assert_close(state.x()[1], 0.0, 1e-6);
-        assert_close(state.y()[0], -2.0, 1e-6);
-        assert_eq!(state.s(), [0.0]);
-    }
-
-    #[test]
     fn interior_shift_moves_only_cone_rows_and_only_upward() {
         let geometry = crate::cone::test_geometry(vec![
             Cone::Zero(1),
@@ -672,51 +649,5 @@ mod tests {
             assert_close(state.y()[i] / state.tau(), expected, 1e-12);
         }
         assert_close(state.s()[2] / state.tau(), 2.0, 1e-12);
-    }
-
-    #[test]
-    fn all_equality_warm_point_is_ignored() {
-        let problem = Problem::new(
-            None,
-            vec![0.0],
-            crate::linear_algebra::test_matrix(1, 1, vec![1.0]).unwrap(),
-            vec![1.0],
-            vec![Cone::Zero(1)],
-        )
-        .unwrap();
-        let equilibrated = EquilibratedProblem::new(
-            &problem,
-            &crate::Settings {
-                ruiz_iters: 0,
-                ..crate::Settings::default()
-            },
-        )
-        .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let warm = WarmStart {
-            x: vec![1.0],
-            y: vec![2.0],
-            s: vec![0.0],
-        };
-        let settings = Settings {
-            force_warm_start: true,
-            ..Settings::default()
-        };
-        let (state, report) = initial_state(
-            &geometry,
-            &equilibrated,
-            Some(&warm),
-            &settings,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut KktCache::new(),
-        )
-        .unwrap();
-        assert!(report.warm_start_supplied);
-        assert_eq!(report.warm_start_score, None);
-        assert_eq!(report.start, InitialStart::Canonical);
-        assert_eq!(
-            state,
-            canonical_state(&problem, &geometry, settings.initial_mu).unwrap()
-        );
     }
 }

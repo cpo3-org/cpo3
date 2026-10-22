@@ -59,6 +59,7 @@ pub(crate) fn step(
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
+    debug_assert!(geometry.barrier_parameter() > 0);
     let scaling = Scaling::new(problem, geometry, state)?;
     with_clamp_retries(kkt, scaling.mu, cache, |trial, cache| {
         step_attempt(problem, geometry, state, trial, &scaling, settings, cache)
@@ -111,26 +112,9 @@ fn step_attempt(
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
-    let mut resolvent =
+    let (mut resolvent, predictor_increment) =
         Resolvent::new(problem, geometry, state, &scaling.d, scaling.mu, kkt, cache)?;
-    if geometry.barrier_parameter() == 0 {
-        // At mu=0 with only equality rows, the constant KKT column is the
-        // original primal-dual solution. Its homogeneous scale is arbitrary.
-        let point = State::from_stacked(
-            resolvent.constant_direction().to_vec(),
-            state.x().len(),
-            vec![0.0; state.s().len()],
-            1.0,
-            geometry,
-        )?;
-        return Ok(Step {
-            state: point,
-            sigma: 0.0,
-            alpha_affine: 1.0,
-            alpha: 1.0,
-        });
-    }
-    let first = predictor(geometry, state, scaling, &mut resolvent)?;
+    let first = predictor(state, scaling, predictor_increment, &mut resolvent)?;
     let sigma = first.sigma;
     let alpha_affine = first.alpha_affine;
     let second = corrector(state, scaling, first, &mut resolvent)?;
@@ -192,7 +176,7 @@ impl Scaling {
         state: &State,
     ) -> Result<Self, MehrotraError> {
         let mu = state.duality_measure(geometry);
-        if !mu.is_finite() || mu < 0.0 {
+        if !mu.is_finite() || mu <= 0.0 {
             return Err(MehrotraError::InvalidDualityMeasure(mu));
         }
         // Initialization and acceptance establish the interior invariant;
@@ -219,20 +203,15 @@ pub(crate) struct Predictor {
 ///
 /// The current complementarity is both the KKT shift and the anchor weight.
 pub(crate) fn predictor(
-    geometry: &ConeGeometry,
     state: &State,
     scaling: &Scaling,
+    increment: Vec<f64>,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Predictor, MehrotraError> {
     let r_tau = scaling.mu * state.tau();
-    let affine = resolvent.solve_predictor(r_tau)?;
+    let affine = resolvent.reconstruct_increment(increment, r_tau, 0.0)?;
 
-    let zero = if geometry.barrier_parameter() > 0 {
-        -0.0
-    } else {
-        0.0
-    };
-    let mut correction = vec![zero; state.s().len()];
+    let mut correction = vec![-0.0; state.s().len()];
     let mut alpha_affine = 1.0_f64;
     let mut finite = true;
     // Each affine displacement is needed only for its boundary and correction.
@@ -263,11 +242,7 @@ pub(crate) fn predictor(
     }
     // A long feasible affine step supports a smaller centering target.
     // Keep mu as current complementarity; only the dimensionless sigma changes.
-    let sigma = if scaling.mu > 0.0 {
-        (1.0 - alpha_affine).powi(3)
-    } else {
-        0.0
-    };
+    let sigma = (1.0 - alpha_affine).powi(3);
     if !sigma.is_finite() {
         return Err(StateError::NonFiniteResult.into());
     }
@@ -452,12 +427,12 @@ mod tests {
         let problem = Problem::new(
             None,
             vec![-1.0],
-            crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
-            vec![],
-            vec![],
+            crate::CscMatrix::zeros(1, 1).unwrap(),
+            vec![0.0],
+            vec![Cone::Nonnegative(1)],
         )
         .unwrap();
-        let state = State::new(vec![0.0], vec![], vec![], 1.0).unwrap();
+        let state = State::new(vec![0.0], vec![1.0], vec![1.0], 1.0).unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
         let settings = KktSettings {
             refine_iters: 0,
@@ -468,7 +443,8 @@ mod tests {
         let mut calls = 0;
         with_clamp_retries(&settings, 1e-14, &mut cache, |trial, cache| {
             calls += 1;
-            let _resolvent = Resolvent::new(&problem, &geometry, &state, &[], 1e-14, trial, cache)?;
+            let _resolvent =
+                Resolvent::new(&problem, &geometry, &state, &[1.0], 1e-14, trial, cache)?;
             Ok(())
         })
         .unwrap();
@@ -485,7 +461,7 @@ mod tests {
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
         let mu = scaling.mu;
         let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
+        let (mut resolvent, increment) = Resolvent::new(
             &problem,
             &geometry,
             &state,
@@ -495,7 +471,7 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let mut first = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
+        let mut first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
         // The corrector must use the full anchor independently of the
         // reachable fraction (even when this particular predictor is interior).
         first.alpha_affine = 0.25;
@@ -633,7 +609,7 @@ mod tests {
             let state = interior_state(&problem);
             let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
             let mut cache = KktCache::new();
-            let mut resolvent = Resolvent::new(
+            let (mut resolvent, increment) = Resolvent::new(
                 &problem,
                 &geometry,
                 &state,
@@ -643,7 +619,7 @@ mod tests {
                 &mut cache,
             )
             .unwrap();
-            let result = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
+            let result = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
             let mut boundary: f64 = 1.0;
             for index in 0..problem.constraint_count() {
                 let (s, y) = (state.s()[index], state.y()[index]);
@@ -678,7 +654,7 @@ mod tests {
             let mu = state.duality_measure(&geometry);
             let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
             let mut cache = KktCache::new();
-            let mut resolvent = Resolvent::new(
+            let (mut resolvent, increment) = Resolvent::new(
                 &problem,
                 &geometry,
                 &state,
@@ -688,7 +664,7 @@ mod tests {
                 &mut cache,
             )
             .unwrap();
-            let first = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
+            let first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
             let expected: Vec<_> = (0..problem.constraint_count())
                 .map(|index| {
                     if problem.cones()[0] == Cone::Zero(1) && index == 0 {
@@ -722,7 +698,7 @@ mod tests {
         let mu = state.duality_measure(&geometry);
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
+        let (mut resolvent, increment) = Resolvent::new(
             &problem,
             &geometry,
             &state,
@@ -732,7 +708,7 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let first = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
+        let first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
         // Force sigma = 1 with a zero affine displacement: the corrector must
         // then be the pure centering step at target mu, i.e. r = (0, s + mu y^-1, 0).
         let pure = Predictor {
@@ -803,7 +779,7 @@ mod tests {
         let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
-        for shift in [-1.0, f64::NAN, f64::INFINITY] {
+        for shift in [0.0, -1.0, f64::NAN, f64::INFINITY] {
             let mut cache = KktCache::new();
             assert_eq!(
                 Resolvent::new(
