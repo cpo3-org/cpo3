@@ -158,8 +158,10 @@ fn step_attempt(
             alpha: 1.0,
         });
     }
-    let mut first = predictor(geometry, state, scaling, &mut resolvent)?;
-    let second = corrector(state, scaling, &mut first, &mut resolvent)?;
+    let first = predictor(geometry, state, scaling, &mut resolvent)?;
+    let sigma = first.sigma;
+    let alpha_affine = first.alpha_affine;
+    let second = corrector(state, scaling, first, &mut resolvent)?;
     let boundary = geometry
         .step_to_boundary_toward(state.s(), &second.s_centered)?
         .min(geometry.step_to_boundary_toward(state.y(), second.centered.y())?);
@@ -187,8 +189,8 @@ fn step_attempt(
 
     Ok(Step {
         state: next,
-        sigma: first.sigma,
-        alpha_affine: first.alpha_affine,
+        sigma,
+        alpha_affine,
         alpha,
     })
 }
@@ -314,12 +316,10 @@ pub(crate) struct Corrector {
 pub(crate) fn corrector(
     state: &State,
     scaling: &Scaling,
-    predictor: &mut Predictor,
+    predictor: Predictor,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Corrector, MehrotraError> {
     let mu_centered = predictor.sigma * scaling.mu;
-
-    let correction = std::mem::take(&mut predictor.correction);
 
     let (centered, s_centered) = centered_solve(
         state,
@@ -330,7 +330,7 @@ pub(crate) fn corrector(
             predictor.affine.tau,
         ),
         mu_centered,
-        correction,
+        predictor.correction,
         resolvent,
     )?;
 
@@ -547,7 +547,6 @@ mod tests {
         // The corrector must use the full anchor independently of the
         // reachable fraction (even when this particular predictor is interior).
         first.alpha_affine = 0.25;
-        let result = corrector(&state, &scaling, &mut first, &mut resolvent).unwrap();
         let target = first.sigma * state.duality_measure(&geometry);
         let weight = mu - target;
         let rx = first
@@ -568,9 +567,9 @@ mod tests {
                         * (first.affine.y()[i] - state.y()[i])
             })
             .collect::<Vec<_>>();
-        let expected = resolvent
-            .solve(&rx, &ry, weight * first.affine.tau, target)
-            .unwrap();
+        let r_tau = weight * first.affine.tau;
+        let result = corrector(&state, &scaling, first, &mut resolvent).unwrap();
+        let expected = resolvent.solve(&rx, &ry, r_tau, target).unwrap();
         for (actual, expected) in result
             .centered
             .x()
@@ -693,29 +692,6 @@ mod tests {
         (state, mu, scaling, result)
     }
 
-    fn run_both(problem: &Problem) -> (State, f64, Predictor, Corrector) {
-        let geometry = ConeGeometry::new(problem).unwrap();
-        let state = interior_state(problem);
-        let mu = state.duality_measure(&geometry);
-        let scaling = Scaling::new(problem, &geometry, &state).unwrap();
-        let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
-            problem,
-            &geometry,
-            &state,
-            &scaling.d,
-            mu,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut cache,
-        )
-        .unwrap();
-        let mut first = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
-        let correction_allocation = first.correction.as_ptr();
-        let second = corrector(&state, &scaling, &mut first, &mut resolvent).unwrap();
-        assert_eq!(second.s_centered.as_ptr(), correction_allocation);
-        (state, mu, first, second)
-    }
-
     #[test]
     fn predictor_slack_is_the_newton_update_on_affine_complementarity() {
         for problem in [quadratic_problem(), linear_problem()] {
@@ -741,21 +717,42 @@ mod tests {
     #[test]
     fn corrector_slack_carries_the_second_order_correction() {
         for problem in [quadratic_problem(), linear_problem()] {
-            let (state, mu, first, second) = run_both(&problem);
+            let geometry = ConeGeometry::new(&problem).unwrap();
+            let state = interior_state(&problem);
+            let mu = state.duality_measure(&geometry);
+            let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
+            let mut cache = KktCache::new();
+            let mut resolvent = Resolvent::new(
+                &problem,
+                &geometry,
+                &state,
+                &scaling.d,
+                mu,
+                &KktSettings::new(LinearSolver::Faer),
+                &mut cache,
+            )
+            .unwrap();
+            let first = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
+            let expected: Vec<_> = (0..problem.constraint_count())
+                .map(|index| {
+                    if problem.cones()[0] == Cone::Zero(1) && index == 0 {
+                        return 0.0;
+                    }
+                    let (s, y) = (state.s()[index], state.y()[index]);
+                    let ds = first.s_affine[index] - s;
+                    let dy = first.affine.y()[index] - y;
+                    s * y + (first.sigma * mu) - ds * dy
+                })
+                .collect();
+            let correction_allocation = first.correction.as_ptr();
+            let second = corrector(&state, &scaling, first, &mut resolvent).unwrap();
+            assert_eq!(second.s_centered.as_ptr(), correction_allocation);
             // A zero centering target can place the trial on the boundary.
             // The accepted (damped) iterate is tested separately for interiority.
             assert!(second.centered.tau.is_finite() && second.centered.tau >= 0.0);
-            let nonneg = |index: usize| problem.cones()[0] != Cone::Zero(1) || index > 0;
-            for index in 0..problem.constraint_count() {
-                let (s, y) = (state.s()[index], state.y()[index]);
-                let ds = first.s_affine[index] - s;
-                let dy = first.affine.y()[index] - y;
-                let lhs = second.s_centered[index] * y + s * second.centered.y()[index];
-                let expected = if nonneg(index) {
-                    s * y + (first.sigma * mu) - ds * dy
-                } else {
-                    0.0
-                };
+            for (index, expected) in expected.into_iter().enumerate() {
+                let lhs = second.s_centered[index] * state.y()[index]
+                    + state.s()[index] * second.centered.y()[index];
                 assert_close(lhs, expected);
             }
         }
@@ -782,7 +779,7 @@ mod tests {
         let first = predictor(&geometry, &state, &scaling, &mut resolvent).unwrap();
         // Force sigma = 1 with a zero affine displacement: the corrector must
         // then be the pure centering step at target mu, i.e. r = (0, s + mu y^-1, 0).
-        let mut pure = Predictor {
+        let pure = Predictor {
             affine: ResolventSolution {
                 xy: state.x().iter().chain(state.y()).copied().collect(),
                 x_len: state.x().len(),
@@ -793,7 +790,7 @@ mod tests {
             alpha_affine: 1.0,
             sigma: 1.0,
         };
-        let second = corrector(&state, &scaling, &mut pure, &mut resolvent).unwrap();
+        let second = corrector(&state, &scaling, pure, &mut resolvent).unwrap();
         let r_y = state
             .s()
             .iter()
