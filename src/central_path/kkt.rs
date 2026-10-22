@@ -464,7 +464,6 @@ impl KktWorkspace {
                     d_diagonal,
                     (x, y),
                     &mut self.initial_residual,
-                    false,
                 );
                 // z <- z + M^-1 (rhs - K z). Keeping z preserves components
                 // that the diagonally clamped preconditioner corrects slowly.
@@ -514,7 +513,6 @@ impl KktWorkspace {
                     d_diagonal,
                     solution.split_at(problem.variable_count()),
                     out,
-                    false,
                 );
             },
             |solution, rhs, residual, denominator| {
@@ -562,7 +560,7 @@ fn build_pattern(
     let mut p_diagonal = vec![0.0; n];
     if let Some(p) = problem.p() {
         for (index, value) in p_diagonal.iter_mut().enumerate() {
-            *value = matrix_value(p, index, index);
+            *value = p.get(index, index).unwrap_or(0.0);
         }
     }
     Ok((
@@ -652,32 +650,29 @@ fn assemble_sparse_k(
     Ok(CscMatrix::new(dim, dim, pointers, rows, values)?)
 }
 
-/// `out -= K u` for the full shifted matrix `K = [P + shift I, A^T; A, -diag(d)]`,
-/// or `out += |K| |u|` when `magnitudes`.
+/// `out -= K u` for the full shifted matrix `K = [P + shift I, A^T; A, -diag(d)]`.
 pub(crate) fn apply_full_system(
     problem: &Problem,
     shift: f64,
     d_diagonal: &[f64],
     (x, y): (&[f64], &[f64]),
     out: &mut [f64],
-    magnitudes: bool,
 ) {
     let n = problem.variable_count();
     let (out_x, out_y) = out.split_at_mut(n);
-    let sign = |value: f64| if magnitudes { value.abs() } else { -value };
     if let Some(p) = problem.p() {
-        crate::linear_algebra::symmetric_accumulate(p, x, [out_x], |product| [sign(product)]);
+        crate::linear_algebra::symmetric_accumulate(p, x, [out_x], |product| [-product]);
     }
-    crate::linear_algebra::update(out_x, x, |out, x| out + sign(shift * x));
+    crate::linear_algebra::update(out_x, x, |out, x| out - shift * x);
     crate::linear_algebra::constraint_accumulate(problem.a(), x, y, [out_x], [out_y], |product| {
-        [sign(product)]
+        [-product]
     });
     faer::zip!(
         faer::ColMut::from_slice_mut(out_y),
         faer::ColRef::from_slice(y),
         faer::ColRef::from_slice(d_diagonal)
     )
-    .for_each(|faer::unzip!(out, y, d)| *out += sign(-d * y));
+    .for_each(|faer::unzip!(out, y, d)| *out += d * y);
 }
 
 /// Initialize the residual and its componentwise denominator in one sparse pass.
@@ -725,10 +720,6 @@ pub(crate) fn full_residual_and_denominator(
         residual[n + index] += -product;
         denominator[n + index] += product.abs();
     }
-}
-
-pub(crate) fn matrix_value(matrix: &CscMatrix, row: usize, column: usize) -> f64 {
-    matrix.get(row.min(column), row.max(column)).unwrap_or(0.0)
 }
 
 #[cfg(test)]
