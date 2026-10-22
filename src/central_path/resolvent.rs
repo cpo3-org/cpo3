@@ -130,11 +130,13 @@ impl<'a> Resolvent<'a> {
         let (x2, y2) = cache.direction().split_at(n);
         // Positive identity from the KKT equations, with d = H + shift I.
         let alpha = tau_leading_coefficient(shift, x2, y2, &d_diagonal);
-        let direction_quadratic = problem
-            .p_mul_opt(x2)
-            .as_ref()
-            .map_or(0.0, |px2| dot(x2, px2));
-        let mut dual_residual = problem.p_mul(state.x());
+        let (direction_quadratic, mut dual_residual) = match problem.p() {
+            Some(p) => {
+                let (px2, px) = crate::linear_algebra::symmetric_mul_pair(p, x2, state.x());
+                (dot(x2, &px2), px)
+            }
+            None => (0.0, vec![0.0; n]),
+        };
         for (out, c) in dual_residual.iter_mut().zip(problem.c()) {
             *out += state.tau() * c;
         }
