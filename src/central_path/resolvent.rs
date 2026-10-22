@@ -78,9 +78,6 @@ pub(crate) struct Resolvent<'a> {
     /// Present only when the preconditioner modifies the true diagonal.
     d_factor: Option<Vec<f64>>,
     alpha: f64,
-    /// Anchor contribution tau_a (-c, b) - K z_a, shared by every RHS.
-    #[cfg(test)]
-    rhs_offset: Vec<f64>,
     /// P x_a + A' y_a + c tau_a, without any resolvent shift.
     dual_residual: Vec<f64>,
     /// b tau_a - A x_a, without forming and then subtracting the slack.
@@ -151,25 +148,6 @@ impl<'a> Resolvent<'a> {
             |product| [product],
         );
         crate::linear_algebra::scale(&mut primal_rhs, -1.0);
-        #[cfg(test)]
-        let rhs_offset = {
-            let mut rhs = Vec::with_capacity(n + problem.constraint_count());
-            rhs.extend(
-                dual_residual
-                    .iter()
-                    .zip(state.x())
-                    .map(|(rd, x)| -rd - shift * x),
-            );
-            rhs.extend(
-                primal_rhs
-                    .iter()
-                    .zip(&d_diagonal)
-                    .zip(state.y())
-                    .map(|((primal, d), y)| primal + d * y),
-            );
-            rhs
-        };
-
         Ok(Self {
             problem,
             cache,
@@ -177,53 +155,12 @@ impl<'a> Resolvent<'a> {
             d_diagonal,
             d_factor,
             alpha,
-            #[cfg(test)]
-            rhs_offset,
             dual_residual,
             primal_rhs,
             direction_quadratic,
             state,
             fallback: OnceCell::new(),
         })
-    }
-
-    /// Solve the shifted system with right-hand side `(r_x, r_y, r_tau)` at
-    /// target `mu`, accepting zero tau candidates without a boundary marker.
-    #[cfg(test)]
-    pub(crate) fn solve(
-        &mut self,
-        r_x: &[f64],
-        r_y: &[f64],
-        r_tau: f64,
-        mu: f64,
-    ) -> Result<ResolventSolution, ResolventError> {
-        let n = self.problem.variable_count();
-        let m = self.problem.constraint_count();
-        crate::linear_solvers::validate_rhs(n, r_x)?;
-        crate::linear_solvers::validate_rhs(m, r_y)?;
-        let mut rhs = Vec::with_capacity(n + m);
-        rhs.extend_from_slice(r_x);
-        rhs.extend(r_y.iter().map(|value| -value));
-        self.solve_rhs(&rhs, r_tau, mu)
-    }
-
-    /// `solve` with the stacked right-hand side `(r_x, -r_y)` prebuilt.
-    /// Solve this changing right-hand side directly; only the constant data
-    /// direction is carried between factorizations.
-    #[cfg(test)]
-    pub(crate) fn solve_rhs(
-        &mut self,
-        rhs: &[f64],
-        r_tau: f64,
-        mu: f64,
-    ) -> Result<ResolventSolution, ResolventError> {
-        let n = self.problem.variable_count();
-        let m = self.problem.constraint_count();
-        crate::linear_solvers::validate_rhs(n + m, rhs)?;
-
-        let mut residual = rhs.to_vec();
-        crate::linear_algebra::add_assign(&mut residual, &self.rhs_offset);
-        self.solve_increment_rhs(&residual, r_tau, mu)
     }
 
     /// The cached mu-target solution of K z = (-c, b).

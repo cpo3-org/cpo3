@@ -398,7 +398,11 @@ fn difference(left: &[f64], right: &[f64]) -> Vec<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cone, LinearSolver, Problem, linear_solvers::LinearSystemError};
+    use crate::{
+        Cone, LinearSolver, Problem,
+        linear_algebra::{dot, matrix_mul, matrix_transpose_mul},
+        linear_solvers::LinearSystemError,
+    };
 
     const TOLERANCE: f64 = 1e-12;
 
@@ -569,23 +573,28 @@ mod tests {
             .collect::<Vec<_>>();
         let r_tau = weight * first.affine.tau;
         let result = corrector(&state, &scaling, first, &mut resolvent).unwrap();
-        let expected = resolvent.solve(&rx, &ry, r_tau, target).unwrap();
-        for (actual, expected) in result
-            .centered
-            .x()
-            .iter()
-            .chain(result.centered.y())
-            .chain(std::iter::once(&result.centered.tau))
-            .zip(
-                expected
-                    .x()
-                    .iter()
-                    .chain(expected.y())
-                    .chain(std::iter::once(&expected.tau)),
-            )
-        {
-            assert_close(*actual, *expected);
+        // Check the point-coordinate equations independently of RHS assembly.
+        let point = result.centered;
+        let px = problem.p_mul(point.x());
+        let aty = matrix_transpose_mul(problem.a(), point.y());
+        let ax = matrix_mul(problem.a(), point.x());
+        for i in 0..problem.variable_count() {
+            assert_close(
+                px[i] + mu * point.x()[i] + aty[i] + problem.c()[i] * point.tau,
+                rx[i],
+            );
         }
+        for i in 0..problem.constraint_count() {
+            assert_close(
+                ax[i] - (scaling.d[i] + mu) * point.y()[i] - problem.b()[i] * point.tau,
+                -ry[i],
+            );
+        }
+        let q = dot(problem.c(), point.x()) + dot(problem.b(), point.y());
+        assert_close(
+            mu * point.tau * point.tau - r_tau * point.tau - q * point.tau - dot(point.x(), &px),
+            target,
+        );
     }
 
     #[test]
@@ -791,13 +800,18 @@ mod tests {
             sigma: 1.0,
         };
         let second = corrector(&state, &scaling, pure, &mut resolvent).unwrap();
-        let r_y = state
-            .s()
-            .iter()
-            .zip(&scaling.y_inverse)
-            .map(|(s, y_inverse)| s + mu * y_inverse)
-            .collect::<Vec<_>>();
-        let direct = resolvent.solve(&[0.0; 2], &r_y, 0.0, mu).unwrap();
+        // For pure centering, subtract K z_a from tau_a (-c, b) + (0, -s - mu/y).
+        let aty = matrix_transpose_mul(problem.a(), state.y());
+        let ax = matrix_mul(problem.a(), state.x());
+        let mut residual: Vec<_> = (0..problem.variable_count())
+            .map(|i| -aty[i] - problem.c()[i] * state.tau() - mu * state.x()[i])
+            .collect();
+        residual.extend((0..problem.constraint_count()).map(|i| {
+            problem.b()[i] * state.tau() - ax[i] + (scaling.d[i] + mu) * state.y()[i]
+                - state.s()[i]
+                - mu * scaling.y_inverse[i]
+        }));
+        let direct = resolvent.solve_increment_rhs(&residual, 0.0, mu).unwrap();
         assert_close(second.centered.tau, direct.tau);
         for index in 0..2 {
             assert_close(second.centered.x()[index], direct.x()[index]);
