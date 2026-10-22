@@ -46,42 +46,49 @@ impl KktError {
 /// Per-solve cache: the KKT sparsity pattern and a reusable factorization.
 ///
 /// Only the diagonal of the KKT matrix changes between iterations, so the
-/// pattern is assembled once and the factorization's symbolic analysis is
-/// reused through `refactor`.
+/// layout and symbolic analysis are reused after the first successful
+/// factorization. Failed initial attempts retain the layout for clamp decisions.
 #[derive(Default)]
 pub(crate) struct KktCache {
-    pub(crate) pattern: Option<KktPattern>,
-    pub(crate) factorization: Option<Factorization>,
+    // Layout may exist before the first successful numeric factorization.
+    pattern: Option<KktPattern>,
+    workspace: KktWorkspace,
+    factorization: Option<Factorization>,
     /// The constant `(-c, b)` right-hand side, built on first use.
-    pub(crate) constant_rhs: Vec<f64>,
+    constant_rhs: Vec<f64>,
     /// Its latest solution, retained across outer iterations of this solve.
-    pub(crate) direction: Vec<f64>,
+    direction: Vec<f64>,
     /// Retain ownership of the preceding seed until the outer step succeeds.
-    pub(crate) direction_before_step: Option<Vec<f64>>,
+    direction_before_step: Option<Vec<f64>>,
     /// Adaptive diagonal clamp, applied only to the preconditioner.
     pub(crate) clamp_floor: Option<f64>,
     pub(crate) clamp_increases: usize,
     pub(crate) clamp_decreases: usize,
     /// Numeric dispatches, including failed initial factorizations.
-    pub(crate) factorizations: usize,
+    factorizations: usize,
 }
 
 /// The reduced KKT matrix pattern: bound rows are eliminated by Schur
 /// complement, so the matrix has `n + kept` rows.
-pub(crate) struct KktPattern {
+struct KktPattern {
     variable_count: usize,
     /// Position of each diagonal entry in the matrix's value storage.
-    pub(crate) diagonal_positions: Vec<usize>,
+    diagonal_positions: Vec<usize>,
     /// Diagonal of `P`.
     p_diagonal: Vec<f64>,
-    pub(crate) bound_rows: BoundRows,
+    bound_rows: BoundRows,
+}
+
+/// Mutable buffers reused across factorizations and right-hand sides.
+#[derive(Default)]
+struct KktWorkspace {
     /// Full-system residual used for the first correction of a warm start.
     initial_residual: Vec<f64>,
     refinement: RefinementWorkspace,
     /// The perturbation is shared by every RHS of the current factorization.
     perturbation_ready: bool,
     /// Scratch storage reused by predictor/corrector reconstruction within a solve.
-    pub(crate) reconstruction: Vec<f64>,
+    reconstruction: Vec<f64>,
 }
 
 /// Nonnegative singleton rows of `A`, eliminated from the factorized system.
@@ -91,11 +98,11 @@ pub(crate) struct KktPattern {
 /// `a^2 / d_i` to the `(j, j)` diagonal and `a r_i / d_i` to the `x_j`
 /// right-hand side.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct BoundRows {
+struct BoundRows {
     /// `(row, column, coefficient)` of each eliminated row.
-    pub(crate) eliminated: Vec<(usize, usize, f64)>,
+    eliminated: Vec<(usize, usize, f64)>,
     /// Original row index of each kept row.
-    pub(crate) kept: Vec<usize>,
+    kept: Vec<usize>,
 }
 
 impl BoundRows {
@@ -135,6 +142,127 @@ impl BoundRows {
 impl KktCache {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    /// Factorize the clamped preconditioner `[P + shift I, A^T; A, -diag(d)]`
+    /// with `d = factor_diagonal`, reusing the cached pattern and symbolic
+    /// analysis when present, and reject factors with the wrong inertia.
+    pub(crate) fn prepare(
+        &mut self,
+        problem: &Problem,
+        geometry: &ConeGeometry,
+        shift: f64,
+        factor_diagonal: &[f64],
+        kkt: &KktSettings,
+    ) -> Result<(), KktError> {
+        self.workspace.perturbation_ready = false;
+        match (self.factorization.as_mut(), self.pattern.as_ref()) {
+            (Some(factorization), Some(pattern)) => {
+                factorization.set_strict_refinement(kkt.strict_refinement);
+                factorization.set_clamp_floor(kkt.diagonal_floor);
+                factorization.update_diagonal_and_refactor(&mut self.factorizations, |values| {
+                    pattern.write_diagonal(
+                        values,
+                        |index| index,
+                        shift,
+                        factor_diagonal,
+                        kkt.diagonal_floor,
+                    )
+                })?;
+            }
+            _ => {
+                let (k, pattern) = assemble_preconditioner(
+                    problem,
+                    geometry,
+                    shift,
+                    factor_diagonal,
+                    kkt.diagonal_floor,
+                    kkt.eliminate_bound_rows,
+                )?;
+                self.pattern = Some(pattern);
+                self.factorization = Some(Factorization::new_counted(
+                    k,
+                    kkt,
+                    &mut self.factorizations,
+                )?);
+            }
+        }
+        self.factorization
+            .as_mut()
+            .expect("the factorization was just stored")
+            .check_inertia(problem.variable_count())
+            .map_err(KktError::from)
+    }
+
+    /// Refine a right-hand side after `prepare` succeeds for this system.
+    pub(crate) fn solve(
+        &mut self,
+        problem: &Problem,
+        shift: f64,
+        d_diagonal: &[f64],
+        d_factor: &[f64],
+        rhs: &[f64],
+    ) -> Result<Vec<f64>, LinearSystemError> {
+        self.workspace.solve(
+            self.pattern
+                .as_ref()
+                .expect("prepare stores the KKT layout"),
+            problem,
+            self.factorization
+                .as_mut()
+                .expect("prepare stores the KKT factors"),
+            shift,
+            d_diagonal,
+            d_factor,
+            rhs,
+            None,
+        )
+    }
+
+    /// Refresh the constant column while retaining the accepted step's seed.
+    pub(crate) fn prepare_direction(
+        &mut self,
+        problem: &Problem,
+        shift: f64,
+        d_diagonal: &[f64],
+        d_factor: &[f64],
+    ) -> Result<(), LinearSystemError> {
+        let n = problem.variable_count();
+        if self.constant_rhs.is_empty() {
+            self.constant_rhs.reserve(n + problem.constraint_count());
+            self.constant_rhs
+                .extend(problem.c().iter().map(|value| -value));
+            self.constant_rhs.extend_from_slice(problem.b());
+        }
+        let initial = (!self.direction.is_empty()).then(|| self.direction.split_at(n));
+        let next = self.workspace.solve(
+            self.pattern
+                .as_ref()
+                .expect("prepare stores the KKT layout"),
+            problem,
+            self.factorization
+                .as_mut()
+                .expect("prepare stores the KKT factors"),
+            shift,
+            d_diagonal,
+            d_factor,
+            &self.constant_rhs,
+            initial,
+        )?;
+        self.direction_before_step = Some(std::mem::replace(&mut self.direction, next));
+        Ok(())
+    }
+
+    pub(crate) fn direction(&self) -> &[f64] {
+        &self.direction
+    }
+
+    pub(crate) fn take_reconstruction(&mut self) -> Vec<f64> {
+        std::mem::take(&mut self.workspace.reconstruction)
+    }
+
+    pub(crate) fn put_reconstruction(&mut self, buffer: Vec<f64>) {
+        self.workspace.reconstruction = buffer;
     }
 
     /// Commit the new constant column, or restore the seed of a failed step.
@@ -199,106 +327,25 @@ pub(crate) fn solve_shifted_systems(
         .iter()
         .map(|entry| (entry + shift + regularization).max(kkt.diagonal_floor))
         .collect::<Vec<_>>();
-    factorize(
-        problem,
-        geometry,
-        shift + regularization,
-        &d_factor,
-        kkt,
-        cache,
-    )?;
-    let KktCache {
-        pattern,
-        factorization,
-        ..
-    } = cache;
-    let pattern = pattern.as_mut().expect("the pattern was just stored");
-    let factorization = factorization
-        .as_mut()
-        .expect("the factorization was just stored");
+    cache.prepare(problem, geometry, shift + regularization, &d_factor, kkt)?;
     right_hand_sides
         .iter()
-        .map(|rhs| {
-            Ok(pattern.solve(
-                problem,
-                factorization,
-                shift,
-                &d_diagonal,
-                &d_factor,
-                rhs,
-                None,
-            )?)
-        })
+        .map(|rhs| Ok(cache.solve(problem, shift, &d_diagonal, &d_factor, rhs)?))
         .collect()
-}
-
-/// Factorize the clamped preconditioner `[P + shift I, A^T; A, -diag(d)]`
-/// with `d = factor_diagonal`, reusing the cached pattern and symbolic
-/// analysis when present, and reject factors with the wrong inertia.
-pub(crate) fn factorize(
-    problem: &Problem,
-    geometry: &ConeGeometry,
-    shift: f64,
-    factor_diagonal: &[f64],
-    kkt: &KktSettings,
-    cache: &mut KktCache,
-) -> Result<(), KktError> {
-    if let Some(pattern) = cache.pattern.as_mut() {
-        pattern.perturbation_ready = false;
-    }
-    match (cache.factorization.as_mut(), cache.pattern.as_ref()) {
-        (Some(factorization), Some(pattern)) => {
-            factorization.set_strict_refinement(kkt.strict_refinement);
-            factorization.set_clamp_floor(kkt.diagonal_floor);
-            factorization.update_diagonal_and_refactor(&mut cache.factorizations, |values| {
-                pattern.write_diagonal(
-                    values,
-                    |index| index,
-                    problem.variable_count(),
-                    shift,
-                    factor_diagonal,
-                    kkt.diagonal_floor,
-                )
-            })?;
-        }
-        _ => {
-            let k = assemble_preconditioner(
-                problem,
-                geometry,
-                shift,
-                factor_diagonal,
-                kkt.diagonal_floor,
-                kkt.eliminate_bound_rows,
-                cache,
-            )?;
-            cache.factorization = Some(Factorization::new_counted(
-                k,
-                kkt,
-                &mut cache.factorizations,
-            )?);
-        }
-    }
-    cache
-        .factorization
-        .as_mut()
-        .expect("the factorization was just stored")
-        .check_inertia(problem.variable_count())
-        .map_err(KktError::from)
 }
 
 /// Assemble the clamped preconditioner with bound rows folded into the
 /// `(1,1)` block when `eliminate_bound_rows`; `d_diagonal` is already clamped,
-/// returning the initial matrix and retaining its update metadata in the cache.
+/// returning the initial matrix and its fixed layout.
 /// Subsequent factorization updates use `KktPattern::write_diagonal` directly.
-pub(crate) fn assemble_preconditioner(
+fn assemble_preconditioner(
     problem: &Problem,
     geometry: &ConeGeometry,
     shift: f64,
     d_diagonal: &[f64],
     diagonal_floor: f64,
     eliminate_bound_rows: bool,
-    cache: &mut KktCache,
-) -> Result<CscMatrix, KktError> {
+) -> Result<(CscMatrix, KktPattern), KktError> {
     if d_diagonal.len() != problem.constraint_count()
         || !d_diagonal
             .iter()
@@ -315,27 +362,25 @@ pub(crate) fn assemble_preconditioner(
     pattern.write_diagonal(
         values,
         |index| pattern.diagonal_positions[index],
-        problem.variable_count(),
         shift,
         d_diagonal,
         diagonal_floor,
     );
-    cache.pattern = Some(pattern);
-    Ok(matrix)
+    Ok((matrix, pattern))
 }
 
 impl KktPattern {
     /// Clamp the full primal diagonal before adding singleton Schur terms.
     /// `d_diagonal` contains the already clamped factor dual diagonal.
-    pub(crate) fn write_diagonal(
+    fn write_diagonal(
         &self,
         values: &mut [f64],
         position: impl Fn(usize) -> usize,
-        n: usize,
         shift: f64,
         d_diagonal: &[f64],
         delta: f64,
     ) {
+        let n = self.variable_count;
         for index in 0..self.diagonal_positions.len() {
             values[position(index)] = if index < n {
                 (self.p_diagonal[index] + shift).max(delta)
@@ -348,104 +393,9 @@ impl KktPattern {
         }
     }
 
-    /// Refine against the full true system while applying the clamped
-    /// preconditioner, with or without singleton elimination.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn solve(
-        &mut self,
-        problem: &Problem,
-        factorization: &mut Factorization,
-        shift: f64,
-        d_diagonal: &[f64],
-        d_factor: &[f64],
-        rhs: &[f64],
-        initial: Option<(&[f64], &[f64])>,
-    ) -> Result<Vec<f64>, LinearSystemError> {
-        validate_rhs(problem.variable_count() + problem.constraint_count(), rhs)?;
-        factorization.stats_mut().primary_solves += 1;
-        let initial = match initial {
-            Some((x, y)) => {
-                debug_assert_eq!(x.len(), problem.variable_count());
-                debug_assert_eq!(y.len(), problem.constraint_count());
-                self.initial_residual.clear();
-                self.initial_residual.extend_from_slice(rhs);
-                apply_full_system(
-                    problem,
-                    shift,
-                    d_diagonal,
-                    (x, y),
-                    &mut self.initial_residual,
-                    false,
-                );
-                // z <- z + M^-1 (rhs - K z). Keeping z preserves components
-                // that the diagonally clamped preconditioner corrects slowly.
-                let mut solution =
-                    self.solve_preconditioner(factorization, d_factor, &self.initial_residual)?;
-                let (solution_x, solution_y) = solution.split_at_mut(x.len());
-                crate::linear_algebra::add_assign(solution_x, x);
-                crate::linear_algebra::add_assign(solution_y, y);
-                solution
-            }
-            None => self.solve_preconditioner(factorization, d_factor, rhs)?,
-        };
-        let mut stats = LinearAlgebraStats::default();
-        let mut workspace = std::mem::take(&mut self.refinement);
-        if !self.perturbation_ready {
-            workspace.perturbation.clear();
-            let floor = factorization.settings().diagonal_floor;
-            if floor > shift {
-                workspace.perturbation.extend(
-                    self.p_diagonal
-                        .iter()
-                        .map(|p| (floor - (p + shift)).max(0.0)),
-                );
-                workspace.perturbation.extend(
-                    d_diagonal
-                        .iter()
-                        .zip(d_factor)
-                        .map(|(target, factor)| target - factor),
-                );
-            }
-            self.perturbation_ready = true;
-        }
-        let result = refine_with(
-            rhs,
-            initial,
-            &factorization.settings(),
-            &mut workspace,
-            |solution, rhs, out| {
-                out.copy_from_slice(rhs);
-                apply_full_system(
-                    problem,
-                    shift,
-                    d_diagonal,
-                    solution.split_at(problem.variable_count()),
-                    out,
-                    false,
-                );
-            },
-            |solution, rhs, residual, denominator| {
-                full_residual_and_denominator(
-                    problem,
-                    shift,
-                    d_diagonal,
-                    solution,
-                    rhs,
-                    residual,
-                    denominator,
-                );
-            },
-            |residual, out| self.solve_preconditioner_into(factorization, d_factor, residual, out),
-            &mut stats,
-        );
-        self.refinement = workspace;
-        factorization.stats_mut().absorb(stats);
-        result
-    }
-
     /// One reduced solve: fold the bound-row right-hand sides into `x`, solve
     /// `n + kept` rows, and recover the eliminated duals.
-    pub(crate) fn solve_preconditioner(
+    fn solve_preconditioner(
         &self,
         factorization: &mut Factorization,
         d_diagonal: &[f64],
@@ -491,7 +441,110 @@ impl KktPattern {
     }
 }
 
-pub(crate) fn build_pattern(
+impl KktWorkspace {
+    /// Refine against the full true system while applying the clamped
+    /// preconditioner, with or without singleton elimination.
+    #[allow(clippy::too_many_arguments)]
+    fn solve(
+        &mut self,
+        pattern: &KktPattern,
+        problem: &Problem,
+        factorization: &mut Factorization,
+        shift: f64,
+        d_diagonal: &[f64],
+        d_factor: &[f64],
+        rhs: &[f64],
+        initial: Option<(&[f64], &[f64])>,
+    ) -> Result<Vec<f64>, LinearSystemError> {
+        validate_rhs(problem.variable_count() + problem.constraint_count(), rhs)?;
+        factorization.stats_mut().primary_solves += 1;
+        let initial = match initial {
+            Some((x, y)) => {
+                debug_assert_eq!(x.len(), problem.variable_count());
+                debug_assert_eq!(y.len(), problem.constraint_count());
+                self.initial_residual.clear();
+                self.initial_residual.extend_from_slice(rhs);
+                apply_full_system(
+                    problem,
+                    shift,
+                    d_diagonal,
+                    (x, y),
+                    &mut self.initial_residual,
+                    false,
+                );
+                // z <- z + M^-1 (rhs - K z). Keeping z preserves components
+                // that the diagonally clamped preconditioner corrects slowly.
+                let mut solution = pattern.solve_preconditioner(
+                    factorization,
+                    d_factor,
+                    &self.initial_residual,
+                )?;
+                let (solution_x, solution_y) = solution.split_at_mut(x.len());
+                crate::linear_algebra::add_assign(solution_x, x);
+                crate::linear_algebra::add_assign(solution_y, y);
+                solution
+            }
+            None => pattern.solve_preconditioner(factorization, d_factor, rhs)?,
+        };
+        let mut stats = LinearAlgebraStats::default();
+        let workspace = &mut self.refinement;
+        if !self.perturbation_ready {
+            workspace.perturbation.clear();
+            let floor = factorization.settings().diagonal_floor;
+            if floor > shift {
+                workspace.perturbation.extend(
+                    pattern
+                        .p_diagonal
+                        .iter()
+                        .map(|p| (floor - (p + shift)).max(0.0)),
+                );
+                workspace.perturbation.extend(
+                    d_diagonal
+                        .iter()
+                        .zip(d_factor)
+                        .map(|(target, factor)| target - factor),
+                );
+            }
+            self.perturbation_ready = true;
+        }
+        let result = refine_with(
+            rhs,
+            initial,
+            &factorization.settings(),
+            workspace,
+            |solution, rhs, out| {
+                out.copy_from_slice(rhs);
+                apply_full_system(
+                    problem,
+                    shift,
+                    d_diagonal,
+                    solution.split_at(problem.variable_count()),
+                    out,
+                    false,
+                );
+            },
+            |solution, rhs, residual, denominator| {
+                full_residual_and_denominator(
+                    problem,
+                    shift,
+                    d_diagonal,
+                    solution,
+                    rhs,
+                    residual,
+                    denominator,
+                );
+            },
+            |residual, out| {
+                pattern.solve_preconditioner_into(factorization, d_factor, residual, out)
+            },
+            &mut stats,
+        );
+        factorization.stats_mut().absorb(stats);
+        result
+    }
+}
+
+fn build_pattern(
     problem: &Problem,
     geometry: &ConeGeometry,
     shift: f64,
@@ -525,10 +578,6 @@ pub(crate) fn build_pattern(
             diagonal_positions,
             p_diagonal,
             bound_rows,
-            initial_residual: Vec::new(),
-            refinement: RefinementWorkspace::default(),
-            perturbation_ready: false,
-            reconstruction: Vec::new(),
         },
     ))
 }
@@ -694,6 +743,81 @@ mod cache_tests {
     use crate::{Cone, LinearSolver};
 
     #[test]
+    fn failed_factorization_retains_layout_and_can_be_retried() {
+        let problem = Problem::new(
+            None,
+            vec![-2.0],
+            CscMatrix::zeros(1, 1).unwrap(),
+            vec![1.0],
+            vec![Cone::Zero(1)],
+        )
+        .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+            let settings = KktSettings {
+                diagonal_floor: 0.0,
+                ..KktSettings::new(solver)
+            };
+            let mut cache = KktCache::new();
+            let error = cache
+                .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
+                .unwrap_err();
+            assert!(cache.pattern.is_some());
+            // Inertia rejection happens after construction; numeric failure does not.
+            assert_eq!(
+                cache.factorization.is_some(),
+                matches!(
+                    error,
+                    KktError::LinearSystem(LinearSystemError::WrongInertia { .. })
+                )
+            );
+            assert_eq!(cache.stats().factorizations, 1);
+            assert_eq!(cache.nonbinding_floor_limit(0.1), 0.1);
+            cache
+                .prepare(&problem, &geometry, 1.0, &[1.0], &settings)
+                .unwrap();
+            let result = cache
+                .solve(&problem, 1.0, &[1.0], &[1.0], &[2.0, 1.0])
+                .unwrap();
+            assert_eq!(result, vec![2.0, -1.0]);
+            assert_eq!(cache.stats().factorizations, 2);
+        }
+    }
+
+    #[test]
+    fn rejected_step_restores_the_accepted_direction() {
+        let problem = Problem::new(
+            None,
+            vec![-2.0],
+            CscMatrix::zeros(1, 1).unwrap(),
+            vec![1.0],
+            vec![Cone::Zero(1)],
+        )
+        .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let settings = KktSettings::new(LinearSolver::Faer);
+        let mut cache = KktCache::new();
+        for (shift, accepted, expected) in [
+            (1.0, false, vec![]),
+            (1.0, true, vec![2.0, -1.0]),
+            (2.0, false, vec![2.0, -1.0]),
+            (2.0, true, vec![1.0, -0.5]),
+        ] {
+            cache
+                .prepare(&problem, &geometry, shift, &[shift], &settings)
+                .unwrap();
+            cache
+                .prepare_direction(&problem, shift, &[shift], &[shift])
+                .unwrap();
+            assert_eq!(cache.direction(), &[2.0 / shift, -1.0 / shift]);
+            cache.finish_step(accepted);
+            assert_eq!(cache.direction(), expected);
+        }
+        assert_eq!(cache.stats().factorizations, 4);
+        assert_eq!(cache.stats().primary_solves, 4);
+    }
+
+    #[test]
     fn refinement_solves_the_true_system_with_a_clamped_primal_diagonal() {
         let problem = Problem::new(
             Some(CscMatrix::from_triplets(1, 1, vec![0], vec![0], vec![1e-14]).unwrap()),
@@ -711,20 +835,11 @@ mod cache_tests {
             ..crate::Settings::default()
         });
         let mut cache = KktCache::new();
-        factorize(&problem, &geometry, 0.0, &[1.0], &settings, &mut cache).unwrap();
+        cache
+            .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
+            .unwrap();
         let solution = cache
-            .pattern
-            .as_mut()
-            .unwrap()
-            .solve(
-                &problem,
-                cache.factorization.as_mut().unwrap(),
-                0.0,
-                &[1.0],
-                &[1.0],
-                &[2.0 + 1e-14, -1.0],
-                None,
-            )
+            .solve(&problem, 0.0, &[1.0], &[1.0], &[2.0 + 1e-14, -1.0])
             .unwrap();
         assert!((solution[0] - 1.0).abs() < 1e-10);
         assert!((solution[1] - 2.0).abs() < 1e-10);
@@ -752,24 +867,24 @@ mod cache_tests {
                 ..KktSettings::new(LinearSolver::Faer)
             };
             let factor = [target[0].max(floor)];
-            factorize(&problem, &geometry, shift, &factor, &settings, &mut cache).unwrap();
-            let pattern = cache.pattern.as_mut().unwrap();
-            let factorization = cache.factorization.as_mut().unwrap();
-            assert!(!pattern.perturbation_ready);
+            cache
+                .prepare(&problem, &geometry, shift, &factor, &settings)
+                .unwrap();
+            assert!(!cache.workspace.perturbation_ready);
             for rhs in [[1.0, 2.0], [-3.0, 1.0]] {
-                let result = pattern
-                    .solve(&problem, factorization, shift, &target, &factor, &rhs, None)
+                let result = cache
+                    .solve(&problem, shift, &target, &factor, &rhs)
                     .unwrap();
                 assert!((1.1 * result[0] + result[1] - rhs[0]).abs() < 1e-5);
                 assert!((result[0] - 0.15 * result[1] - rhs[1]).abs() < 1e-5);
-                assert!(pattern.perturbation_ready);
+                assert!(cache.workspace.perturbation_ready);
                 if floor > shift {
                     assert_eq!(
-                        pattern.refinement.perturbation,
+                        cache.workspace.refinement.perturbation,
                         vec![0.0, target[0] - factor[0]]
                     );
                 } else {
-                    assert!(pattern.refinement.perturbation.is_empty());
+                    assert!(cache.workspace.refinement.perturbation.is_empty());
                 }
             }
         }
