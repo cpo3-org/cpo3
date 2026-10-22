@@ -284,7 +284,8 @@ impl KktCache {
         shift: f64,
         d_diagonal: &[f64],
         d_factor: &[f64],
-    ) -> Result<(), LinearSystemError> {
+        predictor_rhs: Option<&[f64]>,
+    ) -> Result<Option<Vec<f64>>, LinearSystemError> {
         let n = problem.variable_count();
         if self.constant_rhs.is_empty() {
             self.constant_rhs.reserve(n + problem.constraint_count());
@@ -293,22 +294,45 @@ impl KktCache {
             self.constant_rhs.extend_from_slice(problem.b());
         }
         let initial = (!self.direction.is_empty()).then(|| self.direction.split_at(n));
-        let next = self.workspace.solve(
-            self.pattern
-                .as_ref()
-                .expect("prepare stores the KKT layout"),
-            problem,
-            self.factorization
-                .as_mut()
-                .expect("prepare stores the KKT factors"),
-            shift,
-            d_diagonal,
-            d_factor,
-            &self.constant_rhs,
-            initial,
-        )?;
+        let pattern = self
+            .pattern
+            .as_ref()
+            .expect("prepare stores the KKT layout");
+        let factorization = self
+            .factorization
+            .as_mut()
+            .expect("prepare stores the KKT factors");
+        let (next, predictor) = match predictor_rhs {
+            Some(rhs) => {
+                let (next, predictor) = self.workspace.solve_pair(
+                    pattern,
+                    problem,
+                    factorization,
+                    shift,
+                    d_diagonal,
+                    d_factor,
+                    &self.constant_rhs,
+                    initial,
+                    rhs,
+                )?;
+                (next, Some(predictor))
+            }
+            None => (
+                self.workspace.solve(
+                    pattern,
+                    problem,
+                    factorization,
+                    shift,
+                    d_diagonal,
+                    d_factor,
+                    &self.constant_rhs,
+                    initial,
+                )?,
+                None,
+            ),
+        };
         self.direction_before_step = Some(std::mem::replace(&mut self.direction, next));
-        Ok(())
+        Ok(predictor)
     }
 
     pub(crate) fn direction(&self) -> &[f64] {
@@ -475,24 +499,58 @@ impl KktPattern {
         if self.bound_rows.eliminated.is_empty() {
             return factorization.solve_unrefined_into(rhs, full);
         }
-        let n = self.variable_count;
-        let bound_rows = &self.bound_rows;
         reduced.clear();
-        reduced.extend_from_slice(&rhs[..n]);
-        for &(row, column, coefficient) in &bound_rows.eliminated {
-            reduced[column] += coefficient * rhs[n + row] / d_diagonal[row];
-        }
-        reduced.extend(bound_rows.kept.iter().map(|&row| rhs[n + row]));
+        self.append_reduced_rhs(d_diagonal, rhs, reduced);
         factorization.solve_unrefined_in_place(reduced)?;
+        self.expand_reduced_solution(d_diagonal, rhs, reduced, full);
+        Ok(())
+    }
+
+    fn append_reduced_rhs(&self, d_diagonal: &[f64], rhs: &[f64], reduced: &mut Vec<f64>) {
+        let n = self.variable_count;
+        let start = reduced.len();
+        reduced.extend_from_slice(&rhs[..n]);
+        for &(row, column, coefficient) in &self.bound_rows.eliminated {
+            reduced[start + column] += coefficient * rhs[n + row] / d_diagonal[row];
+        }
+        reduced.extend(self.bound_rows.kept.iter().map(|&row| rhs[n + row]));
+    }
+
+    fn expand_reduced_solution(
+        &self,
+        d_diagonal: &[f64],
+        rhs: &[f64],
+        reduced: &[f64],
+        full: &mut Vec<f64>,
+    ) {
+        let n = self.variable_count;
         full.resize(rhs.len(), 0.0);
         full[..n].copy_from_slice(&reduced[..n]);
-        for (index, &row) in bound_rows.kept.iter().enumerate() {
+        for (index, &row) in self.bound_rows.kept.iter().enumerate() {
             full[n + row] = reduced[n + index];
         }
-        for &(row, column, coefficient) in &bound_rows.eliminated {
+        for &(row, column, coefficient) in &self.bound_rows.eliminated {
             full[n + row] = (coefficient * reduced[column] - rhs[n + row]) / d_diagonal[row];
         }
-        Ok(())
+    }
+
+    fn solve_preconditioner_pair(
+        &self,
+        factorization: &mut Factorization,
+        d_diagonal: &[f64],
+        first: &[f64],
+        second: &[f64],
+        reduced: &mut Vec<f64>,
+    ) -> Result<(Vec<f64>, Vec<f64>), LinearSystemError> {
+        reduced.clear();
+        self.append_reduced_rhs(d_diagonal, first, reduced);
+        self.append_reduced_rhs(d_diagonal, second, reduced);
+        factorization.solve_pair_in_place(reduced)?;
+        let (a, b) = reduced.split_at(reduced.len() / 2);
+        let (mut first_solution, mut second_solution) = (Vec::new(), Vec::new());
+        self.expand_reduced_solution(d_diagonal, first, a, &mut first_solution);
+        self.expand_reduced_solution(d_diagonal, second, b, &mut second_solution);
+        Ok((first_solution, second_solution))
     }
 }
 
@@ -542,6 +600,91 @@ impl KktWorkspace {
             }
             None => pattern.solve_preconditioner(factorization, d_factor, rhs, reduced)?,
         };
+        self.refine(
+            pattern,
+            problem,
+            factorization,
+            shift,
+            d_diagonal,
+            d_factor,
+            rhs,
+            initial,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn solve_pair(
+        &mut self,
+        pattern: &KktPattern,
+        problem: &Problem,
+        factorization: &mut Factorization,
+        shift: f64,
+        d_diagonal: &[f64],
+        d_factor: &[f64],
+        first_rhs: &[f64],
+        first_seed: Option<(&[f64], &[f64])>,
+        second_rhs: &[f64],
+    ) -> Result<(Vec<f64>, Vec<f64>), LinearSystemError> {
+        let dim = problem.variable_count() + problem.constraint_count();
+        validate_rhs(dim, first_rhs)?;
+        validate_rhs(dim, second_rhs)?;
+        factorization.stats_mut().primary_solves += 2;
+        let first_correction = if let Some(seed) = first_seed {
+            self.initial_residual.clear();
+            self.initial_residual.extend_from_slice(first_rhs);
+            apply_full_system(problem, shift, d_diagonal, seed, &mut self.initial_residual);
+            self.initial_residual.as_slice()
+        } else {
+            first_rhs
+        };
+        let (mut first, second) = pattern.solve_preconditioner_pair(
+            factorization,
+            d_factor,
+            first_correction,
+            second_rhs,
+            &mut self.reduced,
+        )?;
+        if let Some((x, y)) = first_seed {
+            let (first_x, first_y) = first.split_at_mut(x.len());
+            crate::linear_algebra::add_assign(first_x, x);
+            crate::linear_algebra::add_assign(first_y, y);
+        }
+        let first = self.refine(
+            pattern,
+            problem,
+            factorization,
+            shift,
+            d_diagonal,
+            d_factor,
+            first_rhs,
+            first,
+        )?;
+        let second = self.refine(
+            pattern,
+            problem,
+            factorization,
+            shift,
+            d_diagonal,
+            d_factor,
+            second_rhs,
+            second,
+        )?;
+        Ok((first, second))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn refine(
+        &mut self,
+        pattern: &KktPattern,
+        problem: &Problem,
+        factorization: &mut Factorization,
+        shift: f64,
+        d_diagonal: &[f64],
+        d_factor: &[f64],
+        rhs: &[f64],
+        initial: Vec<f64>,
+    ) -> Result<Vec<f64>, LinearSystemError> {
+        let reduced = &mut self.reduced;
         let mut stats = LinearAlgebraStats::default();
         let workspace = &mut self.refinement;
         if !self.perturbation_ready {
@@ -898,7 +1041,7 @@ mod cache_tests {
                 .prepare(&problem, &geometry, shift, &[shift], &settings)
                 .unwrap();
             cache
-                .prepare_direction(&problem, shift, &[shift], &[shift])
+                .prepare_direction(&problem, shift, &[shift], &[shift], None)
                 .unwrap();
             assert_eq!(cache.direction(), &[2.0 / shift, -1.0 / shift]);
             cache.finish_step(accepted);
@@ -906,6 +1049,59 @@ mod cache_tests {
         }
         assert_eq!(cache.stats().factorizations, 4);
         assert_eq!(cache.stats().primary_solves, 4);
+    }
+
+    #[test]
+    fn batched_direction_and_predictor_match_separate_warm_solves() {
+        let matrix = crate::linear_algebra::test_matrix;
+        let problem = Problem::new(
+            Some(matrix(2, 2, vec![2.0, 0.5, 0.5, 3.0]).unwrap()),
+            vec![-1.0, 2.0],
+            matrix(3, 2, vec![1.0, 1.0, -2.0, 0.0, 0.0, 3.0]).unwrap(),
+            vec![1.0, 0.0, 2.0],
+            vec![Cone::Zero(1), Cone::Nonnegative(2)],
+        )
+        .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let rhs = [1.0, -2.0, 3.0, -4.0, 5.0];
+        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+            for eliminate_bound_rows in [false, true] {
+                let settings = KktSettings {
+                    eliminate_bound_rows,
+                    ..KktSettings::new(solver)
+                };
+                let (mut separate, mut paired) = (KktCache::new(), KktCache::new());
+                for shift in [0.3_f64, 0.1] {
+                    let target = [shift, shift + 0.2, shift + 0.4];
+                    let factor = target.map(|d| d.max(0.4));
+                    for cache in [&mut separate, &mut paired] {
+                        cache
+                            .prepare(&problem, &geometry, shift, &factor, &settings)
+                            .unwrap();
+                    }
+                    separate
+                        .prepare_direction(&problem, shift, &target, &factor, None)
+                        .unwrap();
+                    let expected = separate
+                        .solve(&problem, shift, &target, &factor, &rhs)
+                        .unwrap();
+                    let actual = paired
+                        .prepare_direction(&problem, shift, &target, &factor, Some(&rhs))
+                        .unwrap()
+                        .unwrap();
+                    for (a, b) in actual
+                        .iter()
+                        .chain(paired.direction())
+                        .zip(expected.iter().chain(separate.direction()))
+                    {
+                        assert!((a - b).abs() <= 1e-12 * (1.0 + b.abs()));
+                    }
+                    assert_eq!(paired.stats(), separate.stats());
+                    separate.finish_step(true);
+                    paired.finish_step(true);
+                }
+            }
+        }
     }
 
     #[test]

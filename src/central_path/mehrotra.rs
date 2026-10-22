@@ -224,13 +224,8 @@ pub(crate) fn predictor(
     scaling: &Scaling,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Predictor, MehrotraError> {
-    // Current-anchor predictor RHS: (-r_dual, b tau - A x).
-    // H y = s cancels algebraically, before floating-point evaluation.
-    let mut rhs = Vec::with_capacity(state.x().len() + state.y().len());
-    rhs.extend(resolvent.dual_residual().iter().map(|rd| -rd));
-    rhs.extend_from_slice(resolvent.primal_rhs());
     let r_tau = scaling.mu * state.tau();
-    let affine = resolvent.solve_increment_rhs(&rhs, r_tau, 0.0)?;
+    let affine = resolvent.solve_predictor(r_tau)?;
 
     let dy = difference(affine.y(), state.y());
     let mut ds = dy

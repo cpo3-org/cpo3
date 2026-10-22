@@ -86,44 +86,6 @@ pub(crate) fn symmetric_mul_into(matrix: &CscMatrix, x: &[f64], out: &mut Vec<f6
     symmetric_accumulate(matrix, x, [out], |product| [product]);
 }
 
-/// Multiply two vectors by the same symmetric matrix in one sparse traversal.
-pub(crate) fn symmetric_mul_pair(matrix: &CscMatrix, x: &[f64], y: &[f64]) -> (Vec<f64>, Vec<f64>) {
-    let mut px = vec![0.0; matrix.rows()];
-    let mut py = vec![0.0; matrix.rows()];
-    faer::with_dim!(dim, matrix.columns());
-    let matrix = matrix.as_faer().as_shape(dim, dim);
-    let x = ColRef::from_slice(x).as_row_shape(dim);
-    let y = ColRef::from_slice(y).as_row_shape(dim);
-    let mut out_x = ColMut::from_slice_mut(&mut px).as_row_shape_mut(dim);
-    let mut out_y = ColMut::from_slice_mut(&mut py).as_row_shape_mut(dim);
-    for column in dim.indices() {
-        let rows = matrix.row_idx_of_col_raw(column);
-        let values = matrix.val_of_col(column);
-        if rows.is_empty() {
-            continue;
-        }
-        let xc = x[column];
-        let yc = y[column];
-        let diagonal = rows.last() == Some(&column);
-        let stop = rows.len() - usize::from(diagonal);
-        let mut sum_x = out_x[column];
-        let mut sum_y = out_y[column];
-        for (&row, &value) in rows[..stop].iter().zip(&values[..stop]) {
-            out_x[row] += value * xc;
-            out_y[row] += value * yc;
-            sum_x += value * x[row];
-            sum_y += value * y[row];
-        }
-        if diagonal {
-            sum_x += values[stop] * xc;
-            sum_y += values[stop] * yc;
-        }
-        out_x[column] = sum_x;
-        out_y[column] = sum_y;
-    }
-    (px, py)
-}
-
 pub(crate) fn matrix_mul(matrix: &CscMatrix, vector: &[f64]) -> Vec<f64> {
     let mut product = Vec::new();
     matrix_mul_into(matrix, vector, &mut product);
@@ -292,32 +254,6 @@ pub(crate) fn test_matrix(
 #[cfg(test)]
 mod arithmetic_tests {
     use super::*;
-
-    #[test]
-    fn paired_symmetric_products_match_separate_products() {
-        // Missing diagonals, an empty column, and explicit sparse zeros.
-        let matrix = CscMatrix::new(
-            5,
-            5,
-            vec![0, 1, 1, 3, 5, 7],
-            vec![0, 0, 2, 0, 2, 1, 4],
-            vec![2.0, -3.0, 0.0, 1e-12, 5.0, -7.0, 1e12],
-        )
-        .unwrap();
-        let x = [1.0, -2.0, 3.5, 1e12, 1e-12];
-        let y = [-4.0, 3.0, 1e-12, 2.0, -1e12];
-        let (px, py) = symmetric_mul_pair(&matrix, &x, &y);
-        for (input, paired) in [(&x, px), (&y, py)] {
-            let mut separate = Vec::new();
-            symmetric_mul_into(&matrix, input, &mut separate);
-            assert!(
-                paired
-                    .iter()
-                    .zip(separate)
-                    .all(|(a, b)| a.to_bits() == b.to_bits())
-            );
-        }
-    }
 
     #[test]
     fn rectangular_products_handle_explicit_sparse_zeros() {

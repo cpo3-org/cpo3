@@ -82,6 +82,8 @@ pub(crate) struct Resolvent<'a> {
     dual_residual: Vec<f64>,
     /// b tau_a - A x_a, without forming and then subtracting the slack.
     primal_rhs: Vec<f64>,
+    /// Predictor increment solved alongside the constant column.
+    predictor_increment: Option<Vec<f64>>,
     /// d_x' P d_x, shared by every increment polynomial.
     direction_quadratic: f64,
     /// Current iterate, not the corrector surrogate, for the tau fallback.
@@ -125,18 +127,8 @@ impl<'a> Resolvent<'a> {
         });
         let factor_diagonal = d_factor.as_deref().unwrap_or(&d_diagonal);
         cache.prepare(problem, geometry, shift, factor_diagonal, kkt)?;
-        cache.prepare_direction(problem, shift, &d_diagonal, factor_diagonal)?;
         let n = problem.variable_count();
-        let (x2, y2) = cache.direction().split_at(n);
-        // Positive identity from the KKT equations, with d = H + shift I.
-        let alpha = tau_leading_coefficient(shift, x2, y2, &d_diagonal);
-        let (direction_quadratic, mut dual_residual) = match problem.p() {
-            Some(p) => {
-                let (px2, px) = crate::linear_algebra::symmetric_mul_pair(p, x2, state.x());
-                (dot(x2, &px2), px)
-            }
-            None => (0.0, vec![0.0; n]),
-        };
+        let mut dual_residual = problem.p_mul(state.x());
         for (out, c) in dual_residual.iter_mut().zip(problem.c()) {
             *out += state.tau() * c;
         }
@@ -150,6 +142,27 @@ impl<'a> Resolvent<'a> {
             |product| [product],
         );
         crate::linear_algebra::scale(&mut primal_rhs, -1.0);
+        let predictor_rhs = (geometry.barrier_parameter() > 0).then(|| {
+            dual_residual
+                .iter()
+                .map(|rd| -rd)
+                .chain(primal_rhs.iter().copied())
+                .collect::<Vec<_>>()
+        });
+        let predictor_increment = cache.prepare_direction(
+            problem,
+            shift,
+            &d_diagonal,
+            factor_diagonal,
+            predictor_rhs.as_deref(),
+        )?;
+        let (x2, y2) = cache.direction().split_at(n);
+        // Positive identity from the KKT equations, with d = H + shift I.
+        let alpha = tau_leading_coefficient(shift, x2, y2, &d_diagonal);
+        let direction_quadratic = problem
+            .p_mul_opt(x2)
+            .as_ref()
+            .map_or(0.0, |px2| dot(x2, px2));
         Ok(Self {
             problem,
             cache,
@@ -159,6 +172,7 @@ impl<'a> Resolvent<'a> {
             alpha,
             dual_residual,
             primal_rhs,
+            predictor_increment,
             direction_quadratic,
             state,
             fallback: OnceCell::new(),
@@ -178,6 +192,17 @@ impl<'a> Resolvent<'a> {
         &self.primal_rhs
     }
 
+    pub(crate) fn solve_predictor(
+        &mut self,
+        r_tau: f64,
+    ) -> Result<ResolventSolution, ResolventError> {
+        let increment = self
+            .predictor_increment
+            .take()
+            .expect("the predictor was solved with the constant column");
+        self.reconstruct_increment(increment, r_tau, 0.0)
+    }
+
     /// Solve K u = residual about the current iterate and recover
     /// z = z_a + u + (tau - tau_a) d. Callers can form residual directly,
     /// avoiding cancellation of H y with s and shifted anchor terms.
@@ -187,18 +212,30 @@ impl<'a> Resolvent<'a> {
         r_tau: f64,
         mu: f64,
     ) -> Result<ResolventSolution, ResolventError> {
-        let n = self.problem.variable_count();
         if !r_tau.is_finite() || !mu.is_finite() || mu < 0.0 {
             return Err(ResolventError::InvalidTauPolynomial);
         }
-        let anchor_tau = self.state.tau();
-        let mut increment = self.cache.solve(
+        let increment = self.cache.solve(
             self.problem,
             self.shift,
             &self.d_diagonal,
             self.d_factor.as_deref().unwrap_or(&self.d_diagonal),
             residual,
         )?;
+        self.reconstruct_increment(increment, r_tau, mu)
+    }
+
+    fn reconstruct_increment(
+        &mut self,
+        mut increment: Vec<f64>,
+        r_tau: f64,
+        mu: f64,
+    ) -> Result<ResolventSolution, ResolventError> {
+        if !r_tau.is_finite() || !mu.is_finite() || mu < 0.0 {
+            return Err(ResolventError::InvalidTauPolynomial);
+        }
+        let n = self.problem.variable_count();
+        let anchor_tau = self.state.tau();
         let mut base = self.cache.take_reconstruction();
         base.clear();
         base.extend_from_slice(&increment);

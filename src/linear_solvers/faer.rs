@@ -64,7 +64,7 @@ impl FaerFactorization {
         };
         let scratch_requirement = StackReq::any_of(&[
             numeric_scratch,
-            symbolic.solve_in_place_scratch::<f64>(1, parallelism),
+            symbolic.solve_in_place_scratch::<f64>(2, parallelism),
         ]);
         let scratch = MemBuffer::try_new(scratch_requirement).map_err(|_| {
             LinearSystemError::Factorization("Faer scratch allocation failed".to_owned())
@@ -89,9 +89,13 @@ impl FaerFactorization {
         self.dim
     }
 
-    pub(super) fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
+    pub(super) fn solve_in_place(
+        &mut self,
+        vector: &mut [f64],
+        columns: usize,
+    ) -> Result<(), LinearSystemError> {
         let factor = sparse_cholesky::LdltRef::new(&self.symbolic, &self.factor_values);
-        let view = MatMut::from_column_major_slice_mut(vector, self.dim, 1);
+        let view = MatMut::from_column_major_slice_mut(vector, self.dim, columns);
         let stack = MemStack::new(&mut self.scratch);
         factor.solve_in_place_with_conj(Conj::No, view, self.parallelism, stack);
         Ok(())
@@ -215,7 +219,7 @@ mod tests {
             CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![1e-20, -1e-20]).unwrap();
         let mut factor = FaerFactorization::new(matrix, &mut 0).unwrap();
         let mut rhs = vec![1e-20, 1e-20];
-        factor.solve_in_place(&mut rhs).unwrap();
+        factor.solve_in_place(&mut rhs, 1).unwrap();
         assert!((rhs[0] - 1.0).abs() < 1e-12);
         assert!((rhs[1] + 1.0).abs() < 1e-12);
     }

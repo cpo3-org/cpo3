@@ -240,6 +240,21 @@ impl Factorization {
         self.inner.solve_in_place(rhs)
     }
 
+    /// Apply the factors to two column-major right-hand sides together.
+    pub(crate) fn solve_pair_in_place(&mut self, rhs: &mut [f64]) -> Result<(), LinearSystemError> {
+        let dim = self.diagonal.len();
+        validate_rhs(2 * dim, rhs)?;
+        match &mut self.inner {
+            FactorizationInner::Faer(factor) => factor.solve_in_place(rhs, 2)?,
+            FactorizationInner::Feral(factor) => {
+                let (first, second) = rhs.split_at_mut(dim);
+                factor.solve_in_place(first)?;
+                factor.solve_in_place(second)?;
+            }
+        }
+        validate_solution(rhs)
+    }
+
     /// Update the compact diagonal in original variable order. Each backend
     /// scatters it into its own matrix; no second KKT matrix is retained here.
     pub(crate) fn update_diagonal_and_refactor(
@@ -284,7 +299,7 @@ impl FactorizationInner {
         };
         validate_rhs(dim, vector)?;
         match self {
-            Self::Faer(factorization) => factorization.solve_in_place(vector),
+            Self::Faer(factorization) => factorization.solve_in_place(vector, 1),
             Self::Feral(factorization) => factorization.solve_in_place(vector),
         }?;
         validate_solution(vector)
