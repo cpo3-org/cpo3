@@ -11,7 +11,7 @@ use crate::{
         mehrotra::{self, MehrotraError},
         state::{State, StateError},
     },
-    cone::{ConeBlock, ConeGeometry, ConeGeometryError},
+    cone::{ConeGeometry, ConeGeometryError},
     io::progress::{IterationRecord, ProgressReporter},
     linear_algebra::{dot, matrix_mul},
     linear_solvers::KktSettings,
@@ -102,17 +102,8 @@ pub fn solve_from(
     let (mut solution, comparisons) = match outcome {
         PresolveOutcome::Solved(x, y) => {
             let ax = matrix_mul(problem.a(), &x);
-            let mut s: Vec<_> = problem.b().iter().zip(ax).map(|(b, ax)| b - ax).collect();
-            for block in geometry.blocks() {
-                match block {
-                    ConeBlock::Zero(range) => s[range.clone()].fill(0.0),
-                    ConeBlock::Nonnegative(range) => {
-                        for value in &mut s[range.clone()] {
-                            *value = value.max(0.0);
-                        }
-                    }
-                }
-            }
+            let mut s = Vec::new();
+            geometry.reconstruct_slack(problem.b(), &ax, &mut s);
             direct(SolverStatus::Solved, (x, y, s))
         }
         PresolveOutcome::PrimalInfeasible(y) => direct(

@@ -303,15 +303,7 @@ impl Presolved {
         ax: &[f64],
         full: &mut Vec<f64>,
     ) {
-        full.resize(self.original_rows, 0.0);
-        full.fill(0.0);
-        for block in geometry.blocks() {
-            if let ConeBlock::Nonnegative(range) = block {
-                for i in range.clone() {
-                    full[i] = (original.b()[i] - ax[i]).max(0.0);
-                }
-            }
-        }
+        geometry.reconstruct_slack(original.b(), ax, full);
         for &row in self.postsolve.original_conic_rows() {
             full[row] = original.b()[row] - ax[row];
         }
@@ -346,21 +338,12 @@ impl Presolved {
         let p = self.postsolve.reduce_warm_start(original.as_ref());
         let mut y = self.map.warm_dual(&p);
         let ax = crate::linear_algebra::matrix_mul(self.problem.a(), &p.x);
-        let mut s: Vec<_> = self
-            .problem
-            .b()
-            .iter()
-            .zip(ax)
-            .map(|(b, ax)| b - ax)
-            .collect();
+        let mut s = Vec::new();
+        geometry.reconstruct_slack(self.problem.b(), &ax, &mut s);
         for block in geometry.blocks() {
-            match block {
-                ConeBlock::Zero(range) => s[range.clone()].fill(0.0),
-                ConeBlock::Nonnegative(range) => {
-                    for i in range.clone() {
-                        s[i] = s[i].max(0.0);
-                        y[i] = y[i].max(0.0);
-                    }
+            if let ConeBlock::Nonnegative(range) = block {
+                for value in &mut y[range.clone()] {
+                    *value = value.max(0.0);
                 }
             }
         }

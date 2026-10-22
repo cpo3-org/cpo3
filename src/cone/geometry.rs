@@ -133,6 +133,22 @@ impl ConeGeometry {
         }))
     }
 
+    /// Reconstruct slack from a precomputed `Ax`: zero equality rows and
+    /// clamp `b - Ax` to zero on nonnegative-cone rows.
+    pub(crate) fn reconstruct_slack(&self, b: &[f64], ax: &[f64], out: &mut Vec<f64>) {
+        out.resize(self.dim, 0.0);
+        for block in &self.blocks {
+            match block {
+                ConeBlock::Zero(range) => out[range.clone()].fill(0.0),
+                ConeBlock::Nonnegative(range) => {
+                    for i in range.clone() {
+                        out[i] = (b[i] - ax[i]).max(0.0);
+                    }
+                }
+            }
+        }
+    }
+
     /// Floor nonnegative-cone components, leaving equality rows unchanged.
     pub(crate) fn floor_interior(&self, s: &mut [f64], y: &mut [f64]) {
         for block in &self.blocks {
@@ -275,6 +291,17 @@ impl ConeGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slack_reconstruction_overwrites_mixed_cone_rows() {
+        let geometry =
+            crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(2), Cone::Zero(1)]);
+        let mut slack = vec![f64::NAN; 4];
+        geometry.reconstruct_slack(&[5.0, 3.0, 1.0, -2.0], &[0.0, 1.0, 4.0, 0.0], &mut slack);
+        assert_eq!(slack, [0.0, 2.0, 0.0, 0.0]);
+        geometry.reconstruct_slack(&[0.0; 4], &[1.0, 2.0, -3.0, 4.0], &mut slack);
+        assert_eq!(slack, [0.0, 0.0, 3.0, 0.0]);
+    }
 
     #[test]
     fn lays_out_mixed_blocks_and_builds_canonical_point() {
