@@ -14,8 +14,8 @@ use crate::linear_algebra::dot;
 use thiserror::Error;
 
 use super::{
-    embedding::{EmbeddingError, State},
     kkt::{KktCache, KktError, KktPattern, factorize},
+    state::{State, StateError},
 };
 
 use crate::{
@@ -27,7 +27,7 @@ use crate::{
 #[derive(Clone, Debug, Error, PartialEq)]
 pub(crate) enum ResolventError {
     #[error(transparent)]
-    Embedding(#[from] EmbeddingError),
+    State(#[from] StateError),
     #[error(transparent)]
     LinearSystem(#[from] LinearSystemError),
     #[error(transparent)]
@@ -149,7 +149,7 @@ impl<'a> Resolvent<'a> {
             || (factor_shift == 0.0 && kkt.diagonal_floor <= 0.0)
             || factor_shift < shift
         {
-            return Err(EmbeddingError::InvalidMu.into());
+            return Err(StateError::InvalidMu.into());
         }
         let d_diagonal = h_diagonal
             .iter()

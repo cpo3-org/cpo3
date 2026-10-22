@@ -12,8 +12,6 @@ use super::{Cone, INTERIOR_FLOOR};
 pub(crate) enum ConeGeometryError {
     #[error("cone block {block} has zero dimension")]
     EmptyBlock { block: usize },
-    #[error("cone dimensions overflow usize")]
-    DimensionOverflow,
     #[error("cone dimensions sum to {actual}, but the vector dimension is {expected}")]
     DimensionMismatch { expected: usize, actual: usize },
     #[error("cone block {block} of type {name} is not implemented by the barrier geometry")]
@@ -67,15 +65,11 @@ impl ConeGeometry {
             if dim == 0 {
                 return Err(ConeGeometryError::EmptyBlock { block });
             }
-            let end = offset
-                .checked_add(dim)
-                .ok_or(ConeGeometryError::DimensionOverflow)?;
+            let end = offset.strict_add(dim);
             let kind = match cone {
                 Cone::Zero(_) => BlockKind::Zero,
                 Cone::Nonnegative(_) => {
-                    barrier_parameter = barrier_parameter
-                        .checked_add(dim)
-                        .ok_or(ConeGeometryError::DimensionOverflow)?;
+                    barrier_parameter = barrier_parameter.strict_add(dim);
                     BlockKind::Nonnegative
                 }
                 unsupported => {
@@ -154,7 +148,7 @@ impl ConeGeometry {
     }
 
     /// Floor nonnegative-cone components, leaving equality rows unchanged.
-    pub(crate) fn clamp_interior(&self, s: &mut [f64], y: &mut [f64]) {
+    pub(crate) fn floor_interior(&self, s: &mut [f64], y: &mut [f64]) {
         for block in &self.blocks {
             if block.kind == BlockKind::Nonnegative {
                 for value in s[block.range.clone()]

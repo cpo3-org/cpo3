@@ -2,12 +2,13 @@
 //! warm screening.
 
 use super::{
-    embedding::{Embedding, EmbeddingError, State},
     kkt::{KktCache, solve_shifted_systems},
+    state::{State, StateError},
 };
 
 use crate::{
-    Settings,
+    Problem, Settings,
+    cone::ConeGeometry,
     linear_algebra::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
     linear_solvers::KktSettings,
     ruiz::EquilibratedProblem,
@@ -50,12 +51,12 @@ const INTERIOR_MARGIN: f64 = 1.0;
 /// The supplied vectors are in original units; every candidate is formed in
 /// the solver's operating scale and projected onto the embedding sphere.
 fn warm_state(
-    embedding: &Embedding<'_>,
+    geometry: &ConeGeometry,
     equilibrated: &EquilibratedProblem<'_>,
     warm: &WarmStart,
     cone_rows: &[bool],
 ) -> Option<(State, f64)> {
-    let problem = embedding.problem();
+    let problem = equilibrated.problem();
     let x = equilibrated.scale_x(&warm.x);
     let y = equilibrated.scale_y(&warm.y);
     let s = equilibrated.scale_s(&warm.s);
@@ -78,12 +79,12 @@ fn warm_state(
         let Ok(mut candidate) = State::new(x.clone(), cs, cy, 1.0) else {
             continue;
         };
-        if candidate.normalize_sphere(embedding.geometry()).is_err()
-            || embedding.validate_state(&candidate).is_err()
+        if candidate.normalize_sphere(geometry).is_err()
+            || candidate.validate(problem, geometry).is_err()
         {
             continue;
         }
-        let score = local_score(embedding, &candidate, cone_rows, &ax, &px);
+        let score = local_score(problem, geometry, &candidate, cone_rows, &ax, &px);
         if score < best_score {
             best_score = score;
             best = Some(candidate);
@@ -94,17 +95,17 @@ fn warm_state(
 
 /// cpo3's guarded local residual metric divided by the square root of the candidate's own `mu`.
 fn local_score(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
+    geometry: &ConeGeometry,
     state: &State,
     cone_rows: &[bool],
     ax: &[f64],
     px: &[f64],
 ) -> f64 {
-    let mu = embedding.duality_measure(state);
+    let mu = state.duality_measure(geometry);
     if !mu.is_finite() || mu <= 0.0 {
         return f64::INFINITY;
     }
-    let problem = embedding.problem();
     let (x, y, tau) = (state.x(), state.y(), state.tau());
     let aty = matrix_transpose_mul(problem.a(), y);
     let x_sq = x
@@ -147,24 +148,28 @@ fn local_score(
 /// warm starts; one for equality-only problems. The canonical point already
 /// lies on the sphere, so cold starts of either strategy enter the loop at
 /// the same radius.
-fn sphere_factor(embedding: &Embedding<'_>, x: &[f64], y: &[f64]) -> f64 {
-    if embedding.nu() == 0 {
+fn sphere_factor(geometry: &ConeGeometry, x: &[f64], y: &[f64]) -> f64 {
+    if geometry.barrier_parameter() == 0 {
         return 1.0;
     }
     let norm = stable_norm(x.iter().chain(y).copied().chain(std::iter::once(1.0)));
-    (embedding.nu() as f64 + 1.0).sqrt() / norm
+    (geometry.barrier_parameter() as f64 + 1.0).sqrt() / norm
 }
 
 /// A point on the embedding sphere with inequality complementarity beta.
-fn canonical_state(embedding: &Embedding<'_>, beta: f64) -> Result<State, EmbeddingError> {
-    let mut point = vec![0.0; embedding.problem().constraint_count()];
-    embedding.geometry().canonical_identity(&mut point)?;
+fn canonical_state(
+    problem: &Problem,
+    geometry: &ConeGeometry,
+    beta: f64,
+) -> Result<State, StateError> {
+    let mut point = vec![0.0; problem.constraint_count()];
+    geometry.canonical_identity(&mut point)?;
     for value in &mut point {
         *value *= beta.sqrt();
     }
-    let tau = (1.0 + embedding.nu() as f64 * (1.0 - beta)).sqrt();
+    let tau = (1.0 + geometry.barrier_parameter() as f64 * (1.0 - beta)).sqrt();
     State::new(
-        vec![0.0; embedding.problem().variable_count()],
+        vec![0.0; problem.variable_count()],
         point.clone(),
         point,
         tau,
@@ -186,12 +191,12 @@ fn canonical_state(embedding: &Embedding<'_>, beta: f64) -> Result<State, Embedd
 /// radius of a few hundred). Project onto the embedding sphere, as for warm
 /// starts, so both cold strategies begin at the same radius.
 fn cvxopt_state(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
+    geometry: &ConeGeometry,
     cone_rows: &[bool],
     kkt: &KktSettings,
     cache: &mut KktCache,
 ) -> Result<State, String> {
-    let problem = embedding.problem();
     let (n, m) = (problem.variable_count(), problem.constraint_count());
     let h = cone_rows
         .iter()
@@ -213,7 +218,7 @@ fn cvxopt_state(
         both.extend_from_slice(problem.b());
         vec![both]
     };
-    let solutions = cvxopt_solve(embedding, &h, kkt, cache, &right_hand_sides)?;
+    let solutions = cvxopt_solve(problem, &h, kkt, cache, &right_hand_sides)?;
     let (mut x, mut y) = if linear {
         (solutions[0][..n].to_vec(), solutions[1][n..].to_vec())
     } else {
@@ -227,13 +232,13 @@ fn cvxopt_state(
     }
     shift_into_interior(&mut s, cone_rows);
     shift_into_interior(&mut y, cone_rows);
-    let scale = sphere_factor(embedding, &x, &y);
+    let scale = sphere_factor(geometry, &x, &y);
     crate::linear_algebra::scale(&mut x, scale);
     crate::linear_algebra::scale(&mut s, scale);
     crate::linear_algebra::scale(&mut y, scale);
     let state = State::new(x, s, y, scale).map_err(|error| error.to_string())?;
-    embedding
-        .validate_state(&state)
+    state
+        .validate(problem, geometry)
         .map_err(|error| error.to_string())?;
     Ok(state)
 }
@@ -241,7 +246,7 @@ fn cvxopt_state(
 /// Solve the initialization system exactly first, then with increasing true
 /// shifts, and finally with best-effort refinement, like the main loop.
 fn cvxopt_solve(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
     h: &[f64],
     kkt: &KktSettings,
     cache: &mut KktCache,
@@ -252,7 +257,7 @@ fn cvxopt_solve(
     let mut shift = 0.0;
     loop {
         match solve_shifted_systems(
-            embedding.problem(),
+            problem,
             h,
             shift,
             CVXOPT_REGULARIZATION,
@@ -297,14 +302,15 @@ fn shift_into_interior(values: &mut [f64], cone_rows: &[bool]) {
 /// The configured cold start, falling back to the canonical point when the
 /// CVXOPT solve fails, and whether the CVXOPT-style point was used.
 fn cold_state(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
+    geometry: &ConeGeometry,
     cone_rows: &[bool],
     settings: &Settings,
     kkt: &KktSettings,
     cache: &mut KktCache,
-) -> Result<(State, bool), EmbeddingError> {
+) -> Result<(State, bool), StateError> {
     if settings.cvxopt_init {
-        match cvxopt_state(embedding, cone_rows, kkt, cache) {
+        match cvxopt_state(problem, geometry, cone_rows, kkt, cache) {
             Ok(state) => return Ok((state, true)),
             Err(reason) => {
                 eprintln!(
@@ -313,19 +319,23 @@ fn cold_state(
             }
         }
     }
-    Ok((canonical_state(embedding, settings.initial_mu)?, false))
+    Ok((
+        canonical_state(problem, geometry, settings.initial_mu)?,
+        false,
+    ))
 }
 
 /// Choose and prepare the starting point according to the settings.
 pub(crate) fn initial_state(
-    embedding: &Embedding<'_>,
+    geometry: &ConeGeometry,
     equilibrated: &EquilibratedProblem<'_>,
     cone_rows: &[bool],
     warm: Option<&WarmStart>,
     settings: &Settings,
     kkt: &KktSettings,
     cache: &mut KktCache,
-) -> Result<(State, InitReport), EmbeddingError> {
+) -> Result<(State, InitReport), StateError> {
+    let problem = equilibrated.problem();
     let mut report = InitReport {
         warm_start_used: None,
         warm_start_score: None,
@@ -334,10 +344,9 @@ pub(crate) fn initial_state(
     };
     if let Some(warm) = warm {
         // The local score is undefined without inequality pairs.
-        if embedding.nu() == 0 {
+        if geometry.barrier_parameter() == 0 {
             report.warm_start_used = Some(false);
-        } else if let Some((candidate, score)) =
-            warm_state(embedding, equilibrated, warm, cone_rows)
+        } else if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm, cone_rows)
         {
             let accept = settings.force_warm_start || score <= WARM_THRESHOLD;
             report.warm_start_used = Some(accept);
@@ -353,7 +362,7 @@ pub(crate) fn initial_state(
             eprintln!("cpo3: warm start ignored: no finite interior candidate");
         }
     }
-    let (cold, cvxopt_init_used) = cold_state(embedding, cone_rows, settings, kkt, cache)?;
+    let (cold, cvxopt_init_used) = cold_state(problem, geometry, cone_rows, settings, kkt, cache)?;
     report.cvxopt_init_used = Some(cvxopt_init_used);
     Ok((cold, report))
 }
@@ -394,9 +403,9 @@ mod tests {
     fn cvxopt_start(problem: &Problem, cone_rows: &[bool]) -> (State, InitReport) {
         let settings = cvxopt_settings();
         let equilibrated = EquilibratedProblem::new(problem, &settings).unwrap();
-        let embedding = Embedding::new(problem).unwrap();
+        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
         initial_state(
-            &embedding,
+            &geometry,
             &equilibrated,
             cone_rows,
             None,
@@ -418,14 +427,18 @@ mod tests {
         )
         .unwrap();
         let scaled = EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
-        let embedding = Embedding::new(scaled.problem()).unwrap();
+        let geometry = ConeGeometry::new(
+            scaled.problem().cones(),
+            scaled.problem().constraint_count(),
+        )
+        .unwrap();
         for beta in [Settings::default().initial_mu, 0.25, 1.0] {
             let settings = Settings {
                 initial_mu: beta,
                 ..Settings::default()
             };
             let (state, report) = initial_state(
-                &embedding,
+                &geometry,
                 &scaled,
                 &[false, true],
                 None,
@@ -437,9 +450,9 @@ mod tests {
             assert_eq!(state.x(), [0.0]);
             assert_eq!(state.y(), [0.0, beta.sqrt()]);
             assert_eq!(state.s(), [0.0, beta.sqrt()]);
-            assert_close(embedding.duality_measure(&state), beta, 1e-12);
+            assert_close(state.duality_measure(&geometry), beta, 1e-12);
             assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
-            embedding.validate_state(&state).unwrap();
+            state.validate(&problem, &geometry).unwrap();
             assert_eq!(report.cvxopt_init_used, Some(false));
             assert_ne!(scaled.unscale_s(state.s()), state.s());
         }
@@ -562,12 +575,19 @@ mod tests {
             vec![Cone::Zero(1), Cone::Nonnegative(1)],
         )
         .unwrap();
-        let embedding = Embedding::new(&problem).unwrap();
+        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
         let state = State::new(vec![1.0], vec![0.0, 3.0], vec![-1.0, 2.0], 2.0).unwrap();
         // Here mu=6, residuals are (17, [1,17], -1), and the metric
         // weights are (6, [6,7.5], 7.5). The squared local norm is 87,
         // so the squared screening score is 87 / mu = 14.5.
-        let score = local_score(&embedding, &state, &[false, true], &[0.5, 1.0], &[1.0]);
+        let score = local_score(
+            &problem,
+            &geometry,
+            &state,
+            &[false, true],
+            &[0.5, 1.0],
+            &[1.0],
+        );
         assert!((score * score - 14.5).abs() < 1e-12);
     }
 
@@ -590,13 +610,13 @@ mod tests {
                 },
             )
             .unwrap();
-            let embedding = Embedding::new(&problem).unwrap();
+            let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
             let warm = WarmStart {
                 x: vec![0.0],
                 y: vec![0.0],
                 s: vec![0.0],
             };
-            let (candidate, score) = warm_state(&embedding, &equilibrated, &warm, &[true]).unwrap();
+            let (candidate, score) = warm_state(&geometry, &equilibrated, &warm, &[true]).unwrap();
             assert!(score.is_finite());
             assert!((candidate.y()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
             assert!((candidate.s()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
@@ -621,7 +641,7 @@ mod tests {
             },
         )
         .unwrap();
-        let embedding = Embedding::new(&problem).unwrap();
+        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
         let warm = WarmStart {
             x: vec![1.0],
             y: vec![2.0],
@@ -632,7 +652,7 @@ mod tests {
             ..Settings::default()
         };
         let (state, report) = initial_state(
-            &embedding,
+            &geometry,
             &equilibrated,
             &[false],
             Some(&warm),
@@ -645,7 +665,7 @@ mod tests {
         assert_eq!(report.cvxopt_init_used, Some(false));
         assert_eq!(
             state,
-            canonical_state(&embedding, settings.initial_mu).unwrap()
+            canonical_state(&problem, &geometry, settings.initial_mu).unwrap()
         );
     }
 }

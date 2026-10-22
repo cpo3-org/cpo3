@@ -6,11 +6,12 @@ use thiserror::Error;
 use crate::{
     LinearSolver, Problem, Settings,
     central_path::{
-        embedding::{Embedding, EmbeddingError, State},
         init::{self, WarmStart},
         kkt::KktCache,
         mehrotra::{self, MehrotraError},
+        state::{State, StateError},
     },
+    cone::ConeGeometry,
     io::progress::{IterationRecord, ProgressReporter},
     linear_algebra::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
     linear_solvers::{KktSettings, LinearAlgebraStats},
@@ -154,8 +155,8 @@ pub enum SolveError {
     Numerical(String),
 }
 
-impl From<EmbeddingError> for SolveError {
-    fn from(error: EmbeddingError) -> Self {
+impl From<StateError> for SolveError {
+    fn from(error: StateError) -> Self {
         Self::Numerical(error.to_string())
     }
 }
@@ -179,7 +180,7 @@ pub fn solve_from(
 ) -> Result<Solution, SolveError> {
     settings.validate()?;
     validate_warm_start(problem, warm_start)?;
-    // Check cone support before presolve can return without building an embedding.
+    // Check cone support before presolve can return without constructing cone geometry.
     for (block, cone) in problem.cones().iter().enumerate() {
         if !matches!(cone, crate::Cone::Zero(_) | crate::Cone::Nonnegative(_)) {
             return Err(SolveError::Unimplemented(format!(
@@ -578,16 +579,17 @@ fn solve_core(
     let kkt = KktSettings::from(settings);
     let mut cache = KktCache::new();
     let equilibrated = EquilibratedProblem::new(problem, settings)?;
-    let embedding = Embedding::new(equilibrated.problem())?;
+    let scaled_problem = equilibrated.problem();
+    let geometry = ConeGeometry::new(scaled_problem.cones(), scaled_problem.constraint_count())
+        .map_err(StateError::from)?;
     let mut identity = vec![0.0; problem.constraint_count()];
-    embedding
-        .geometry()
+    geometry
         .canonical_identity(&mut identity)
         .map_err(|error| SolveError::Numerical(error.to_string()))?;
     let cone_rows = identity.iter().map(|e| *e > 0.0).collect::<Vec<_>>();
     drop(identity);
     let (mut state, init_report) = init::initial_state(
-        &embedding,
+        &geometry,
         &equilibrated,
         &cone_rows,
         warm_start,
@@ -595,14 +597,14 @@ fn solve_core(
         &kkt,
         &mut cache,
     )?;
-    let mut diagnostics = StepDiagnostics::initial(&embedding, &state);
+    let mut diagnostics = StepDiagnostics::initial(&geometry, &state);
     let mut recovery = RecoveryWorkspace::new(problem, original);
     let mut recovered = RecoveredSolution::empty();
     recover_into(
         problem,
         &equilibrated,
         &state,
-        embedding.nu(),
+        geometry.barrier_parameter(),
         diagnostics.sy,
         original,
         &mut recovered,
@@ -657,27 +659,33 @@ fn solve_core(
 
         // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
         // complementarity, scaling s by the same factor.
-        state.normalize_sphere(embedding.geometry())?;
-        let (next, next_diagnostics) =
-            match predictor_corrector_step(&embedding, &state, &kkt, settings, &mut cache) {
-                Ok(step) => step,
-                Err(error) => {
-                    let error = SolveError::from(error);
-                    reporter.iteration(
-                        recovered.iteration_record(iteration - 1, started.elapsed(), diagnostics),
-                        true,
-                    );
-                    reporter.failure(iteration, &error.to_string());
-                    return Err(error);
-                }
-            };
+        state.normalize_sphere(&geometry)?;
+        let (next, next_diagnostics) = match predictor_corrector_step(
+            scaled_problem,
+            &geometry,
+            &state,
+            &kkt,
+            settings,
+            &mut cache,
+        ) {
+            Ok(step) => step,
+            Err(error) => {
+                let error = SolveError::from(error);
+                reporter.iteration(
+                    recovered.iteration_record(iteration - 1, started.elapsed(), diagnostics),
+                    true,
+                );
+                reporter.failure(iteration, &error.to_string());
+                return Err(error);
+            }
+        };
         state = next;
         diagnostics = next_diagnostics;
         recover_into(
             problem,
             &equilibrated,
             &state,
-            embedding.nu(),
+            geometry.barrier_parameter(),
             diagnostics.sy,
             original,
             &mut recovered,
@@ -757,14 +765,15 @@ fn solve_core(
 
 /// One Mehrotra predictor--corrector iteration (paper, Section 4.4).
 fn predictor_corrector_step(
-    embedding: &Embedding<'_>,
+    problem: &Problem,
+    geometry: &ConeGeometry,
     state: &State,
     kkt: &KktSettings,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<(State, StepDiagnostics), MehrotraError> {
-    let step = mehrotra::step(embedding, state, kkt, settings, cache)?;
-    let sy = if embedding.nu() == 0 {
+    let step = mehrotra::step(problem, geometry, state, kkt, settings, cache)?;
+    let sy = if geometry.barrier_parameter() == 0 {
         0.0
     } else {
         dot(step.state.s(), step.state.y())
@@ -772,10 +781,10 @@ fn predictor_corrector_step(
     debug_assert_eq!(step.rho, step.mu_before);
     let diagnostics = StepDiagnostics {
         sy,
-        mu: if embedding.nu() == 0 {
+        mu: if geometry.barrier_parameter() == 0 {
             0.0
         } else {
-            sy / embedding.nu() as f64
+            sy / geometry.barrier_parameter() as f64
         },
         tau: step.state.tau(),
         sigma: Some(step.sigma),
@@ -806,18 +815,18 @@ struct StepDiagnostics {
 }
 
 impl StepDiagnostics {
-    fn initial(embedding: &Embedding<'_>, state: &State) -> Self {
-        let sy = if embedding.nu() == 0 {
+    fn initial(geometry: &ConeGeometry, state: &State) -> Self {
+        let sy = if geometry.barrier_parameter() == 0 {
             0.0
         } else {
             dot(state.s(), state.y())
         };
         Self {
             sy,
-            mu: if embedding.nu() == 0 {
+            mu: if geometry.barrier_parameter() == 0 {
                 0.0
             } else {
-                sy / embedding.nu() as f64
+                sy / geometry.barrier_parameter() as f64
             },
             tau: state.tau(),
             sigma: None,

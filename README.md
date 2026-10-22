@@ -139,7 +139,7 @@ Equation labels below refer to the paper source, `mpc_main.tex`.
 
 | Code | Mathematical role |
 | --- | --- |
-| `src/central_path/embedding.rs` | Homogeneous state, complementarity, and spherical normalization (`eq:iterate_normalisation`). |
+| `src/central_path/state.rs` | Homogeneous state, complementarity, and spherical normalization (`eq:iterate_normalisation`). |
 | `src/central_path/init.rs` | Canonical or CVXOPT cold starts and local-norm warm-start screening (`subsec:warm-start`). |
 | `src/central_path/mehrotra.rs` | Predictor, centering, second-order corrector, and damped boundary step (`subsec:mehrotra`). |
 | `src/central_path/resolvent.rs` | Surrogate right-hand sides, cached data solve, scalar quadratic, and reconstruction (`eq:surrogate_rhs`, `eq:cached_data_solve`, `thm:resolvent`). |

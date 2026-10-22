@@ -1,4 +1,4 @@
-//! Independent-slack homogeneous embedding primitives.
+//! Homogeneous state and spherical normalization.
 
 use crate::linear_algebra::dot;
 use thiserror::Error;
@@ -9,7 +9,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Error, PartialEq)]
-pub(crate) enum EmbeddingError {
+pub(crate) enum StateError {
     #[error("homogeneous {variable} has length {actual}, expected {expected}")]
     IncorrectLength {
         variable: &'static str,
@@ -40,31 +40,35 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(
-        x: Vec<f64>,
-        s: Vec<f64>,
-        y: Vec<f64>,
-        tau: f64,
-    ) -> Result<Self, EmbeddingError> {
+    pub(crate) fn new(x: Vec<f64>, s: Vec<f64>, y: Vec<f64>, tau: f64) -> Result<Self, StateError> {
         let x_len = x.len();
         let mut xy = x;
         xy.extend(y);
-        Self::from_stacked(xy, x_len, s, tau)
+        if !tau.is_finite() || tau <= 0.0 {
+            return Err(StateError::NonPositiveTau);
+        }
+        if !xy.iter().chain(&s).all(|value| value.is_finite()) {
+            return Err(StateError::NonFiniteState);
+        }
+        Ok(Self { xy, x_len, s, tau })
     }
 
-    /// Adopt an accepted KKT point without splitting or copying its storage.
+    /// Adopt an accepted KKT point and floor its cone components in place.
     pub(crate) fn from_stacked(
-        xy: Vec<f64>,
+        mut xy: Vec<f64>,
         x_len: usize,
-        s: Vec<f64>,
+        mut s: Vec<f64>,
         tau: f64,
-    ) -> Result<Self, EmbeddingError> {
+        geometry: &ConeGeometry,
+    ) -> Result<Self, StateError> {
         if !tau.is_finite() || tau <= 0.0 {
-            return Err(EmbeddingError::NonPositiveTau);
+            return Err(StateError::NonPositiveTau);
         }
-        if !xy.iter().chain(&s).all(|val| val.is_finite()) {
-            return Err(EmbeddingError::NonFiniteState);
+        if !xy.iter().chain(&s).all(|value| value.is_finite()) {
+            return Err(StateError::NonFiniteState);
         }
+        let (_, y) = xy.split_at_mut(x_len);
+        geometry.floor_interior(&mut s, y);
         Ok(Self { xy, x_len, s, tau })
     }
 
@@ -87,7 +91,7 @@ impl State {
     /// Normalize all homogeneous coordinates using the floored sphere norm.
     /// Validate the scale before mutating so failure leaves the state intact.
     // Paper: eq:iterate_normalisation; scale s along with u = (x, y, tau).
-    pub(crate) fn normalize_sphere(&mut self, cg: &ConeGeometry) -> Result<(), EmbeddingError> {
+    pub(crate) fn normalize_sphere(&mut self, cg: &ConeGeometry) -> Result<(), StateError> {
         let nu = cg.barrier_parameter();
         let norm = faer::ColRef::from_slice(&self.xy).norm_l2().hypot(self.tau);
         let scale = if norm.is_infinite() {
@@ -101,7 +105,7 @@ impl State {
             (nu as f64 + 1.0).sqrt() / norm.max(1e-15_f64.sqrt())
         };
         if !scale.is_finite() || scale <= 0.0 {
-            return Err(EmbeddingError::NonFiniteResult);
+            return Err(StateError::NonFiniteResult);
         }
         if !(self.tau * scale).is_finite()
             || !self
@@ -110,102 +114,55 @@ impl State {
                 .chain(&self.s)
                 .all(|value| (value * scale).is_finite())
         {
-            return Err(EmbeddingError::NonFiniteResult);
+            return Err(StateError::NonFiniteResult);
         }
         crate::linear_algebra::scale(&mut self.xy, scale);
         crate::linear_algebra::scale(&mut self.s, scale);
-        cg.clamp_interior(&mut self.s, &mut self.xy[self.x_len..]);
+        cg.floor_interior(&mut self.s, &mut self.xy[self.x_len..]);
         self.tau = (self.tau * scale).max(INTERIOR_FLOOR);
         Ok(())
     }
-}
-
-/// The homogeneous problem and its product-cone geometry.
-pub(crate) struct Embedding<'a> {
-    problem: &'a Problem,
-    geometry: ConeGeometry,
-}
-
-impl<'a> Embedding<'a> {
-    pub(crate) fn new(problem: &'a Problem) -> Result<Self, EmbeddingError> {
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count())?;
-        Ok(Self { problem, geometry })
-    }
-
-    pub(crate) fn problem(&self) -> &Problem {
-        self.problem
-    }
-
-    pub(crate) fn geometry(&self) -> &ConeGeometry {
-        &self.geometry
-    }
-
-    /// Barrier parameter `nu` of the product cone.
-    pub(crate) fn nu(&self) -> usize {
-        self.geometry.barrier_parameter()
-    }
 
     /// Duality measure `mu = <s, y> / nu`, zero when the cone has no barrier.
-    pub(crate) fn duality_measure(&self, state: &State) -> f64 {
-        if self.nu() == 0 {
+    pub(crate) fn duality_measure(&self, geometry: &ConeGeometry) -> f64 {
+        let nu = geometry.barrier_parameter();
+        if nu == 0 {
             return 0.0;
         }
-        dot(&state.s, state.y()) / self.nu() as f64
+        dot(&self.s, self.y()) / nu as f64
     }
 
-    /// Validate newly computed coordinates once, before they become an iterate.
-    /// Subsequent scaling and boundary calculations may trust this interior.
-    pub(crate) fn accept_state(
+    pub(crate) fn validate(
         &self,
-        xy: Vec<f64>,
-        x_len: usize,
-        s: Vec<f64>,
-        tau: f64,
-    ) -> Result<State, EmbeddingError> {
-        if !tau.is_finite() || tau <= 0.0 {
-            return Err(EmbeddingError::NonPositiveTau);
-        }
-        debug_assert_eq!(x_len, self.problem.variable_count());
-        let (x, y) = xy.split_at(x_len);
-        if !x.iter().all(|value| value.is_finite()) {
-            return Err(EmbeddingError::NonFiniteState);
-        }
-        if !self.geometry.is_primal_interior(&s)? {
-            return Err(EmbeddingError::NonInteriorPoint { variable: "s" });
-        }
-        if !self.geometry.is_dual_interior(y)? {
-            return Err(EmbeddingError::NonInteriorPoint { variable: "y" });
-        }
-        Ok(State { xy, x_len, s, tau })
-    }
-
-    pub(crate) fn validate_state(&self, state: &State) -> Result<(), EmbeddingError> {
-        if state.x().len() != self.problem.variable_count() {
-            return Err(EmbeddingError::IncorrectLength {
+        problem: &Problem,
+        geometry: &ConeGeometry,
+    ) -> Result<(), StateError> {
+        if self.x().len() != problem.variable_count() {
+            return Err(StateError::IncorrectLength {
                 variable: "x",
-                expected: self.problem.variable_count(),
-                actual: state.x().len(),
+                expected: problem.variable_count(),
+                actual: self.x().len(),
             });
         }
-        if state.s.len() != self.problem.constraint_count() {
-            return Err(EmbeddingError::IncorrectLength {
+        if self.s.len() != problem.constraint_count() {
+            return Err(StateError::IncorrectLength {
                 variable: "s",
-                expected: self.problem.constraint_count(),
-                actual: state.s.len(),
+                expected: problem.constraint_count(),
+                actual: self.s.len(),
             });
         }
-        if state.y().len() != self.problem.constraint_count() {
-            return Err(EmbeddingError::IncorrectLength {
+        if self.y().len() != problem.constraint_count() {
+            return Err(StateError::IncorrectLength {
                 variable: "y",
-                expected: self.problem.constraint_count(),
-                actual: state.y().len(),
+                expected: problem.constraint_count(),
+                actual: self.y().len(),
             });
         }
-        if !self.geometry.is_primal_interior(&state.s)? {
-            return Err(EmbeddingError::NonInteriorPoint { variable: "s" });
+        if !geometry.is_primal_interior(&self.s)? {
+            return Err(StateError::NonInteriorPoint { variable: "s" });
         }
-        if !self.geometry.is_dual_interior(state.y())? {
-            return Err(EmbeddingError::NonInteriorPoint { variable: "y" });
+        if !geometry.is_dual_interior(self.y())? {
+            return Err(StateError::NonInteriorPoint { variable: "y" });
         }
         Ok(())
     }
@@ -219,13 +176,13 @@ mod tests {
     #[test]
     fn sphere_projection_preserves_the_projective_solution_and_cone_geometry() {
         let problem = test_problem();
-        let embedding = Embedding::new(&problem).unwrap();
+        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
         let original = State::new(vec![3.0, -4.0], vec![0.0, 7.0], vec![-2.0, 5.0], 0.5).unwrap();
         let mut state = original.clone();
-        state.normalize_sphere(embedding.geometry()).unwrap();
+        state.normalize_sphere(&geometry).unwrap();
         let norm_squared =
             dot(state.x(), state.x()) + dot(state.y(), state.y()) + state.tau().powi(2);
-        assert!((norm_squared - (embedding.nu() + 1) as f64).abs() < 1e-14);
+        assert!((norm_squared - (geometry.barrier_parameter() + 1) as f64).abs() < 1e-14);
         for (before, after) in original
             .x()
             .iter()
@@ -235,10 +192,10 @@ mod tests {
         {
             assert!((before / original.tau() - after / state.tau()).abs() < 1e-13);
         }
-        let old_gap = embedding.duality_measure(&original) / original.tau().powi(2);
-        let new_gap = embedding.duality_measure(&state) / state.tau().powi(2);
+        let old_gap = original.duality_measure(&geometry) / original.tau().powi(2);
+        let new_gap = state.duality_measure(&geometry) / state.tau().powi(2);
         assert!((old_gap - new_gap).abs() < 1e-12);
-        embedding.validate_state(&state).unwrap();
+        state.validate(&problem, &geometry).unwrap();
     }
 
     #[test]
