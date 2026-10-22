@@ -313,29 +313,34 @@ impl Presolved {
         }
     }
     pub(crate) fn reduce_warm_start(&self, geometry: &ConeGeometry, warm: &WarmStart) -> WarmStart {
-        let original = native::postsolve::Solution {
-            x: warm.x.clone(),
-            y: self
-                .postsolve
-                .original_linear_rows()
-                .iter()
-                .map(|&i| -warm.y[i])
-                .collect(),
-            z: vec![0.0; self.original_columns],
-            conic_dual: self
-                .postsolve
-                .original_conic_rows()
-                .iter()
-                .map(|&i| warm.y[i])
-                .collect(),
-            conic_slack: self
-                .postsolve
-                .original_conic_rows()
-                .iter()
-                .map(|&i| warm.s[i])
-                .collect(),
-        };
-        let p = self.postsolve.reduce_warm_start(original.as_ref());
+        let y: Vec<_> = self
+            .postsolve
+            .original_linear_rows()
+            .iter()
+            .map(|&i| -warm.y[i])
+            .collect();
+        let z = vec![0.0; self.original_columns];
+        let conic_dual: Vec<_> = self
+            .postsolve
+            .original_conic_rows()
+            .iter()
+            .map(|&i| warm.y[i])
+            .collect();
+        let conic_slack: Vec<_> = self
+            .postsolve
+            .original_conic_rows()
+            .iter()
+            .map(|&i| warm.s[i])
+            .collect();
+        let p = self
+            .postsolve
+            .reduce_warm_start(native::postsolve::SolutionRef {
+                x: &warm.x,
+                y: &y,
+                z: &z,
+                conic_dual: &conic_dual,
+                conic_slack: &conic_slack,
+            });
         let mut y = self.map.warm_dual(&p);
         let ax = crate::linear_algebra::matrix_mul(self.problem.a(), &p.x);
         let mut s = Vec::new();
