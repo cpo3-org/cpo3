@@ -185,7 +185,6 @@ pub(crate) fn direct_solution(
     status: SolverStatus,
     (x, y, s): (Vec<f64>, Vec<f64>, Vec<f64>),
     solve_time: Duration,
-    presolve_time: Duration,
     linear_solver: LinearSolver,
 ) -> Solution {
     let measures = if status == SolverStatus::Solved {
@@ -210,7 +209,6 @@ pub(crate) fn direct_solution(
             solve_time,
             presolve_rows_removed: problem.constraint_count(),
             presolve_columns_removed: problem.variable_count(),
-            presolve_time,
             ..SolutionInfo::new(measures, linear_solver, settings, None)
         },
     }

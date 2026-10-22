@@ -77,11 +77,23 @@ pub fn solve_from(
             problem, &geometry, settings, warm_start, None, None, started,
         );
     }
-    let linear_solver = settings.linear_solver;
     let outcome = presolve::presolve(problem, settings.time_limit)
         .map_err(|error| SolveError::Numerical(error.to_string()))?;
     let presolve_time = started.elapsed();
-    let presolved = match outcome {
+    let direct = |status, point| {
+        (
+            direct_solution(
+                problem,
+                settings,
+                status,
+                point,
+                started.elapsed(),
+                settings.linear_solver,
+            ),
+            None,
+        )
+    };
+    let (mut solution, comparisons) = match outcome {
         PresolveOutcome::Solved(x, y) => {
             let ax = matrix_mul(problem.a(), &x);
             let mut s: Vec<_> = problem.b().iter().zip(ax).map(|(b, ax)| b - ax).collect();
@@ -95,46 +107,25 @@ pub fn solve_from(
                     }
                 }
             }
-            return Ok(direct_solution(
-                problem,
-                settings,
-                SolverStatus::Solved,
-                (x, y, s),
-                started.elapsed(),
-                presolve_time,
-                linear_solver,
-            ));
+            direct(SolverStatus::Solved, (x, y, s))
         }
-        PresolveOutcome::PrimalInfeasible(y) => {
-            let nan = |len: usize| vec![f64::NAN; len];
-            return Ok(direct_solution(
-                problem,
-                settings,
-                SolverStatus::PrimalInfeasible,
-                (
-                    nan(problem.variable_count()),
-                    y,
-                    nan(problem.constraint_count()),
-                ),
-                started.elapsed(),
-                presolve_time,
-                linear_solver,
-            ));
-        }
+        PresolveOutcome::PrimalInfeasible(y) => direct(
+            SolverStatus::PrimalInfeasible,
+            (
+                vec![f64::NAN; problem.variable_count()],
+                y,
+                vec![f64::NAN; problem.constraint_count()],
+            ),
+        ),
         PresolveOutcome::DualInfeasible(x) => {
             let s = matrix_mul(problem.a(), &x).iter().map(|v| -v).collect();
-            return Ok(direct_solution(
-                problem,
-                settings,
+            direct(
                 SolverStatus::DualInfeasible,
                 (x, vec![f64::NAN; problem.constraint_count()], s),
-                started.elapsed(),
-                presolve_time,
-                linear_solver,
-            ));
+            )
         }
-        PresolveOutcome::Unchanged(comparisons) => {
-            let mut solution = solve_core(
+        PresolveOutcome::Unchanged(comparisons) => (
+            solve_core(
                 problem,
                 &geometry,
                 settings,
@@ -142,43 +133,37 @@ pub fn solve_from(
                 Some((0, 0)),
                 None,
                 started,
-            )?;
-            solution.info.presolve_time = presolve_time;
-            solution.info.presolve_parallel_comparisons = Some(comparisons);
-            solution.info.solve_time = started.elapsed();
-            return Ok(solution);
+            )?,
+            Some(comparisons),
+        ),
+        PresolveOutcome::Reduced(presolved) => {
+            if presolved.problem().variable_count() == 0 {
+                let (x, y) = presolved.expand_point(&[], &[]);
+                let ax = matrix_mul(problem.a(), &x);
+                let s = presolved.expand_s_from_ax(problem, &geometry, &[], &ax);
+                direct(SolverStatus::Solved, (x, y, s))
+            } else {
+                let reduced_geometry = ConeGeometry::new(presolved.problem())?;
+                let warm =
+                    warm_start.map(|warm| presolved.reduce_warm_start(&reduced_geometry, warm));
+                let reduced = solve_core(
+                    presolved.problem(),
+                    &reduced_geometry,
+                    settings,
+                    warm.as_ref(),
+                    Some((presolved.rows_removed(), presolved.columns_removed())),
+                    Some((problem, &presolved, &geometry)),
+                    started,
+                )?;
+                (
+                    expand_solution(problem, &geometry, &presolved, reduced),
+                    Some(presolved.parallel_comparisons),
+                )
+            }
         }
-        PresolveOutcome::Reduced(presolved) => presolved,
     };
-    let summary = (presolved.rows_removed(), presolved.columns_removed());
-    if presolved.problem().variable_count() == 0 {
-        let (x, y) = presolved.expand_point(&[], &[]);
-        let ax = matrix_mul(problem.a(), &x);
-        let s = presolved.expand_s_from_ax(problem, &geometry, &[], &ax);
-        return Ok(direct_solution(
-            problem,
-            settings,
-            SolverStatus::Solved,
-            (x, y, s),
-            started.elapsed(),
-            presolve_time,
-            linear_solver,
-        ));
-    }
-    let reduced_geometry = ConeGeometry::new(presolved.problem())?;
-    let warm = warm_start.map(|warm| presolved.reduce_warm_start(&reduced_geometry, warm));
-    let reduced = solve_core(
-        presolved.problem(),
-        &reduced_geometry,
-        settings,
-        warm.as_ref(),
-        Some(summary),
-        Some((problem, &presolved, &geometry)),
-        started,
-    )?;
-    let mut solution = expand_solution(problem, &geometry, &presolved, reduced);
     solution.info.presolve_time = presolve_time;
-    solution.info.presolve_parallel_comparisons = Some(presolved.parallel_comparisons);
+    solution.info.presolve_parallel_comparisons = comparisons;
     solution.info.solve_time = started.elapsed();
     Ok(solution)
 }
@@ -427,6 +412,48 @@ mod tests {
     use crate::{Cone, CscMatrix, linear_algebra::matrix_transpose_mul};
 
     #[test]
+    fn presolve_metadata_and_coordinates_survive_core_solves() {
+        let matrix = crate::linear_algebra::test_matrix;
+        let problem = Problem::new(
+            Some(matrix(3, 3, vec![2., 1., 0., 1., 2., 0., 0., 0., 1.]).unwrap()),
+            vec![-1., -1., 0.],
+            matrix(3, 3, vec![1., 1., 0., -1., 1., 0., 0., 0., 1.]).unwrap(),
+            vec![4., 1., 2.],
+            vec![Cone::Nonnegative(2), Cone::Zero(1)],
+        )
+        .unwrap();
+        let PresolveOutcome::Reduced(reduced) = presolve::presolve(&problem, None).unwrap() else {
+            panic!("expected the fixed variable to be removed");
+        };
+        assert!(matches!(
+            presolve::presolve(reduced.problem(), None).unwrap(),
+            PresolveOutcome::Unchanged(_)
+        ));
+        for (problem, removed, expected_x) in [
+            (&problem, 1, vec![1. / 3., 1. / 3., 2.]),
+            (reduced.problem(), 0, vec![1. / 3., 1. / 3.]),
+        ] {
+            let solution = solve(problem, &Settings::default()).unwrap();
+            assert_eq!(solution.status(), SolverStatus::Solved);
+            assert_eq!(solution.x().len(), expected_x.len());
+            assert!(
+                solution
+                    .x()
+                    .iter()
+                    .zip(expected_x)
+                    .all(|(actual, expected)| (actual - expected).abs() < 1e-6)
+            );
+            let info = solution.info();
+            assert_eq!(
+                (info.presolve_rows_removed, info.presolve_columns_removed),
+                (removed, removed)
+            );
+            assert!(info.presolve_parallel_comparisons.is_some());
+            assert!(info.solve_time >= info.presolve_time);
+        }
+    }
+
+    #[test]
     fn convergence_takes_precedence_over_time_and_iteration_limits() {
         for (target, time_limit, expected_iters) in [(0.0, Some(Duration::ZERO), 0), (1.0, None, 1)]
         {
@@ -495,6 +522,9 @@ mod tests {
         // x <= -1 and x >= 0: A x + s = b with s >= 0.
         let problem = lp(vec![1.0, -1.0], 2, vec![-1.0, 0.0], vec![1.0]);
         let solution = solve(&problem, &Settings::default()).unwrap();
+        assert_eq!(solution.info().iters, 0);
+        assert_eq!(solution.info().presolve_parallel_comparisons, None);
+        assert!(solution.info().solve_time >= solution.info().presolve_time);
         assert_eq!(solution.status(), SolverStatus::PrimalInfeasible);
         assert!(solution.x().iter().all(|v| v.is_nan()));
         let bty = dot(problem.b(), solution.y());
@@ -509,6 +539,9 @@ mod tests {
         // minimize -x subject to x >= 0.
         let problem = lp(vec![-1.0], 1, vec![0.0], vec![-1.0]);
         let solution = solve(&problem, &Settings::default()).unwrap();
+        assert_eq!(solution.info().iters, 0);
+        assert_eq!(solution.info().presolve_parallel_comparisons, None);
+        assert!(solution.info().solve_time >= solution.info().presolve_time);
         assert_eq!(solution.status(), SolverStatus::DualInfeasible);
         assert!(solution.y().iter().all(|v| v.is_nan()));
         assert!((dot(problem.c(), solution.x()) + 1.0).abs() < 1e-6);
@@ -525,6 +558,9 @@ mod tests {
         // minimize x subject to x >= 1.
         let problem = lp(vec![-1.0], 1, vec![-1.0], vec![1.0]);
         let solution = solve(&problem, &Settings::default()).unwrap();
+        assert_eq!(solution.info().iters, 0);
+        assert_eq!(solution.info().presolve_parallel_comparisons, None);
+        assert!(solution.info().solve_time >= solution.info().presolve_time);
         assert_eq!(solution.status(), SolverStatus::Solved);
         assert!((solution.x()[0] - 1.0).abs() < 1e-6);
     }
