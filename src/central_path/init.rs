@@ -22,17 +22,20 @@ pub struct WarmStart {
     pub s: Vec<f64>,
 }
 
-/// What the initialization decided and measured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum InitialStart {
+    Canonical,
+    Cvxopt,
+    Warm,
+}
+
+/// The selected start and the separate warm-screening results.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InitReport {
-    /// `Some(true)` when a supplied warm start was used.
-    pub(crate) warm_start_used: Option<bool>,
+    pub(crate) start: InitialStart,
+    pub(crate) warm_start_supplied: bool,
     /// Local-norm score used to accept or reject the best warm candidate.
     pub(crate) warm_start_score: Option<f64>,
-    /// `Some(true)` when the CVXOPT-style point started the solve and
-    /// `Some(false)` for the canonical point, including after a fallback;
-    /// `None` when an accepted warm start was used instead.
-    pub(crate) cvxopt_init_used: Option<bool>,
 }
 
 const WARM_FLOORS: [f64; 3] = [1e-12, 1e-6, 1e-3];
@@ -317,17 +320,17 @@ fn shift_into_interior(values: &mut [f64], geometry: &ConeGeometry) {
 }
 
 /// The configured cold start, falling back to the canonical point when the
-/// CVXOPT solve fails, and whether the CVXOPT-style point was used.
+/// CVXOPT solve fails.
 fn cold_state(
     problem: &Problem,
     geometry: &ConeGeometry,
     settings: &Settings,
     kkt: &KktSettings,
     cache: &mut KktCache,
-) -> Result<(State, bool), StateError> {
+) -> Result<(State, InitialStart), StateError> {
     if settings.cvxopt_init {
         match cvxopt_state(problem, geometry, kkt, cache) {
-            Ok(state) => return Ok((state, true)),
+            Ok(state) => return Ok((state, InitialStart::Cvxopt)),
             Err(reason) => {
                 eprintln!(
                     "cpo3: cvxopt initialization failed ({reason}); using the canonical point"
@@ -337,7 +340,7 @@ fn cold_state(
     }
     Ok((
         canonical_state(problem, geometry, settings.initial_mu)?,
-        false,
+        InitialStart::Canonical,
     ))
 }
 
@@ -351,34 +354,37 @@ pub(crate) fn initial_state(
     cache: &mut KktCache,
 ) -> Result<(State, InitReport), StateError> {
     let problem = equilibrated.problem();
-    let mut report = InitReport {
-        warm_start_used: None,
-        warm_start_score: None,
-
-        cvxopt_init_used: None,
-    };
-    if let Some(warm) = warm {
-        // The local score is undefined without inequality pairs.
-        if geometry.barrier_parameter() == 0 {
-            report.warm_start_used = Some(false);
-        } else if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm) {
-            let accept = settings.force_warm_start || score <= WARM_THRESHOLD;
-            report.warm_start_used = Some(accept);
-            report.warm_start_score = Some(score);
-            if accept {
-                return Ok((candidate, report));
+    let mut warm_start_score = None;
+    // The local score is undefined without inequality pairs.
+    if let Some(warm) = warm.filter(|_| geometry.barrier_parameter() > 0) {
+        if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm) {
+            warm_start_score = Some(score);
+            if settings.force_warm_start || score <= WARM_THRESHOLD {
+                return Ok((
+                    candidate,
+                    InitReport {
+                        start: InitialStart::Warm,
+                        warm_start_supplied: true,
+                        warm_start_score,
+                    },
+                ));
             }
             eprintln!(
                 "cpo3: warm start ignored: local score {score:.3e} exceeds {WARM_THRESHOLD:.3e}"
             );
         } else {
-            report.warm_start_used = Some(false);
             eprintln!("cpo3: warm start ignored: no finite interior candidate");
         }
     }
-    let (cold, cvxopt_init_used) = cold_state(problem, geometry, settings, kkt, cache)?;
-    report.cvxopt_init_used = Some(cvxopt_init_used);
-    Ok((cold, report))
+    let (cold, start) = cold_state(problem, geometry, settings, kkt, cache)?;
+    Ok((
+        cold,
+        InitReport {
+            start,
+            warm_start_supplied: warm.is_some(),
+            warm_start_score,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -461,7 +467,7 @@ mod tests {
             assert_close(state.duality_measure(&geometry), beta, 1e-12);
             assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
             state.validate(&problem, &geometry).unwrap();
-            assert_eq!(report.cvxopt_init_used, Some(false));
+            assert_eq!(report.start, InitialStart::Canonical);
             assert_ne!(scaled.unscale_s(state.s()), state.s());
         }
     }
@@ -480,7 +486,7 @@ mod tests {
         )
         .unwrap();
         let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.cvxopt_init_used, Some(true));
+        assert_eq!(report.start, InitialStart::Cvxopt);
         // The unscaled point (3, 4 | 1, 2 | 1) has norm sqrt(31); the sphere
         // of the two-dimensional orthant has radius sqrt(3).
         let tau = state.tau();
@@ -509,7 +515,7 @@ mod tests {
         )
         .unwrap();
         let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.cvxopt_init_used, Some(true));
+        assert_eq!(report.start, InitialStart::Cvxopt);
         let tau = state.tau();
         assert!(tau > 0.0 && tau < 1.0);
         assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
@@ -551,7 +557,7 @@ mod tests {
         )
         .unwrap();
         let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.cvxopt_init_used, Some(true));
+        assert_eq!(report.start, InitialStart::Cvxopt);
         assert_eq!(state.tau(), 1.0);
         assert_close(state.x()[0], 1.0, 1e-6);
         assert_close(state.x()[1], 0.0, 1e-6);
@@ -705,8 +711,9 @@ mod tests {
             &mut KktCache::new(),
         )
         .unwrap();
-        assert_eq!(report.warm_start_used, Some(false));
-        assert_eq!(report.cvxopt_init_used, Some(false));
+        assert!(report.warm_start_supplied);
+        assert_eq!(report.warm_start_score, None);
+        assert_eq!(report.start, InitialStart::Canonical);
         assert_eq!(
             state,
             canonical_state(&problem, &geometry, settings.initial_mu).unwrap()

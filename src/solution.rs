@@ -69,11 +69,19 @@ pub struct SolutionInfo {
 
 impl SolutionInfo {
     pub(crate) fn new(settings: &Settings, init_report: Option<init::InitReport>) -> Self {
-        let init = init_report.unwrap_or(init::InitReport {
-            warm_start_used: None,
-            warm_start_score: None,
-            cvxopt_init_used: None,
-        });
+        let (warm_start_used, warm_start_score, cvxopt_init_used) = match init_report {
+            Some(init) => (
+                init.warm_start_supplied
+                    .then_some(init.start == init::InitialStart::Warm),
+                init.warm_start_score,
+                match init.start {
+                    init::InitialStart::Canonical => Some(false),
+                    init::InitialStart::Cvxopt => Some(true),
+                    init::InitialStart::Warm => None,
+                },
+            ),
+            None => (None, None, None),
+        };
         Self {
             iters: 0,
             solve_time: Duration::ZERO,
@@ -84,9 +92,9 @@ impl SolutionInfo {
             comp: f64::NAN,
             linear_solver: settings.linear_solver,
             eliminate_bounds: settings.eliminate_bounds,
-            warm_start_used: init.warm_start_used,
-            warm_start_score: init.warm_start_score,
-            cvxopt_init_used: init.cvxopt_init_used,
+            warm_start_used,
+            warm_start_score,
+            cvxopt_init_used,
             presolve_rows_removed: 0,
             presolve_columns_removed: 0,
             presolve_time: Duration::ZERO,
