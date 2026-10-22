@@ -266,9 +266,10 @@ fn solve_core(
             iteration += 1;
             recovered = recovery.update(&state, diagnostics.sy);
             // The ray is only examined past the kappa / tau gate.
-            let ray = (recovered.ktratio > settings.certificate_ktratio)
-                .then(|| Ray::new(problem, &equilibrated, state.x(), state.y(), state.s()));
-            if let Some(termination) = recovered.termination(settings, ray) {
+            let certificate = (recovered.ktratio > settings.certificate_ktratio)
+                .then(|| Ray::new(problem, &equilibrated, state.x(), state.y(), state.s()))
+                .and_then(|ray| ray.into_certificate(problem, settings, recovered.ktratio));
+            if let Some(termination) = recovered.termination(settings, certificate) {
                 break termination;
             }
             reporter.iteration(

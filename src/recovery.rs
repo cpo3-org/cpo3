@@ -185,13 +185,15 @@ impl RecoveredSolution {
     }
 
     /// Preserve certificate-first precedence if approximate tests overlap.
-    pub(crate) fn termination(&self, settings: &Settings, ray: Option<Ray>) -> Option<Termination> {
-        ray.and_then(|ray| ray.into_certificate(settings, self.ktratio))
-            .map(Termination::Certificate)
-            .or_else(|| {
-                self.is_solved(settings)
-                    .then_some(Termination::Point(SolverStatus::Solved))
-            })
+    pub(crate) fn termination(
+        &self,
+        settings: &Settings,
+        certificate: Option<Certificate>,
+    ) -> Option<Termination> {
+        certificate.map(Termination::Certificate).or_else(|| {
+            self.is_solved(settings)
+                .then_some(Termination::Point(SolverStatus::Solved))
+        })
     }
 }
 
@@ -209,7 +211,7 @@ pub(crate) enum Certificate {
     Dual(Ray),
 }
 
-/// Certificate measures of a homogeneous ray `(x, y, s)` in original units.
+/// Homogeneous ray `(x, y, s)` in original units, with its objective slopes.
 #[derive(Debug)]
 pub(crate) struct Ray {
     pub(crate) x: Vec<f64>,
@@ -217,8 +219,6 @@ pub(crate) struct Ray {
     pub(crate) s: Vec<f64>,
     pub(crate) bty: f64,
     pub(crate) ctx: f64,
-    pinfeas: f64,
-    dinfeas: f64,
 }
 
 impl Ray {
@@ -234,37 +234,43 @@ impl Ray {
         let s = equilibrated.unscale_s(s);
         let bty = dot(problem.b(), &y);
         let ctx = dot(problem.c(), &x);
-        let aty = matrix_transpose_mul(problem.a(), &y);
-        let mut ax = matrix_mul(problem.a(), &x);
-        let px = problem.p_mul(&x);
-        let (norm_x, norm_y) = (two_norm(&x), two_norm(&y));
-        let pinfeas = two_norm(&aty) / bty.abs().max(norm_y).max(RECOVERY_EPS);
-        crate::linear_algebra::add_assign(&mut ax, &s);
-        let violation = two_norm(&ax);
-        let dinfeas = (violation / ctx.abs().max(norm_x + two_norm(&s)).max(RECOVERY_EPS))
-            .max(two_norm(&px) / ctx.abs().max(norm_x).max(RECOVERY_EPS));
-        Self {
-            x,
-            y,
-            s,
-            bty,
-            ctx,
-            pinfeas,
-            dinfeas,
-        }
+        Self { x, y, s, bty, ctx }
     }
 
     /// Lemma "tau_kappa_cond": a certificate once `kappa / tau` exceeds the
     /// gate and the ray's violations are negligible.
-    fn into_certificate(self, settings: &Settings, ktratio: f64) -> Option<Certificate> {
+    pub(crate) fn into_certificate(
+        self,
+        problem: &Problem,
+        settings: &Settings,
+        ktratio: f64,
+    ) -> Option<Certificate> {
         if ktratio <= settings.certificate_ktratio {
             return None;
         }
-        if self.bty < -settings.tol_infeas_abs && self.pinfeas < settings.tol_infeas_rel {
-            return Some(Certificate::Primal(self));
+        if self.bty < -settings.tol_infeas_abs {
+            let aty = matrix_transpose_mul(problem.a(), &self.y);
+            let pinfeas = two_norm(&aty) / self.bty.abs().max(two_norm(&self.y)).max(RECOVERY_EPS);
+            if pinfeas < settings.tol_infeas_rel {
+                return Some(Certificate::Primal(self));
+            }
         }
-        if self.ctx < -settings.tol_infeas_abs && self.dinfeas < settings.tol_infeas_rel {
-            return Some(Certificate::Dual(self));
+        if self.ctx < -settings.tol_infeas_abs {
+            let mut ax = matrix_mul(problem.a(), &self.x);
+            let px = problem.p_mul(&self.x);
+            let norm_x = two_norm(&self.x);
+            crate::linear_algebra::add_assign(&mut ax, &self.s);
+            let violation = two_norm(&ax);
+            let dinfeas = (violation
+                / self
+                    .ctx
+                    .abs()
+                    .max(norm_x + two_norm(&self.s))
+                    .max(RECOVERY_EPS))
+            .max(two_norm(&px) / self.ctx.abs().max(norm_x).max(RECOVERY_EPS));
+            if dinfeas < settings.tol_infeas_rel {
+                return Some(Certificate::Dual(self));
+            }
         }
         None
     }
@@ -545,11 +551,9 @@ mod tests {
             s: vec![],
             bty: -1.0,
             ctx: 0.0,
-            pinfeas: 0.0,
-            dinfeas: 1.0,
         };
         assert!(matches!(
-            point.termination(&settings, Some(ray)),
+            point.termination(&settings, Some(Certificate::Primal(ray))),
             Some(Termination::Certificate(Certificate::Primal(_)))
         ));
         assert!(matches!(
@@ -574,15 +578,30 @@ mod tests {
         .unwrap();
         let settings = Settings::default();
         let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[2.0]);
-        assert_eq!(ray.dinfeas, 1.0 / 3.0);
-        assert!(ray.into_certificate(&settings, f64::INFINITY).is_none());
+        assert!(
+            ray.into_certificate(&problem, &settings, f64::INFINITY)
+                .is_none()
+        );
+        let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[2.0]);
+        assert!(matches!(
+            ray.into_certificate(
+                &problem,
+                &Settings {
+                    tol_infeas_rel: 0.34,
+                    ..settings.clone()
+                },
+                f64::INFINITY
+            ),
+            Some(Certificate::Dual(_))
+        ));
         let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[1.0]);
         assert!(
-            ray.into_certificate(&settings, settings.certificate_ktratio)
+            ray.into_certificate(&problem, &settings, settings.certificate_ktratio)
                 .is_none()
         );
         let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[1.0]);
-        let Some(Certificate::Dual(ray)) = ray.into_certificate(&settings, f64::INFINITY) else {
+        let Some(Certificate::Dual(ray)) = ray.into_certificate(&problem, &settings, f64::INFINITY)
+        else {
             panic!("expected a dual infeasibility certificate");
         };
         assert_eq!(ray.s, vec![1.0]);
