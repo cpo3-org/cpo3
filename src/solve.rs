@@ -787,7 +787,6 @@ fn predictor_corrector_step(
     } else {
         dot(step.state.s(), step.state.y())
     };
-    debug_assert_eq!(step.rho, step.mu_before);
     let diagnostics = StepDiagnostics {
         sy,
         mu: if geometry.barrier_parameter() == 0 {

@@ -1,6 +1,6 @@
 //! Closed-form resolvent for the Josephy--Newton step (`subsec:josephy_newton`, `thm:resolvent`).
 //!
-//! `Resolvent::with_factor_shift` factors the preconditioner and caches the
+//! `Resolvent::new` factors the preconditioner and caches the
 //! target-system solve `eq:cached_data_solve`.
 //! Each target/surrogate supplies the changing right-hand side of
 //! `eq:surrogate_rhs`. `solve_increment_rhs` evaluates the same equations in
@@ -120,54 +120,30 @@ struct TauFallback {
 impl<'a> Resolvent<'a> {
     /// Factorize a diagonally clamped preconditioner for the true system
     /// `[P + shift I, A^T; A, -(H + shift I)]`, then refine its `(-c, b)` solve.
-    #[cfg(test)]
     pub(crate) fn new(
-        problem: &'a Problem,
-        state: &'a State,
-        h_diagonal: &[f64],
-        shift: f64,
-        kkt: &KktSettings,
-        cache: &'a mut KktCache,
-    ) -> Result<Self, ResolventError> {
-        let geometry = ConeGeometry::new(problem).unwrap();
-        Self::with_factor_shift(
-            problem, &geometry, state, h_diagonal, shift, shift, kkt, cache,
-        )
-    }
-
-    /// Target K(shift); use K(factor_shift) only for numerical correction solves.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn with_factor_shift(
         problem: &'a Problem,
         geometry: &ConeGeometry,
         state: &'a State,
         h_diagonal: &[f64],
         shift: f64,
-        factor_shift: f64,
         kkt: &KktSettings,
         cache: &'a mut KktCache,
     ) -> Result<Self, ResolventError> {
-        if !shift.is_finite()
-            || shift < 0.0
-            || !factor_shift.is_finite()
-            || factor_shift < 0.0
-            || (factor_shift == 0.0 && kkt.diagonal_floor <= 0.0)
-            || factor_shift < shift
-        {
+        if !shift.is_finite() || shift < 0.0 || (shift == 0.0 && kkt.diagonal_floor <= 0.0) {
             return Err(StateError::InvalidMu.into());
         }
         let d_diagonal = h_diagonal
             .iter()
             .map(|entry| entry + shift)
             .collect::<Vec<_>>();
-        let d_factor = (factor_shift != shift || kkt.diagonal_floor > shift).then(|| {
+        let d_factor = (kkt.diagonal_floor > shift).then(|| {
             h_diagonal
                 .iter()
-                .map(|h| (h + factor_shift).max(kkt.diagonal_floor))
+                .map(|h| (h + shift).max(kkt.diagonal_floor))
                 .collect::<Vec<_>>()
         });
         let factor_diagonal = d_factor.as_deref().unwrap_or(&d_diagonal);
-        factorize(problem, geometry, factor_shift, factor_diagonal, kkt, cache)?;
+        factorize(problem, geometry, shift, factor_diagonal, kkt, cache)?;
         let KktCache {
             pattern,
             factorization,
@@ -381,7 +357,7 @@ impl<'a> Resolvent<'a> {
         let anchor_tau = self.state.tau();
         let q_base = q_dot(self.problem, base);
         let g = self.shift * anchor_tau - r_tau - q_base;
-        // h(d) = rho - alpha - d_x' P d_x from the KKT equations.
+        // h(d) = shift - alpha - d_x' P d_x from the KKT equations.
         // Use the same positive identity as the leading coefficient, rather
         // than separately summing the data column's potentially large terms.
         let mut b = self.alpha * anchor_tau + g + anchor_tau * self.direction_quadratic;
@@ -447,7 +423,7 @@ impl<'a> Resolvent<'a> {
     }
 }
 
-/// rho + rho*||x||^2 + y'*(H + rho I)*y, without forming unweighted squares.
+/// shift + shift*||x||^2 + y'*(H + shift I)*y, without forming unweighted squares.
 fn tau_leading_coefficient(shift: f64, x: &[f64], y: &[f64], d: &[f64]) -> f64 {
     // Multiplying the nonnegative weight first avoids an intermediate square
     // overflowing/underflowing when the weighted square is representable.
