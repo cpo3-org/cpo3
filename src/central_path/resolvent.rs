@@ -20,6 +20,7 @@ use super::{
 
 use crate::{
     Problem,
+    cone::ConeGeometry,
     linear_solvers::{Factorization, KktSettings, LinearSystemError},
 };
 
@@ -128,13 +129,17 @@ impl<'a> Resolvent<'a> {
         kkt: &KktSettings,
         cache: &'a mut KktCache,
     ) -> Result<Self, ResolventError> {
-        Self::with_factor_shift(problem, state, h_diagonal, shift, shift, kkt, cache)
+        let geometry = ConeGeometry::new(problem).unwrap();
+        Self::with_factor_shift(
+            problem, &geometry, state, h_diagonal, shift, shift, kkt, cache,
+        )
     }
 
     /// Target K(shift); use K(factor_shift) only for numerical correction solves.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_factor_shift(
         problem: &'a Problem,
+        geometry: &ConeGeometry,
         state: &'a State,
         h_diagonal: &[f64],
         shift: f64,
@@ -162,7 +167,7 @@ impl<'a> Resolvent<'a> {
                 .collect::<Vec<_>>()
         });
         let factor_diagonal = d_factor.as_deref().unwrap_or(&d_diagonal);
-        factorize(problem, factor_shift, factor_diagonal, kkt, cache)?;
+        factorize(problem, geometry, factor_shift, factor_diagonal, kkt, cache)?;
         let KktCache {
             pattern,
             factorization,

@@ -8,7 +8,7 @@ use super::{
 
 use crate::{
     Problem, Settings,
-    cone::ConeGeometry,
+    cone::{ConeBlock, ConeGeometry},
     linear_algebra::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
     linear_solvers::KktSettings,
     ruiz::EquilibratedProblem,
@@ -54,7 +54,6 @@ fn warm_state(
     geometry: &ConeGeometry,
     equilibrated: &EquilibratedProblem<'_>,
     warm: &WarmStart,
-    cone_rows: &[bool],
 ) -> Option<(State, f64)> {
     let problem = equilibrated.problem();
     let x = equilibrated.scale_x(&warm.x);
@@ -68,12 +67,15 @@ fn warm_state(
     for floor in WARM_FLOORS {
         let mut cy = y.clone();
         let mut cs = s.clone();
-        for i in 0..cy.len() {
-            if cone_rows[i] {
-                cy[i] = cy[i].max(floor);
-                cs[i] = cs[i].max(floor);
-            } else {
-                cs[i] = 0.0;
+        for block in geometry.blocks() {
+            match block {
+                ConeBlock::Zero(range) => cs[range.clone()].fill(0.0),
+                ConeBlock::Nonnegative(range) => {
+                    for i in range.clone() {
+                        cy[i] = cy[i].max(floor);
+                        cs[i] = cs[i].max(floor);
+                    }
+                }
             }
         }
         let Ok(mut candidate) = State::new(x.clone(), cs, cy, 1.0) else {
@@ -84,7 +86,7 @@ fn warm_state(
         {
             continue;
         }
-        let score = local_score(problem, geometry, &candidate, cone_rows, &ax, &px);
+        let score = local_score(problem, geometry, &candidate, &ax, &px);
         if score < best_score {
             best_score = score;
             best = Some(candidate);
@@ -98,7 +100,6 @@ fn local_score(
     problem: &Problem,
     geometry: &ConeGeometry,
     state: &State,
-    cone_rows: &[bool],
     ax: &[f64],
     px: &[f64],
 ) -> f64 {
@@ -117,19 +118,19 @@ fn local_score(
         })
         .sum::<f64>()
         / mu.max(LOCAL_EPS);
-    let y_sq = y
-        .iter()
-        .enumerate()
-        .map(|(i, &value)| {
+    let mut y_sq = 0.0;
+    for block in geometry.blocks() {
+        for i in block.range() {
+            let value = y[i];
             let mut residual = -tau * ax[i] + problem.b()[i] * tau + mu * value;
             let mut weight = mu;
-            if cone_rows[i] {
+            if matches!(block, ConeBlock::Nonnegative(_)) {
                 residual -= mu / value;
                 weight += mu / (value * value);
             }
-            residual * residual / weight
-        })
-        .sum::<f64>();
+            y_sq += residual * residual / weight;
+        }
+    }
     let quadratic = tau * dot(x, px);
     let tau_residual = -dot(problem.c(), x) - dot(problem.b(), y) - quadratic / tau.max(LOCAL_EPS)
         + mu * (tau - 1.0 / tau.max(LOCAL_EPS));
@@ -162,7 +163,7 @@ fn canonical_state(
     geometry: &ConeGeometry,
     beta: f64,
 ) -> Result<State, StateError> {
-    let mut point = vec![0.0; problem.constraint_count()];
+    let mut point = vec![0.0; geometry.dim()];
     geometry.canonical_identity(&mut point)?;
     for value in &mut point {
         *value *= beta.sqrt();
@@ -193,15 +194,14 @@ fn canonical_state(
 fn cvxopt_state(
     problem: &Problem,
     geometry: &ConeGeometry,
-    cone_rows: &[bool],
     kkt: &KktSettings,
     cache: &mut KktCache,
 ) -> Result<State, String> {
     let (n, m) = (problem.variable_count(), problem.constraint_count());
-    let h = cone_rows
-        .iter()
-        .map(|&cone| if cone { 1.0 } else { 0.0 })
-        .collect::<Vec<_>>();
+    let mut h = vec![0.0; geometry.dim()];
+    geometry
+        .canonical_identity(&mut h)
+        .map_err(|error| error.to_string())?;
     let linear = problem
         .p()
         .is_none_or(|p| p.values().iter().all(|value| *value == 0.0));
@@ -218,7 +218,7 @@ fn cvxopt_state(
         both.extend_from_slice(problem.b());
         vec![both]
     };
-    let solutions = cvxopt_solve(problem, &h, kkt, cache, &right_hand_sides)?;
+    let solutions = cvxopt_solve(problem, geometry, &h, kkt, cache, &right_hand_sides)?;
     let (mut x, mut y) = if linear {
         (solutions[0][..n].to_vec(), solutions[1][n..].to_vec())
     } else {
@@ -227,11 +227,18 @@ fn cvxopt_state(
     };
     // Equality slacks are exactly zero; the solve only makes them small.
     let mut s = matrix_mul(problem.a(), &x);
-    for ((s, b), &cone) in s.iter_mut().zip(problem.b()).zip(cone_rows) {
-        *s = if cone { b - *s } else { 0.0 };
+    for block in geometry.blocks() {
+        match block {
+            ConeBlock::Zero(range) => s[range.clone()].fill(0.0),
+            ConeBlock::Nonnegative(range) => {
+                for (s, b) in s[range.clone()].iter_mut().zip(&problem.b()[range.clone()]) {
+                    *s = b - *s;
+                }
+            }
+        }
     }
-    shift_into_interior(&mut s, cone_rows);
-    shift_into_interior(&mut y, cone_rows);
+    shift_into_interior(&mut s, geometry);
+    shift_into_interior(&mut y, geometry);
     let scale = sphere_factor(geometry, &x, &y);
     crate::linear_algebra::scale(&mut x, scale);
     crate::linear_algebra::scale(&mut s, scale);
@@ -247,6 +254,7 @@ fn cvxopt_state(
 /// shifts, and finally with best-effort refinement, like the main loop.
 fn cvxopt_solve(
     problem: &Problem,
+    geometry: &ConeGeometry,
     h: &[f64],
     kkt: &KktSettings,
     cache: &mut KktCache,
@@ -258,6 +266,7 @@ fn cvxopt_solve(
     loop {
         match solve_shifted_systems(
             problem,
+            geometry,
             h,
             shift,
             CVXOPT_REGULARIZATION,
@@ -284,17 +293,25 @@ fn cvxopt_solve(
 
 /// Add one constant to every cone component so that their minimum reaches
 /// the interior margin; equality components are left unchanged.
-fn shift_into_interior(values: &mut [f64], cone_rows: &[bool]) {
-    let minimum = values
+fn shift_into_interior(values: &mut [f64], geometry: &ConeGeometry) {
+    let minimum = geometry
+        .blocks()
         .iter()
-        .zip(cone_rows)
-        .filter(|(_, cone)| **cone)
-        .map(|(value, _)| *value)
+        .filter_map(|block| match block {
+            ConeBlock::Nonnegative(range) => Some(&values[range.clone()]),
+            ConeBlock::Zero(_) => None,
+        })
+        .flatten()
+        .copied()
         .fold(f64::INFINITY, f64::min);
     let shift = INTERIOR_MARGIN - minimum;
-    for (value, &cone) in values.iter_mut().zip(cone_rows) {
-        if cone && shift > 0.0 {
-            *value += shift;
+    if shift > 0.0 {
+        for block in geometry.blocks() {
+            if let ConeBlock::Nonnegative(range) = block {
+                for value in &mut values[range.clone()] {
+                    *value += shift;
+                }
+            }
         }
     }
 }
@@ -304,13 +321,12 @@ fn shift_into_interior(values: &mut [f64], cone_rows: &[bool]) {
 fn cold_state(
     problem: &Problem,
     geometry: &ConeGeometry,
-    cone_rows: &[bool],
     settings: &Settings,
     kkt: &KktSettings,
     cache: &mut KktCache,
 ) -> Result<(State, bool), StateError> {
     if settings.cvxopt_init {
-        match cvxopt_state(problem, geometry, cone_rows, kkt, cache) {
+        match cvxopt_state(problem, geometry, kkt, cache) {
             Ok(state) => return Ok((state, true)),
             Err(reason) => {
                 eprintln!(
@@ -329,7 +345,6 @@ fn cold_state(
 pub(crate) fn initial_state(
     geometry: &ConeGeometry,
     equilibrated: &EquilibratedProblem<'_>,
-    cone_rows: &[bool],
     warm: Option<&WarmStart>,
     settings: &Settings,
     kkt: &KktSettings,
@@ -346,8 +361,7 @@ pub(crate) fn initial_state(
         // The local score is undefined without inequality pairs.
         if geometry.barrier_parameter() == 0 {
             report.warm_start_used = Some(false);
-        } else if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm, cone_rows)
-        {
+        } else if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm) {
             let accept = settings.force_warm_start || score <= WARM_THRESHOLD;
             report.warm_start_used = Some(accept);
             report.warm_start_score = Some(score);
@@ -362,7 +376,7 @@ pub(crate) fn initial_state(
             eprintln!("cpo3: warm start ignored: no finite interior candidate");
         }
     }
-    let (cold, cvxopt_init_used) = cold_state(problem, geometry, cone_rows, settings, kkt, cache)?;
+    let (cold, cvxopt_init_used) = cold_state(problem, geometry, settings, kkt, cache)?;
     report.cvxopt_init_used = Some(cvxopt_init_used);
     Ok((cold, report))
 }
@@ -400,14 +414,13 @@ mod tests {
     }
 
     /// The CVXOPT start of an unscaled problem and its report.
-    fn cvxopt_start(problem: &Problem, cone_rows: &[bool]) -> (State, InitReport) {
+    fn cvxopt_start(problem: &Problem) -> (State, InitReport) {
         let settings = cvxopt_settings();
         let equilibrated = EquilibratedProblem::new(problem, &settings).unwrap();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(problem).unwrap();
         initial_state(
             &geometry,
             &equilibrated,
-            cone_rows,
             None,
             &settings,
             &KktSettings::new(LinearSolver::Faer),
@@ -427,11 +440,7 @@ mod tests {
         )
         .unwrap();
         let scaled = EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
-        let geometry = ConeGeometry::new(
-            scaled.problem().cones(),
-            scaled.problem().constraint_count(),
-        )
-        .unwrap();
+        let geometry = ConeGeometry::new(scaled.problem()).unwrap();
         for beta in [Settings::default().initial_mu, 0.25, 1.0] {
             let settings = Settings {
                 initial_mu: beta,
@@ -440,7 +449,6 @@ mod tests {
             let (state, report) = initial_state(
                 &geometry,
                 &scaled,
-                &[false, true],
                 None,
                 &settings,
                 &KktSettings::new(LinearSolver::Faer),
@@ -471,7 +479,7 @@ mod tests {
             vec![Cone::Nonnegative(2)],
         )
         .unwrap();
-        let (state, report) = cvxopt_start(&problem, &[true, true]);
+        let (state, report) = cvxopt_start(&problem);
         assert_eq!(report.cvxopt_init_used, Some(true));
         // The unscaled point (3, 4 | 1, 2 | 1) has norm sqrt(31); the sphere
         // of the two-dimensional orthant has radius sqrt(3).
@@ -500,8 +508,7 @@ mod tests {
             vec![Cone::Zero(1), Cone::Nonnegative(2)],
         )
         .unwrap();
-        let cone_rows = [false, true, true];
-        let (state, report) = cvxopt_start(&problem, &cone_rows);
+        let (state, report) = cvxopt_start(&problem);
         assert_eq!(report.cvxopt_init_used, Some(true));
         let tau = state.tau();
         assert!(tau > 0.0 && tau < 1.0);
@@ -543,7 +550,7 @@ mod tests {
             vec![Cone::Zero(1)],
         )
         .unwrap();
-        let (state, report) = cvxopt_start(&problem, &[false]);
+        let (state, report) = cvxopt_start(&problem);
         assert_eq!(report.cvxopt_init_used, Some(true));
         assert_eq!(state.tau(), 1.0);
         assert_close(state.x()[0], 1.0, 1e-6);
@@ -554,14 +561,22 @@ mod tests {
 
     #[test]
     fn interior_shift_moves_only_cone_rows_and_only_upward() {
-        let mut values = vec![-3.0, 0.5, 2.0, -1.0];
-        shift_into_interior(&mut values, &[false, true, true, true]);
-        assert_eq!(values, [-3.0, 2.5, 4.0, 1.0]);
+        let geometry = crate::cone::test_geometry(vec![
+            Cone::Zero(1),
+            Cone::Nonnegative(1),
+            Cone::Zero(1),
+            Cone::Nonnegative(2),
+        ]);
+        let mut values = vec![-3.0, 0.5, -7.0, 2.0, -1.0];
+        shift_into_interior(&mut values, &geometry);
+        assert_eq!(values, [-3.0, 2.5, -7.0, 4.0, 1.0]);
+        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(2), Cone::Zero(1)]);
         let mut values = vec![7.0, 1.5, 4.0];
-        shift_into_interior(&mut values, &[true, true, false]);
+        shift_into_interior(&mut values, &geometry);
         assert_eq!(values, [7.0, 1.5, 4.0]);
+        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1)]);
         let mut values = vec![-2.0];
-        shift_into_interior(&mut values, &[false]);
+        shift_into_interior(&mut values, &geometry);
         assert_eq!(values, [-2.0]);
     }
 
@@ -575,19 +590,12 @@ mod tests {
             vec![Cone::Zero(1), Cone::Nonnegative(1)],
         )
         .unwrap();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let state = State::new(vec![1.0], vec![0.0, 3.0], vec![-1.0, 2.0], 2.0).unwrap();
         // Here mu=6, residuals are (17, [1,17], -1), and the metric
         // weights are (6, [6,7.5], 7.5). The squared local norm is 87,
         // so the squared screening score is 87 / mu = 14.5.
-        let score = local_score(
-            &problem,
-            &geometry,
-            &state,
-            &[false, true],
-            &[0.5, 1.0],
-            &[1.0],
-        );
+        let score = local_score(&problem, &geometry, &state, &[0.5, 1.0], &[1.0]);
         assert!((score * score - 14.5).abs() < 1e-12);
     }
 
@@ -610,17 +618,54 @@ mod tests {
                 },
             )
             .unwrap();
-            let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+            let geometry = ConeGeometry::new(&problem).unwrap();
             let warm = WarmStart {
                 x: vec![0.0],
                 y: vec![0.0],
                 s: vec![0.0],
             };
-            let (candidate, score) = warm_state(&geometry, &equilibrated, &warm, &[true]).unwrap();
+            let (candidate, score) = warm_state(&geometry, &equilibrated, &warm).unwrap();
             assert!(score.is_finite());
             assert!((candidate.y()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
             assert!((candidate.s()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn warm_start_uses_interleaved_cone_blocks() {
+        let problem = Problem::new(
+            None,
+            vec![0.0],
+            crate::linear_algebra::test_matrix(5, 1, vec![0.0; 5]).unwrap(),
+            vec![1.0, 0.0, 1.0, 1.0, 0.0],
+            vec![
+                Cone::Nonnegative(1),
+                Cone::Zero(1),
+                Cone::Nonnegative(2),
+                Cone::Zero(1),
+            ],
+        )
+        .unwrap();
+        let settings = Settings {
+            ruiz_iters: 0,
+            ..Settings::default()
+        };
+        let equilibrated = EquilibratedProblem::new(&problem, &settings).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let warm = WarmStart {
+            x: vec![0.0],
+            y: vec![-3.0, -2.0, 0.0, 4.0, 7.0],
+            s: vec![-1.0, 9.0, 2.0, 0.0, 8.0],
+        };
+        let (state, score) = warm_state(&geometry, &equilibrated, &warm).unwrap();
+        assert!(score.is_finite());
+        state.validate(&problem, &geometry).unwrap();
+        assert_eq!(state.s()[1], 0.0);
+        assert_eq!(state.s()[4], 0.0);
+        for (i, expected) in [(1, -2.0), (3, 4.0), (4, 7.0)] {
+            assert_close(state.y()[i] / state.tau(), expected, 1e-12);
+        }
+        assert_close(state.s()[2] / state.tau(), 2.0, 1e-12);
     }
 
     #[test]
@@ -641,7 +686,7 @@ mod tests {
             },
         )
         .unwrap();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let warm = WarmStart {
             x: vec![1.0],
             y: vec![2.0],
@@ -654,7 +699,6 @@ mod tests {
         let (state, report) = initial_state(
             &geometry,
             &equilibrated,
-            &[false],
             Some(&warm),
             &settings,
             &KktSettings::new(LinearSolver::Faer),

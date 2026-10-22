@@ -1,9 +1,9 @@
 //! One-time equilibration of the homogeneous problem data.
 
-use faer::{Col, ColMut, ColRef};
+use faer::{Col, ColRef};
 use std::borrow::Cow;
 
-use crate::{Cone, CscMatrix, Problem, Settings, SolveError};
+use crate::{CscMatrix, Problem, Settings, SolveError};
 
 struct Scales {
     dx: Vec<f64>,
@@ -152,7 +152,6 @@ impl<'a> EquilibratedProblem<'a> {
             } else {
                 row_norms::<false>(problem, &dx, &dy, dt, &mut max_x, &mut max_y)
             };
-            equalize_cone_norms(problem.cones(), max_y.as_mut());
 
             if converged(&max_x, &max_y, max_t, settings.ruiz_tol) {
                 break;
@@ -377,17 +376,4 @@ fn row_norms<const UNIT_SCALING: bool>(
         }
     }
     max_t
-}
-
-fn equalize_cone_norms(cones: &[Cone], mut norms: ColMut<'_, f64>) {
-    let mut offset = 0;
-    for cone in cones {
-        let dim = cone.vector_dim();
-        if matches!(cone, Cone::SecondOrder(_) | Cone::PositiveSemidefinite(_)) {
-            let mut block = norms.as_mut().subrows_mut(offset, dim);
-            let norm_max = block.norm_max();
-            block.fill(norm_max);
-        }
-        offset += dim;
-    }
 }

@@ -1,5 +1,8 @@
 //! cpo3's Ax+s=b convention at the standalone presolve boundary.
-use crate::{Cone, Problem, WarmStart};
+use crate::{
+    Cone, Problem, WarmStart,
+    cone::{ConeBlock, ConeGeometry},
+};
 use ::presolve as native;
 use std::time::Duration;
 
@@ -130,12 +133,7 @@ pub(crate) fn presolve(
     let linear = original.p().is_none();
     // Global reduction searches must amortize their setup and matrix scans.
     // Keep small models on the existing inexpensive presolve path.
-    let extended_lp = linear
-        && original.variable_count() >= 1_000
-        && original
-            .cones()
-            .iter()
-            .all(|cone| matches!(cone, Cone::Zero(_) | Cone::Nonnegative(_)));
+    let extended_lp = linear && original.variable_count() >= 1_000;
     let mut settings = native::Settings {
         time_limit: time_limit
             .unwrap_or(Duration::from_secs(60))
@@ -285,30 +283,34 @@ impl Presolved {
             &p.conic_dual,
         )
     }
-    pub(crate) fn expand_s_from_ax(&self, original: &Problem, s: &[f64], ax: &[f64]) -> Vec<f64> {
+    pub(crate) fn expand_s_from_ax(
+        &self,
+        original: &Problem,
+        geometry: &ConeGeometry,
+        s: &[f64],
+        ax: &[f64],
+    ) -> Vec<f64> {
         let mut full = Vec::new();
-        self.expand_s_into(original, s, ax, &mut full);
+        self.expand_s_into(original, geometry, s, ax, &mut full);
         full
     }
 
     pub(crate) fn expand_s_into(
         &self,
         original: &Problem,
+        geometry: &ConeGeometry,
         s: &[f64],
         ax: &[f64],
         full: &mut Vec<f64>,
     ) {
         full.resize(self.original_rows, 0.0);
         full.fill(0.0);
-        let mut offset = 0;
-        for cone in original.cones() {
-            let n = cone.vector_dim();
-            if matches!(cone, Cone::Nonnegative(_)) {
-                for i in offset..offset + n {
+        for block in geometry.blocks() {
+            if let ConeBlock::Nonnegative(range) = block {
+                for i in range.clone() {
                     full[i] = (original.b()[i] - ax[i]).max(0.0);
                 }
             }
-            offset += n;
         }
         for &row in self.postsolve.original_conic_rows() {
             full[row] = original.b()[row] - ax[row];
@@ -318,7 +320,7 @@ impl Presolved {
             full[self.postsolve.original_conic_rows()[original]] = s[conic_start + reduced];
         }
     }
-    pub(crate) fn reduce_warm_start(&self, warm: &WarmStart) -> WarmStart {
+    pub(crate) fn reduce_warm_start(&self, geometry: &ConeGeometry, warm: &WarmStart) -> WarmStart {
         let original = native::postsolve::Solution {
             x: warm.x.clone(),
             y: self
@@ -351,23 +353,16 @@ impl Presolved {
             .zip(ax)
             .map(|(b, ax)| b - ax)
             .collect();
-        let mut offset = 0;
-        for cone in self.problem.cones() {
-            let n = cone.vector_dim();
-            match cone {
-                Cone::Zero(_) => s[offset..offset + n].fill(0.0),
-                Cone::Nonnegative(_) => {
-                    for i in offset..offset + n {
+        for block in geometry.blocks() {
+            match block {
+                ConeBlock::Zero(range) => s[range.clone()].fill(0.0),
+                ConeBlock::Nonnegative(range) => {
+                    for i in range.clone() {
                         s[i] = s[i].max(0.0);
                         y[i] = y[i].max(0.0);
                     }
                 }
-                _ => {
-                    let start = offset - self.map.conic_offset();
-                    s[offset..offset + n].copy_from_slice(&p.conic_slack[start..start + n]);
-                }
             }
-            offset += n;
         }
         WarmStart { x: p.x, y, s }
     }

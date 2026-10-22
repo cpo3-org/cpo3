@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn sphere_projection_preserves_the_projective_solution_and_cone_geometry() {
         let problem = test_problem();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let original = State::new(vec![3.0, -4.0], vec![0.0, 7.0], vec![-2.0, 5.0], 0.5).unwrap();
         let mut state = original.clone();
         state.normalize_sphere(&geometry).unwrap();
@@ -200,7 +200,7 @@ mod tests {
 
     #[test]
     fn sphere_projection_handles_extreme_scales_and_the_norm_floor() {
-        let geometry = ConeGeometry::new(&[Cone::Zero(2), Cone::Nonnegative(1)], 3).unwrap();
+        let geometry = crate::cone::test_geometry(vec![Cone::Zero(2), Cone::Nonnegative(1)]);
         let mut underflow = State::new(
             vec![1e300, 1e-300],
             vec![0.0, 0.0, 1e-300],
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(underflow.y(), [0.0, 0.0, INTERIOR_FLOOR]);
         assert_eq!(underflow.tau(), INTERIOR_FLOOR);
 
-        let unconstrained = ConeGeometry::new(&[], 0).unwrap();
+        let unconstrained = crate::cone::test_geometry(vec![]);
         let mut tiny = State::new(vec![], vec![], vec![], 1e-300).unwrap();
         tiny.normalize_sphere(&unconstrained).unwrap();
         assert_eq!(tiny.tau(), INTERIOR_FLOOR);
@@ -229,7 +229,7 @@ mod tests {
 
     #[test]
     fn overflowing_slack_scaling_leaves_the_state_unchanged() {
-        let geometry = ConeGeometry::new(&[Cone::Nonnegative(1)], 1).unwrap();
+        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(1)]);
         let original = State::new(vec![], vec![1e308], vec![1e-300], 1e-300).unwrap();
         let mut state = original.clone();
         assert!(state.normalize_sphere(&geometry).is_err());

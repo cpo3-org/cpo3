@@ -5,7 +5,8 @@
 //! duals. Shared by initialization and the resolvent.
 
 use crate::{
-    Cone, CscMatrix, MatrixError, Problem,
+    CscMatrix, MatrixError, Problem,
+    cone::{ConeBlock, ConeGeometry},
     linear_solvers::{
         Factorization, KktSettings, LinearAlgebraStats, LinearSystemError, RefinementWorkspace,
         refine_with,
@@ -100,7 +101,7 @@ pub(crate) struct BoundRows {
 }
 
 impl BoundRows {
-    fn detect(problem: &Problem, enabled: bool) -> Self {
+    fn detect(problem: &Problem, geometry: &ConeGeometry, enabled: bool) -> Self {
         let m = problem.constraint_count();
         let mut singleton = vec![None; m];
         let mut counts = vec![0usize; m];
@@ -111,13 +112,10 @@ impl BoundRows {
                     singleton[row] = Some((column, value));
                 }
             });
-            let mut offset = 0;
-            for cone in problem.cones() {
-                let dim = cone.vector_dim();
-                if !matches!(cone, Cone::Nonnegative(_)) {
-                    counts[offset..offset + dim].fill(0);
+            for block in geometry.blocks() {
+                if let ConeBlock::Zero(range) = block {
+                    counts[range.clone()].fill(0);
                 }
-                offset += dim;
             }
         }
         let mut eliminated = Vec::new();
@@ -176,8 +174,10 @@ impl KktCache {
 /// to both diagonals so that a zero (1,1) block or zero rows of `H` stay
 /// quasi-definite; refinement targets the unregularized shifted system.
 /// The factorization stays cached for later resolvents to update in place.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn solve_shifted_systems(
     problem: &Problem,
+    geometry: &ConeGeometry,
     h_diagonal: &[f64],
     shift: f64,
     regularization: f64,
@@ -201,7 +201,14 @@ pub(crate) fn solve_shifted_systems(
         .iter()
         .map(|entry| (entry + shift + regularization).max(kkt.diagonal_floor))
         .collect::<Vec<_>>();
-    factorize(problem, shift + regularization, &d_factor, kkt, cache)?;
+    factorize(
+        problem,
+        geometry,
+        shift + regularization,
+        &d_factor,
+        kkt,
+        cache,
+    )?;
     let KktCache {
         pattern,
         factorization,
@@ -242,6 +249,7 @@ pub(crate) fn solve_shifted_systems(
 /// analysis when present, and reject factors with the wrong inertia.
 pub(crate) fn factorize(
     problem: &Problem,
+    geometry: &ConeGeometry,
     shift: f64,
     factor_diagonal: &[f64],
     kkt: &KktSettings,
@@ -268,6 +276,7 @@ pub(crate) fn factorize(
         _ => {
             let k = assemble_preconditioner(
                 problem,
+                geometry,
                 shift,
                 factor_diagonal,
                 kkt.diagonal_floor,
@@ -295,6 +304,7 @@ pub(crate) fn factorize(
 /// Subsequent factorization updates use `KktPattern::write_diagonal` directly.
 pub(crate) fn assemble_preconditioner(
     problem: &Problem,
+    geometry: &ConeGeometry,
     shift: f64,
     d_diagonal: &[f64],
     diagonal_floor: f64,
@@ -311,7 +321,8 @@ pub(crate) fn assemble_preconditioner(
     // Assembly owns the only full CSC matrix; the cache retains just the
     // metadata needed for diagonal updates and bound-row reconstruction.
     // A failed initial factorization can rebuild this same pattern on retry.
-    let (mut matrix, pattern) = build_pattern(problem, shift, d_diagonal, eliminate_bound_rows)?;
+    let (mut matrix, pattern) =
+        build_pattern(problem, geometry, shift, d_diagonal, eliminate_bound_rows)?;
     let values = matrix.values_mut();
     pattern.write_diagonal(
         values,
@@ -493,12 +504,13 @@ impl KktPattern {
 
 pub(crate) fn build_pattern(
     problem: &Problem,
+    geometry: &ConeGeometry,
     shift: f64,
     d_diagonal: &[f64],
     eliminate_bound_rows: bool,
 ) -> Result<(CscMatrix, KktPattern), KktError> {
     let n = problem.variable_count();
-    let bound_rows = BoundRows::detect(problem, eliminate_bound_rows);
+    let bound_rows = BoundRows::detect(problem, geometry, eliminate_bound_rows);
     let matrix = assemble_sparse_k(problem, shift, d_diagonal, &bound_rows)?;
     let dim = n + bound_rows.kept.len();
     let diagonal_positions = {
@@ -690,7 +702,7 @@ pub(crate) fn matrix_value(matrix: &CscMatrix, row: usize, column: usize) -> f64
 #[cfg(test)]
 mod cache_tests {
     use super::*;
-    use crate::LinearSolver;
+    use crate::{Cone, LinearSolver};
 
     #[test]
     fn perturbation_is_reused_and_invalidated_after_refactorization() {
@@ -702,6 +714,7 @@ mod cache_tests {
             vec![Cone::Nonnegative(1)],
         )
         .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let shift = 0.1;
         let target = [0.15_f64];
         let mut cache = KktCache::new();
@@ -711,7 +724,7 @@ mod cache_tests {
                 ..KktSettings::new(LinearSolver::Faer)
             };
             let factor = [target[0].max(floor)];
-            factorize(&problem, shift, &factor, &settings, &mut cache).unwrap();
+            factorize(&problem, &geometry, shift, &factor, &settings, &mut cache).unwrap();
             let pattern = cache.pattern.as_mut().unwrap();
             let factorization = cache.factorization.as_mut().unwrap();
             assert!(!pattern.perturbation_ready);

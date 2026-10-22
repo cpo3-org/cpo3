@@ -144,8 +144,9 @@ fn step_attempt(
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
     let raw_mu = scaling.mu;
-    let mut resolvent =
-        Resolvent::with_factor_shift(problem, state, &scaling.d, raw_mu, rho, kkt, cache)?;
+    let mut resolvent = Resolvent::with_factor_shift(
+        problem, geometry, state, &scaling.d, raw_mu, rho, kkt, cache,
+    )?;
     if geometry.barrier_parameter() == 0 {
         // At mu=0 with only equality rows, the constant KKT column is the
         // original primal-dual solution. Its homogeneous scale is arbitrary.
@@ -502,6 +503,7 @@ mod tests {
         )
         .unwrap();
         let state = State::new(vec![0.0], vec![], vec![], 1.0).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let settings = KktSettings {
             refine_iters: 0,
             ..KktSettings::new(LinearSolver::Faer)
@@ -511,8 +513,16 @@ mod tests {
         let mut calls = 0;
         with_clamp_retries(&settings, 1e-14, &mut cache, |trial, rho, cache| {
             calls += 1;
-            let _resolvent =
-                Resolvent::with_factor_shift(&problem, &state, &[], 1e-14, rho, trial, cache)?;
+            let _resolvent = Resolvent::with_factor_shift(
+                &problem,
+                &geometry,
+                &state,
+                &[],
+                1e-14,
+                rho,
+                trial,
+                cache,
+            )?;
             Ok(())
         })
         .unwrap();
@@ -524,7 +534,7 @@ mod tests {
     #[test]
     fn corrector_uses_full_affine_anchor_even_when_working_mu_is_floored() {
         let problem = quadratic_problem();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
         let mu = 0.7; // Different from the state's raw complementarity.
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
@@ -587,7 +597,7 @@ mod tests {
     #[test]
     fn predictor_corrector_share_one_factorization_and_three_solves() {
         let problem = quadratic_problem();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let mut state = interior_state(&problem);
         state.normalize_sphere(&geometry).unwrap();
         let mut cache = KktCache::new();
@@ -669,7 +679,7 @@ mod tests {
     }
 
     fn run_predictor(problem: &Problem) -> (State, f64, Scaling, Predictor) {
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(problem).unwrap();
         let state = interior_state(problem);
         let mu = state.duality_measure(&geometry);
         let scaling = Scaling::new(problem, &geometry, &state).unwrap();
@@ -688,7 +698,7 @@ mod tests {
     }
 
     fn run_both(problem: &Problem) -> (State, f64, Predictor, Corrector) {
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(problem).unwrap();
         let state = interior_state(problem);
         let mu = state.duality_measure(&geometry);
         let scaling = Scaling::new(problem, &geometry, &state).unwrap();
@@ -757,7 +767,7 @@ mod tests {
     #[test]
     fn corrector_with_unit_sigma_and_zero_displacement_is_pure_centering() {
         let problem = linear_problem();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
         let mu = state.duality_measure(&geometry);
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
@@ -805,7 +815,7 @@ mod tests {
     #[test]
     fn step_stays_interior_and_reduces_the_duality_measure() {
         for problem in [quadratic_problem(), linear_problem()] {
-            let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+            let geometry = ConeGeometry::new(&problem).unwrap();
             let mut state = interior_state(&problem);
             let mut cache = KktCache::new();
             for _ in 0..5 {
@@ -836,7 +846,7 @@ mod tests {
     #[test]
     fn predictor_rejects_a_negative_duality_measure() {
         let problem = linear_problem();
-        let geometry = ConeGeometry::new(problem.cones(), problem.constraint_count()).unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
