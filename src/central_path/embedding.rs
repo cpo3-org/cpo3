@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use crate::{
     Problem,
-    cone::{ConeGeometry, ConeGeometryError},
+    cone::{ConeGeometry, ConeGeometryError, INTERIOR_FLOOR},
 };
 
 #[derive(Clone, Debug, Error, PartialEq)]
@@ -87,7 +87,8 @@ impl State {
     /// Normalize all homogeneous coordinates using the floored sphere norm.
     /// Validate the scale before mutating so failure leaves the state intact.
     // Paper: eq:iterate_normalisation; scale s along with u = (x, y, tau).
-    pub(crate) fn normalize_sphere(&mut self, nu: usize) -> Result<(), EmbeddingError> {
+    pub(crate) fn normalize_sphere(&mut self, cg: &ConeGeometry) -> Result<(), EmbeddingError> {
+        let nu = cg.barrier_parameter();
         let norm = faer::ColRef::from_slice(&self.xy).norm_l2().hypot(self.tau);
         let scale = if norm.is_infinite() {
             // Preserve representable normalized coordinates even if the norm
@@ -102,16 +103,19 @@ impl State {
         if !scale.is_finite() || scale <= 0.0 {
             return Err(EmbeddingError::NonFiniteResult);
         }
-        let representable = |value: &f64| {
-            let scaled = value * scale;
-            scaled.is_finite() && (scaled != 0.0 || *value == 0.0)
-        };
-        if !representable(&self.tau) || !self.xy.iter().chain(&self.s).all(representable) {
+        if !(self.tau * scale).is_finite()
+            || !self
+                .xy
+                .iter()
+                .chain(&self.s)
+                .all(|value| (value * scale).is_finite())
+        {
             return Err(EmbeddingError::NonFiniteResult);
         }
         crate::linear_algebra::scale(&mut self.xy, scale);
         crate::linear_algebra::scale(&mut self.s, scale);
-        self.tau *= scale;
+        cg.clamp_interior(&mut self.s, &mut self.xy[self.x_len..]);
+        self.tau = (self.tau * scale).max(INTERIOR_FLOOR);
         Ok(())
     }
 }
@@ -218,7 +222,7 @@ mod tests {
         let embedding = Embedding::new(&problem).unwrap();
         let original = State::new(vec![3.0, -4.0], vec![0.0, 7.0], vec![-2.0, 5.0], 0.5).unwrap();
         let mut state = original.clone();
-        state.normalize_sphere(embedding.nu()).unwrap();
+        state.normalize_sphere(embedding.geometry()).unwrap();
         let norm_squared =
             dot(state.x(), state.x()) + dot(state.y(), state.y()) + state.tau().powi(2);
         assert!((norm_squared - (embedding.nu() + 1) as f64).abs() < 1e-14);
@@ -239,28 +243,40 @@ mod tests {
 
     #[test]
     fn sphere_projection_handles_extreme_scales_and_the_norm_floor() {
+        let geometry = ConeGeometry::new(&[Cone::Zero(2), Cone::Nonnegative(1)], 3).unwrap();
+        let mut underflow = State::new(
+            vec![1e300, 1e-300],
+            vec![0.0, 0.0, 1e-300],
+            vec![-1e-300, 1e-300, 1e-300],
+            1e-300,
+        )
+        .unwrap();
+        underflow.normalize_sphere(&geometry).unwrap();
+        assert_eq!(underflow.x()[1], 0.0);
+        assert_eq!(underflow.s(), [0.0, 0.0, INTERIOR_FLOOR]);
+        assert_eq!(underflow.y(), [0.0, 0.0, INTERIOR_FLOOR]);
+        assert_eq!(underflow.tau(), INTERIOR_FLOOR);
+
+        let unconstrained = ConeGeometry::new(&[], 0).unwrap();
         let mut tiny = State::new(vec![], vec![], vec![], 1e-300).unwrap();
-        tiny.normalize_sphere(0).unwrap();
-        assert_eq!(tiny.tau(), 1e-300 / 1e-15_f64.sqrt());
+        tiny.normalize_sphere(&unconstrained).unwrap();
+        assert_eq!(tiny.tau(), INTERIOR_FLOOR);
         for magnitude in [1e-7, 1.0, 1e300] {
             let mut state =
                 State::new(vec![3.0 * magnitude], vec![], vec![], 4.0 * magnitude).unwrap();
-            state.normalize_sphere(0).unwrap();
+            state.normalize_sphere(&unconstrained).unwrap();
             assert!((state.x()[0] - 0.6).abs() < 1e-14);
             assert!((state.tau() - 0.8).abs() < 1e-14);
         }
     }
 
     #[test]
-    fn unrepresentable_sphere_projection_leaves_the_state_unchanged() {
-        for original in [
-            State::new(vec![], vec![1e308], vec![1e-300], 1e-300).unwrap(),
-            State::new(vec![1e300], vec![1e-300], vec![1.0], 1.0).unwrap(),
-        ] {
-            let mut state = original.clone();
-            assert!(state.normalize_sphere(1).is_err());
-            assert_eq!(state, original);
-        }
+    fn overflowing_slack_scaling_leaves_the_state_unchanged() {
+        let geometry = ConeGeometry::new(&[Cone::Nonnegative(1)], 1).unwrap();
+        let original = State::new(vec![], vec![1e308], vec![1e-300], 1e-300).unwrap();
+        let mut state = original.clone();
+        assert!(state.normalize_sphere(&geometry).is_err());
+        assert_eq!(state, original);
     }
 
     fn test_problem() -> Problem {

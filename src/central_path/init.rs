@@ -78,7 +78,7 @@ fn warm_state(
         let Ok(mut candidate) = State::new(x.clone(), cs, cy, 1.0) else {
             continue;
         };
-        if candidate.normalize_sphere(embedding.nu()).is_err()
+        if candidate.normalize_sphere(embedding.geometry()).is_err()
             || embedding.validate_state(&candidate).is_err()
         {
             continue;

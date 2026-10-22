@@ -585,7 +585,7 @@ mod tests {
         let problem = quadratic_problem();
         let embedding = Embedding::new(&problem).unwrap();
         let mut state = interior_state(&problem);
-        state.normalize_sphere(embedding.nu()).unwrap();
+        state.normalize_sphere(embedding.geometry()).unwrap();
         let mut cache = KktCache::new();
         let result = step(
             &embedding,
@@ -804,7 +804,7 @@ mod tests {
             let mut state = interior_state(&problem);
             let mut cache = KktCache::new();
             for _ in 0..5 {
-                state.normalize_sphere(embedding.nu()).unwrap();
+                state.normalize_sphere(embedding.geometry()).unwrap();
                 let mu = embedding.duality_measure(&state);
                 let result = step(
                     &embedding,

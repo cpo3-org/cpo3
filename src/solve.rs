@@ -657,7 +657,7 @@ fn solve_core(
 
         // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
         // complementarity, scaling s by the same factor.
-        state.normalize_sphere(embedding.nu())?;
+        state.normalize_sphere(embedding.geometry())?;
         let (next, next_diagnostics) =
             match predictor_corrector_step(&embedding, &state, &kkt, settings, &mut cache) {
                 Ok(step) => step,

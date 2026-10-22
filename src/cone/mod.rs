@@ -4,6 +4,8 @@ mod geometry;
 
 pub(crate) use geometry::{ConeGeometry, ConeGeometryError};
 
+pub(crate) const INTERIOR_FLOOR: f64 = 1e-32;
+
 /// A cone block occupying consecutive rows of `A` and `b`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]

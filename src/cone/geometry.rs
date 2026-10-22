@@ -5,7 +5,7 @@ use faer::{ColMut, ColRef};
 
 use thiserror::Error;
 
-use super::Cone;
+use super::{Cone, INTERIOR_FLOOR};
 
 /// Failures while laying out or evaluating product-cone geometry.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -151,6 +151,20 @@ impl ConeGeometry {
                 .iter()
                 .all(|entry| entry.is_finite() && *entry > 0.0),
         }))
+    }
+
+    /// Floor nonnegative-cone components, leaving equality rows unchanged.
+    pub(crate) fn clamp_interior(&self, s: &mut [f64], y: &mut [f64]) {
+        for block in &self.blocks {
+            if block.kind == BlockKind::Nonnegative {
+                for value in s[block.range.clone()]
+                    .iter_mut()
+                    .chain(&mut y[block.range.clone()])
+                {
+                    *value = value.max(INTERIOR_FLOOR);
+                }
+            }
+        }
     }
 
     /// Nesterov--Todd scaling `H` with `H y = s`, stored as a diagonal.
