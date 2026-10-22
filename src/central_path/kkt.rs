@@ -55,11 +55,73 @@ pub(crate) struct KktCache {
     /// Retain ownership of the preceding seed until the outer step succeeds.
     direction_before_step: Option<Vec<f64>>,
     /// Adaptive diagonal clamp, applied only to the preconditioner.
-    pub(crate) clamp_floor: Option<f64>,
-    pub(crate) clamp_increases: usize,
-    pub(crate) clamp_decreases: usize,
+    pub(crate) clamp: ClampPolicy,
     /// Numeric dispatches, including failed initial factorizations.
     factorizations: usize,
+}
+
+/// Persistent clamp state and its adjustment rules across outer steps.
+#[derive(Default)]
+pub(crate) struct ClampPolicy {
+    floor: Option<f64>,
+    increases: usize,
+    decreases: usize,
+}
+
+impl ClampPolicy {
+    const MINIMUM: f64 = 1e-20;
+    const MAXIMUM: f64 = 1e-4;
+
+    pub(crate) fn start_step(&mut self, initial: f64) -> f64 {
+        let floor = self.floor.unwrap_or(initial).max(Self::MINIMUM);
+        self.floor = Some(floor);
+        floor
+    }
+
+    pub(crate) fn floor(&self) -> f64 {
+        self.floor.expect("start_step initializes the clamp")
+    }
+
+    fn increase(&mut self) -> f64 {
+        let floor = self.floor();
+        let next = (floor * 10.0).min(Self::MAXIMUM);
+        self.increases += usize::from(next > floor);
+        self.floor = Some(next);
+        next
+    }
+
+    /// Preserve the x10 grid while skipping clamps that cannot change the matrix.
+    pub(crate) fn retry(&mut self, nonbinding_limit: f64) -> Option<f64> {
+        while self.floor() < Self::MAXIMUM {
+            let next = self.increase();
+            if next > nonbinding_limit {
+                return Some(next);
+            }
+        }
+        None
+    }
+
+    pub(crate) fn accepted_step(
+        &mut self,
+        starting_floor: f64,
+        before: LinearAlgebraStats,
+        after: LinearAlgebraStats,
+    ) {
+        let clamp_limited = after.refinement_clamp_limited > before.refinement_clamp_limited;
+        let solve_limited = after.refinement_solve_limited > before.refinement_solve_limited;
+        if solve_limited && !clamp_limited {
+            self.increase();
+        } else if self.floor() == starting_floor
+            && ((clamp_limited && !solve_limited)
+                || after.refinement_settled == before.refinement_settled)
+        {
+            // A retry prevents immediate relaxation after an accepted step.
+            let floor = self.floor();
+            let next = (floor / 10.0).max(Self::MINIMUM);
+            self.decreases += usize::from(next < floor);
+            self.floor = Some(next);
+        }
+    }
 }
 
 /// The reduced KKT matrix pattern: bound rows are eliminated by Schur
@@ -285,8 +347,8 @@ impl KktCache {
             .as_ref()
             .map_or_else(LinearAlgebraStats::default, Factorization::stats);
         stats.factorizations = self.factorizations;
-        stats.clamp_increases = self.clamp_increases;
-        stats.clamp_decreases = self.clamp_decreases;
+        stats.clamp_increases = self.clamp.increases;
+        stats.clamp_decreases = self.clamp.decreases;
         stats
     }
 }
@@ -728,6 +790,35 @@ pub(crate) fn full_residual_and_denominator(
 mod cache_tests {
     use super::*;
     use crate::{Cone, LinearSolver};
+
+    #[test]
+    fn clamp_adjustment_uses_only_the_current_steps_diagnostics() {
+        let before = LinearAlgebraStats {
+            refinement_clamp_limited: 3,
+            refinement_solve_limited: 4,
+            refinement_settled: 5,
+            ..LinearAlgebraStats::default()
+        };
+        for (clamp, solve, settled, factor, increases, decreases) in [
+            (0, 0, 0, 0.1, 0, 1),
+            (0, 0, 1, 1.0, 0, 0),
+            (1, 0, 1, 0.1, 0, 1),
+            (0, 1, 1, 10.0, 1, 0),
+            (1, 1, 1, 1.0, 0, 0),
+        ] {
+            let mut policy = ClampPolicy::default();
+            let start = policy.start_step(1e-8);
+            let after = LinearAlgebraStats {
+                refinement_clamp_limited: before.refinement_clamp_limited + clamp,
+                refinement_solve_limited: before.refinement_solve_limited + solve,
+                refinement_settled: before.refinement_settled + settled,
+                ..before
+            };
+            policy.accepted_step(start, before, after);
+            assert!((policy.floor() / start - factor).abs() < 1e-14);
+            assert_eq!((policy.increases, policy.decreases), (increases, decreases));
+        }
+    }
 
     #[test]
     fn failed_factorization_retains_layout_and_can_be_retried() {

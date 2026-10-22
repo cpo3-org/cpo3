@@ -74,55 +74,27 @@ fn with_clamp_retries<T>(
     cache: &mut KktCache,
     mut attempt: impl FnMut(&KktSettings, &mut KktCache) -> Result<T, MehrotraError>,
 ) -> Result<T, MehrotraError> {
-    const MAX_CLAMP: f64 = 1e-4;
-    let minimum = 1e-20;
-    let mut floor = cache.clamp_floor.unwrap_or(kkt.diagonal_floor).max(minimum);
-    cache.clamp_floor = Some(floor);
-    let starting_floor = floor;
+    let starting_floor = cache.clamp.start_step(kkt.diagonal_floor);
     let before = cache.stats();
-    let settled_before = before.refinement_settled;
     let mut trial = *kkt;
     trial.strict_refinement = false;
+    trial.diagonal_floor = starting_floor;
     loop {
-        trial.diagonal_floor = floor;
         let result = attempt(&trial, cache);
         cache.finish_step(result.is_ok());
         match result {
-            Err(error) if error.is_numerical() && floor < MAX_CLAMP => {
+            Err(error) if error.is_numerical() => {
                 // h_i is nonnegative at an interior point. Also account for
                 // negative primal diagonals rather than assuming convex input.
                 let limit = cache.nonbinding_floor_limit(mu);
-                // Preserve the x10 grid while skipping identical matrices.
-                loop {
-                    floor = (floor * 10.0).min(MAX_CLAMP);
-                    cache.clamp_increases += 1;
-                    if floor > limit || floor >= MAX_CLAMP {
-                        break;
-                    }
-                }
-                cache.clamp_floor = Some(floor);
-                if floor <= limit {
+                let Some(next) = cache.clamp.retry(limit) else {
                     return Err(error);
-                }
+                };
+                trial.diagonal_floor = next;
             }
             Ok(step) => {
                 let after = cache.stats();
-                let clamp_limited =
-                    after.refinement_clamp_limited > before.refinement_clamp_limited;
-                let solve_limited =
-                    after.refinement_solve_limited > before.refinement_solve_limited;
-                if solve_limited && !clamp_limited {
-                    let next = (floor * 10.0).min(MAX_CLAMP);
-                    cache.clamp_increases += usize::from(next > floor);
-                    cache.clamp_floor = Some(next);
-                } else if floor == starting_floor
-                    && ((clamp_limited && !solve_limited)
-                        || after.refinement_settled == settled_before)
-                {
-                    let next = (floor / 10.0).max(minimum);
-                    cache.clamp_decreases += usize::from(next < floor);
-                    cache.clamp_floor = Some(next);
-                }
+                cache.clamp.accepted_step(starting_floor, before, after);
                 return Ok(step);
             }
             Err(error) => return Err(error),
@@ -405,20 +377,20 @@ mod tests {
             assert_eq!(floors.len(), 3);
             assert!((floors[0] - 1e-12).abs() < 1e-25);
             assert!((floors[2] - 1e-10).abs() < 1e-23);
-            assert_eq!(cache.clamp_floor, Some(floors[2]));
+            assert_eq!(cache.clamp.floor(), floors[2]);
             with_clamp_retries(&settings, mu, &mut cache, |trial, _| {
                 assert_eq!(trial.diagonal_floor, floors[2]);
                 Ok(())
             })
             .unwrap();
-            assert_eq!(cache.clamp_floor, Some(floors[2] / 10.0));
+            assert_eq!(cache.clamp.floor(), floors[2] / 10.0);
             let mut fresh = KktCache::new();
             with_clamp_retries(&settings, mu, &mut fresh, |trial, _| {
                 assert_eq!(trial.diagonal_floor, 1e-12);
                 Ok(())
             })
             .unwrap();
-            assert_eq!(fresh.clamp_floor, Some(1e-13));
+            assert_eq!(fresh.clamp.floor(), 1e-13);
         }
     }
 
@@ -496,7 +468,7 @@ mod tests {
             ..KktSettings::new(LinearSolver::Faer)
         };
         let mut cache = KktCache::new();
-        cache.clamp_floor = Some(1e-8);
+        cache.clamp.start_step(1e-8);
         let mut calls = 0;
         with_clamp_retries(&settings, 1e-14, &mut cache, |trial, cache| {
             calls += 1;
@@ -506,7 +478,7 @@ mod tests {
         .unwrap();
         assert!(cache.stats().refinement_settled > 0);
         assert_eq!(calls, 1);
-        assert_eq!(cache.clamp_floor, Some(1e-8));
+        assert_eq!(cache.clamp.floor(), 1e-8);
     }
 
     #[test]
@@ -867,8 +839,8 @@ mod tests {
             })
             .unwrap();
         }
-        assert_eq!(cache.clamp_floor, Some(1e-20));
-        assert_eq!(cache.clamp_increases, 0);
-        assert!(cache.clamp_decreases >= 8);
+        assert_eq!(cache.clamp.floor(), 1e-20);
+        assert_eq!(cache.stats().clamp_increases, 0);
+        assert!(cache.stats().clamp_decreases >= 8);
     }
 }
