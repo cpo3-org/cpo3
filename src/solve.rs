@@ -214,7 +214,7 @@ fn solve_core(
         &kkt,
         &mut cache,
     )?;
-    let mut diagnostics = StepDiagnostics::initial(geometry, &state);
+    let mut diagnostics = StepDiagnostics::new(geometry, &state);
     let mut recovery = Recovery::new(problem, &equilibrated, geometry, original);
     let mut recovered = recovery.update(&state, diagnostics.sy);
     let mut reporter = ProgressReporter::new(settings.verbose);
@@ -239,7 +239,7 @@ fn solve_core(
             // Restore ||(x, y, tau)|| = sqrt(nu + 1) before evaluating
             // complementarity, scaling s by the same factor.
             state.normalize_sphere(geometry)?;
-            let (next, next_diagnostics) = match predictor_corrector_step(
+            let step = match mehrotra::step(
                 scaled_problem,
                 geometry,
                 &state,
@@ -258,8 +258,13 @@ fn solve_core(
                     return Err(error);
                 }
             };
-            state = next;
-            diagnostics = next_diagnostics;
+            diagnostics = StepDiagnostics {
+                sigma: Some(step.sigma),
+                alpha_aff: Some(step.alpha_affine),
+                alpha: Some(step.alpha),
+                ..StepDiagnostics::new(geometry, &step.state)
+            };
+            state = step.state;
             iteration += 1;
             recovered = recovery.update(&state, diagnostics.sy);
             // The ray is only examined past the kappa / tau gate.
@@ -300,36 +305,6 @@ fn solve_core(
     Ok(solution)
 }
 
-/// One Mehrotra predictor--corrector iteration (paper, Section 4.4).
-fn predictor_corrector_step(
-    problem: &Problem,
-    geometry: &ConeGeometry,
-    state: &State,
-    kkt: &KktSettings,
-    settings: &Settings,
-    cache: &mut KktCache,
-) -> Result<(State, StepDiagnostics), MehrotraError> {
-    let step = mehrotra::step(problem, geometry, state, kkt, settings, cache)?;
-    let sy = if geometry.barrier_parameter() == 0 {
-        0.0
-    } else {
-        dot(step.state.s(), step.state.y())
-    };
-    let diagnostics = StepDiagnostics {
-        sy,
-        mu: if geometry.barrier_parameter() == 0 {
-            0.0
-        } else {
-            sy / geometry.barrier_parameter() as f64
-        },
-        tau: step.state.tau(),
-        sigma: Some(step.sigma),
-        alpha_aff: Some(step.alpha_affine),
-        alpha: Some(step.alpha),
-    };
-    Ok((step.state, diagnostics))
-}
-
 #[derive(Clone, Copy, Debug)]
 struct StepDiagnostics {
     /// Keep the numerator to preserve recovery's division order.
@@ -342,19 +317,16 @@ struct StepDiagnostics {
 }
 
 impl StepDiagnostics {
-    fn initial(geometry: &ConeGeometry, state: &State) -> Self {
-        let sy = if geometry.barrier_parameter() == 0 {
+    fn new(geometry: &ConeGeometry, state: &State) -> Self {
+        let nu = geometry.barrier_parameter();
+        let sy = if nu == 0 {
             0.0
         } else {
             dot(state.s(), state.y())
         };
         Self {
             sy,
-            mu: if geometry.barrier_parameter() == 0 {
-                0.0
-            } else {
-                sy / geometry.barrier_parameter() as f64
-            },
+            mu: if nu == 0 { 0.0 } else { sy / nu as f64 },
             tau: state.tau(),
             sigma: None,
             alpha_aff: None,
