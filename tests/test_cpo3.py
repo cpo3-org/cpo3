@@ -137,6 +137,29 @@ def test_default_settings_match_in_rust_and_python() -> None:
     assert _core._default_settings_match(py_settings)
 
 
+@pytest.mark.parametrize(
+    "initialization",
+    ["canonical", "cvxopt", "certified_endpoint", "positive_predictor"],
+)
+def test_initialization_settings_reach_rust(initialization: str) -> None:
+    settings = cpo3.Settings(initialization=initialization, presolve=False, threads=1)
+    solution = cpo3.solve(sparse_problem(), settings=settings)
+    assert solution.status is cpo3.SolverStatus.SOLVED
+    np.testing.assert_allclose(solution.x, [-1.0, -2.0], atol=1e-6)
+    if initialization == "positive_predictor":
+        assert solution.info.initialization_used in (
+            "positive_predictor",
+            "certified_endpoint",
+        )
+    else:
+        assert solution.info.initialization_used == initialization
+
+
+def test_unknown_initialization_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown initialization"):
+        cpo3.Settings(initialization="unknown")
+
+
 @pytest.mark.parametrize("threads", [0, 1, 3])
 def test_thread_settings_reach_rust(threads: int) -> None:
     settings = cpo3.Settings(threads=threads)

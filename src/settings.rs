@@ -2,6 +2,37 @@ use std::time::Duration;
 
 use crate::{LinearSolver, SolveError};
 
+/// Cold-start strategy used when no warm start is accepted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Initialization {
+    /// Spherical point with complementarity set by `Settings::initial_mu`.
+    #[default]
+    Canonical,
+    /// CVXOPT-style linear-system initialization, projected onto the sphere.
+    Cvxopt,
+    /// Large-parameter endpoint with a certified central-path proximity bound.
+    CertifiedEndpoint,
+    /// Positive spherical predictor from the large-parameter endpoint.
+    PositivePredictor,
+}
+
+impl Initialization {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Canonical => "canonical",
+            Self::Cvxopt => "cvxopt",
+            Self::CertifiedEndpoint => "certified_endpoint",
+            Self::PositivePredictor => "positive_predictor",
+        }
+    }
+}
+
+impl std::fmt::Display for Initialization {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// User-facing solver settings.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
@@ -32,19 +63,16 @@ pub struct Settings {
     /// Use the best finite warm candidate even when its local score exceeds
     /// the screening threshold. No effect without a point or inequality rows.
     pub force_warm_start: bool,
-    /// Start from cpo3's CVXOPT/Clarabel-style point instead of the canonical
-    /// spherical cold start when no warm start is supplied or accepted: one
-    /// solve of `[P, A'; A, -H][x; y] = [-c; b]` with `H` the identity on
-    /// cone rows and zero on equality rows (two solves on one factorization
-    /// for linear programs), `s = b - A x`, and cone components of `s` and
-    /// `y` shifted so that their minimum is at least one. A failed solve
-    /// falls back to the canonical point.
-    pub cvxopt_init: bool,
+    /// Cold-start strategy when no warm start is accepted. The positive
+    /// predictor can fall back to the certified endpoint; failed alternative
+    /// initializations ultimately fall back to the canonical point.
+    /// Equality-only problems bypass cold-start initialization.
+    pub initialization: Initialization,
     /// Initial complementarity beta for the canonical cold start.
     /// Defaults to 1e-3, with inequality slacks and multipliers sqrt(beta).
     /// Must be finite and in (0, 1]. Tau is chosen to keep
-    /// ||(x, y, tau)||^2 = nu + 1. Also used after a failed CVXOPT start;
-    /// has no effect on accepted warm/CVXOPT starts or equality-only problems.
+    /// ||(x, y, tau)||^2 = nu + 1. Also used after a failed alternative start;
+    /// has no effect on accepted warm or alternative starts, or equality-only problems.
     pub initial_mu: f64,
     /// Maximum Ruiz sweeps on the augmented problem data (P, A, b, c).
     /// Zero leaves all problem data unscaled.
@@ -96,7 +124,7 @@ impl Default for Settings {
             certificate_ktratio: 1e9,
 
             force_warm_start: false,
-            cvxopt_init: false,
+            initialization: Initialization::Canonical,
             initial_mu: 1e-3,
             ruiz_iters: 2,
             ruiz_tol: 1e-2,

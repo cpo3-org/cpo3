@@ -1,5 +1,4 @@
-//! Initial points: canonical and CVXOPT-style cold starts, and cpo3-style
-//! warm screening.
+//! Spherical, geometric, and CVXOPT-style cold starts, and warm screening.
 
 use super::{
     kkt::{KktCache, solve_shifted_systems},
@@ -7,8 +6,8 @@ use super::{
 };
 
 use crate::{
-    Problem, Settings,
-    cone::{ConeBlock, ConeGeometry},
+    Initialization, Problem, Settings,
+    cone::{ConeBlock, ConeGeometry, INTERIOR_FLOOR},
     linear_algebra::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
     linear_solvers::KktSettings,
     ruiz::EquilibratedProblem,
@@ -24,8 +23,7 @@ pub struct WarmStart {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InitialStart {
-    Canonical,
-    Cvxopt,
+    Cold(Initialization),
     Warm,
 }
 
@@ -41,6 +39,10 @@ pub(crate) struct InitReport {
 const WARM_FLOORS: [f64; 3] = [1e-12, 1e-6, 1e-3];
 const WARM_THRESHOLD: f64 = 100.0;
 const LOCAL_EPS: f64 = 1e-15;
+/// The local-norm theorem applies below one. Use a fixed margin for both
+/// geometric starts; this is a proximity target, not a convergence tolerance.
+const INITIAL_PROXIMITY: f64 = 0.5;
+const PREDICTOR_TRIALS: usize = 16;
 /// Additive factor regularization of the CVXOPT initialization system,
 /// as in cpo3's standalone initialization solve.
 const CVXOPT_REGULARIZATION: f64 = 1e-8;
@@ -177,15 +179,184 @@ fn canonical_state(
     )
 }
 
+/// Start at the large-mu endpoint, optionally predicting along the path.
+/// The sphere fixes u, not s: s = mu / y sets complementarity independently.
+fn geometric_state(
+    problem: &Problem,
+    geometry: &ConeGeometry,
+    predict: bool,
+) -> Result<(State, Initialization), StateError> {
+    let mut e = vec![0.0; geometry.dim()];
+    geometry.canonical_identity(&mut e)?;
+    // Q(0,e,1) = (A'e + c, b, -b'e); P contributes only away from the endpoint.
+    let mut qx = matrix_transpose_mul(problem.a(), &e);
+    for (q, c) in qx.iter_mut().zip(problem.c()) {
+        *q += c;
+    }
+    let qt = -dot(problem.b(), &e);
+    let norm = stable_norm(
+        qx.iter()
+            .copied()
+            .chain(
+                problem
+                    .b()
+                    .iter()
+                    .zip(&e)
+                    .map(|(&b, &e)| b / (1.0 + e).sqrt()),
+            )
+            .chain(std::iter::once(qt / 2.0_f64.sqrt())),
+    );
+    if !norm.is_finite() {
+        return Err(StateError::NonFiniteResult);
+    }
+    let mut mu = if norm == 0.0 {
+        1.0
+    } else {
+        (norm / INITIAL_PROXIMITY).max(INTERIOR_FLOOR)
+    };
+    if !mu.is_finite() {
+        return Err(StateError::InvalidMu);
+    }
+    let endpoint = State::new(
+        vec![0.0; problem.variable_count()],
+        e.iter().map(|&v| mu * v).collect(),
+        e,
+        1.0,
+    )?;
+    if !endpoint.duality_measure(geometry).is_finite() {
+        return Err(StateError::InvalidMu);
+    }
+    if !predict || norm == 0.0 {
+        return Ok((endpoint, Initialization::CertifiedEndpoint));
+    }
+
+    let mut best = endpoint;
+    let mut accepted = false;
+    let endpoint_mu = mu;
+    // Try the endpoint's certified parameter first. If accepted, double 1/mu
+    // until the first rejected trial; otherwise backtrack toward the endpoint.
+    // Bound the search so initialization cannot turn into a separate solve.
+    for _ in 0..PREDICTOR_TRIALS {
+        let candidate = positive_predictor(problem, geometry, &qx, qt, mu);
+        if let Ok(candidate) = candidate
+            && path_proximity(problem, geometry, &candidate) <= INITIAL_PROXIMITY
+        {
+            best = candidate;
+            if !accepted && mu > endpoint_mu {
+                return Ok((best, Initialization::PositivePredictor));
+            }
+            accepted = true;
+            mu *= 0.5;
+        } else if accepted {
+            break;
+        } else {
+            mu *= 2.0;
+        }
+        if !mu.is_finite() || mu < INTERIOR_FLOOR {
+            break;
+        }
+    }
+    Ok((
+        best,
+        if accepted {
+            Initialization::PositivePredictor
+        } else {
+            Initialization::CertifiedEndpoint
+        },
+    ))
+}
+
+/// Positive root of w - 1/w = -a, without cancellation or squaring a.
+fn barrier_root(a: f64) -> f64 {
+    let half_norm = 0.5 * a.hypot(2.0);
+    if a >= 0.0 {
+        1.0 / (half_norm + 0.5 * a)
+    } else {
+        half_norm - 0.5 * a
+    }
+}
+
+/// Freeze Q at the endpoint, solve w + grad(phi)(w) = -Q(u_inf)/mu,
+/// normalize w, then impose exact complementarity at that same mu.
+fn positive_predictor(
+    problem: &Problem,
+    geometry: &ConeGeometry,
+    qx: &[f64],
+    qt: f64,
+    mu: f64,
+) -> Result<State, StateError> {
+    let mut x: Vec<_> = qx.iter().map(|&q| -q / mu).collect();
+    let mut y: Vec<_> = problem.b().iter().map(|&b| -b / mu).collect();
+    for block in geometry.blocks() {
+        if let ConeBlock::Nonnegative(range) = block {
+            for i in range.clone() {
+                y[i] = barrier_root(problem.b()[i] / mu);
+            }
+        }
+    }
+    let mut tau = barrier_root(qt / mu);
+    let norm = stable_norm(x.iter().chain(&y).copied().chain(std::iter::once(tau)));
+    let scale = (geometry.barrier_parameter() as f64 + 1.0).sqrt() / norm;
+    crate::linear_algebra::scale(&mut x, scale);
+    crate::linear_algebra::scale(&mut y, scale);
+    tau *= scale;
+    let mut s = vec![0.0; y.len()];
+    for block in geometry.blocks() {
+        if let ConeBlock::Nonnegative(range) = block {
+            for i in range.clone() {
+                s[i] = mu / y[i];
+                // Avoid a candidate that the solver's interior floor would
+                // immediately change, invalidating its proximity score.
+                if y[i] < INTERIOR_FLOOR || s[i] < INTERIOR_FLOOR {
+                    return Err(StateError::NonInteriorPoint { variable: "y or s" });
+                }
+            }
+        }
+    }
+    if tau < INTERIOR_FLOOR {
+        return Err(StateError::NonPositiveTau);
+    }
+    State::new(x, s, y, tau)
+}
+
+/// Exact local-norm score for a homogeneous state. Unlike warm screening,
+/// certification must not floor mu or the metric weights.
+fn path_proximity(problem: &Problem, geometry: &ConeGeometry, state: &State) -> f64 {
+    let mu = state.duality_measure(geometry);
+    if !mu.is_finite() || mu <= 0.0 {
+        return f64::INFINITY;
+    }
+    let (x, y, tau) = (state.x(), state.y(), state.tau());
+    let px = problem.p_mul(x);
+    let mut rx = matrix_transpose_mul(problem.a(), y);
+    for i in 0..x.len() {
+        rx[i] = (rx[i] + px[i] + problem.c()[i] * tau) / mu + x[i];
+    }
+    let mut ry = matrix_mul(problem.a(), x);
+    for i in 0..y.len() {
+        ry[i] = (-ry[i] + problem.b()[i] * tau) / mu + y[i];
+    }
+    for block in geometry.blocks() {
+        if let ConeBlock::Nonnegative(range) = block {
+            for i in range.clone() {
+                ry[i] = (ry[i] * y[i] - 1.0) / y[i].hypot(1.0);
+            }
+        }
+    }
+    let qt = -dot(problem.c(), x) - dot(problem.b(), y) - dot(x, &px) / tau;
+    let rt = ((qt / mu + tau) * tau - 1.0) / tau.hypot(1.0);
+    stable_norm(rx.iter().chain(&ry).copied().chain(std::iter::once(rt)))
+}
+
 /// cpo3's CVXOPT-style start in the solver's operating scale.
 ///
 /// Solve `[P, A'; A, -H][x; y] = [-c; b]` with `H` the identity on cone
-/// rows and zero on equality rows, so equality rows hold exactly and cone
-/// rows give the bounded least-squares point `y = A x - b`. Linear programs
+/// rows and zero on equality rows. Without a numerical retry shift, equality
+/// rows hold exactly and cone rows give `y = A x - b`. Linear programs
 /// split the solve on one factorization: `(0, b)` for the primal and
-/// `(-c, 0)` for the dual, since coupling both is ill-posed without a
-/// `(1,1)` block. Then `s = b - A x`, and cone components of `s` and `y`
-/// are shifted so that their minimum is at least the interior margin.
+/// `(-c, 0)` for the dual, matching CVXOPT's independent least-squares
+/// initializations. Then `s = b - A x`; vectors too close to the cone
+/// boundary are shifted to have minimum one, as in CVXOPT.
 ///
 /// The shifted duals can be orders of magnitude larger than the sphere
 /// radius `sqrt(nu + 1)` (the CONT family reaches `||y|| ~ 1e5` against a
@@ -291,10 +462,10 @@ fn cvxopt_solve(
     }
 }
 
-/// Add one constant to every cone component so that their minimum reaches
-/// the interior margin; equality components are left unchanged.
+/// CVXOPT's coneprog.py shifts only vectors at or near the cone boundary.
+/// Equality components contribute neither to the norm nor to the shift.
 fn shift_into_interior(values: &mut [f64], geometry: &ConeGeometry) {
-    let minimum = geometry
+    let cone_values = geometry
         .blocks()
         .iter()
         .filter_map(|block| match block {
@@ -302,10 +473,11 @@ fn shift_into_interior(values: &mut [f64], geometry: &ConeGeometry) {
             ConeBlock::Zero(_) => None,
         })
         .flatten()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
-    let shift = INTERIOR_MARGIN - minimum;
-    if shift > 0.0 {
+        .copied();
+    let minimum = cone_values.clone().fold(f64::INFINITY, f64::min);
+    let norm = stable_norm(cone_values);
+    if minimum <= 1e-8 * norm.max(1.0) {
+        let shift = INTERIOR_MARGIN - minimum;
         for block in geometry.blocks() {
             if let ConeBlock::Nonnegative(range) = block {
                 for value in &mut values[range.clone()] {
@@ -325,19 +497,33 @@ fn cold_state(
     kkt: &KktSettings,
     cache: &mut KktCache,
 ) -> Result<(State, InitialStart), StateError> {
-    if settings.cvxopt_init {
-        match cvxopt_state(problem, geometry, kkt, cache) {
-            Ok(state) => return Ok((state, InitialStart::Cvxopt)),
-            Err(reason) => {
-                eprintln!(
-                    "cpo3: cvxopt initialization failed ({reason}); using the canonical point"
-                );
-            }
+    let alternative = match settings.initialization {
+        Initialization::Canonical => None,
+        Initialization::Cvxopt => Some(
+            cvxopt_state(problem, geometry, kkt, cache)
+                .map(|state| (state, Initialization::Cvxopt)),
+        ),
+        Initialization::CertifiedEndpoint | Initialization::PositivePredictor => Some(
+            geometric_state(
+                problem,
+                geometry,
+                settings.initialization == Initialization::PositivePredictor,
+            )
+            .map_err(|error| error.to_string()),
+        ),
+    };
+    if let Some(result) = alternative {
+        match result {
+            Ok((state, initialization)) => return Ok((state, InitialStart::Cold(initialization))),
+            Err(reason) => eprintln!(
+                "cpo3: {} initialization failed ({reason}); using the canonical point",
+                settings.initialization
+            ),
         }
     }
     Ok((
         canonical_state(problem, geometry, settings.initial_mu)?,
-        InitialStart::Canonical,
+        InitialStart::Cold(Initialization::Canonical),
     ))
 }
 
@@ -411,7 +597,7 @@ mod tests {
     fn cvxopt_settings() -> Settings {
         Settings {
             ruiz_iters: 0,
-            cvxopt_init: true,
+            initialization: Initialization::Cvxopt,
             ..Settings::default()
         }
     }
@@ -464,7 +650,7 @@ mod tests {
             assert_close(state.duality_measure(&geometry), beta, 1e-12);
             assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
             state.validate(&problem, &geometry).unwrap();
-            assert_eq!(report.start, InitialStart::Canonical);
+            assert_eq!(report.start, InitialStart::Cold(Initialization::Canonical));
             assert_ne!(scaled.unscale_s(state.s()), state.s());
         }
     }
@@ -472,22 +658,21 @@ mod tests {
     #[test]
     fn cvxopt_linear_program_splits_the_primal_and_dual_solves() {
         // With A = I the primal solve gives x = b and the dual solve gives
-        // y = -c up to the 1e-8 regularization; a coupled (-c, b) solve would
-        // give x = b - c and a shifted slack of (2, 1) instead of (1, 1).
+        // y = -c. A coupled (-c, b) solve would instead give x = b - c.
+        // Healthy positive multipliers below one must remain unchanged.
         let problem = Problem::new(
             None,
-            vec![-1.0, -2.0],
+            vec![-0.25, -0.5],
             crate::linear_algebra::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
             vec![3.0, 4.0],
             vec![Cone::Nonnegative(2)],
         )
         .unwrap();
         let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.start, InitialStart::Cvxopt);
-        // The unscaled point (3, 4 | 1, 2 | 1) has norm sqrt(31); the sphere
-        // of the two-dimensional orthant has radius sqrt(3).
+        assert_eq!(report.start, InitialStart::Cold(Initialization::Cvxopt));
+        // The unscaled point (3, 4 | .25, .5 | 1) has squared norm 26.3125.
         let tau = state.tau();
-        assert_close(tau, (3.0_f64 / 31.0).sqrt(), 1e-6);
+        assert_close(tau, (3.0_f64 / 26.3125).sqrt(), 1e-6);
         assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
         for (actual, expected) in state.x().iter().zip([3.0, 4.0]) {
             assert_close(actual / tau, expected, 1e-6);
@@ -495,7 +680,7 @@ mod tests {
         for (actual, expected) in state.s().iter().zip([1.0, 1.0]) {
             assert_close(actual / tau, expected, 1e-6);
         }
-        for (actual, expected) in state.y().iter().zip([1.0, 2.0]) {
+        for (actual, expected) in state.y().iter().zip([0.25, 0.5]) {
             assert_close(actual / tau, expected, 1e-6);
         }
     }
@@ -512,7 +697,7 @@ mod tests {
         )
         .unwrap();
         let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.start, InitialStart::Cvxopt);
+        assert_eq!(report.start, InitialStart::Cold(Initialization::Cvxopt));
         let tau = state.tau();
         assert!(tau > 0.0 && tau < 1.0);
         assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
@@ -524,14 +709,14 @@ mod tests {
         assert_close(ax[0], problem.b()[0], 1e-6);
         assert_eq!(state.s()[0], 0.0);
         // Cone rows: the raw least-squares point has y = A x - b = -s, and
-        // both vectors are shifted by one constant each to a minimum of one.
+        // only the negative multipliers need an interior shift in this case.
         let raw_s = [problem.b()[1] - ax[1], problem.b()[2] - ax[2]];
         let s_shift = [s[1] - raw_s[0], s[2] - raw_s[1]];
         let y_shift = [y[1] + raw_s[0], y[2] + raw_s[1]];
         assert_close(s_shift[0], s_shift[1], 1e-6);
         assert_close(y_shift[0], y_shift[1], 1e-6);
-        assert!(s_shift[0] >= 0.0 && y_shift[0] >= 0.0);
-        assert_close(s[1].min(s[2]), 1.0, 1e-6);
+        assert_close(s_shift[0], 0.0, 1e-6);
+        assert!(y_shift[0] > 0.0);
         assert_close(y[1].min(y[2]), 1.0, 1e-6);
         // The unshifted duals satisfy the first block, P x + A' y + c = 0.
         let raw_y = [y[0], -raw_s[0], -raw_s[1]];
@@ -543,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn interior_shift_moves_only_cone_rows_and_only_upward() {
+    fn cvxopt_shift_uses_the_cone_norm_and_boundary_threshold() {
         let geometry = crate::cone::test_geometry(vec![
             Cone::Zero(1),
             Cone::Nonnegative(1),
@@ -554,9 +739,15 @@ mod tests {
         shift_into_interior(&mut values, &geometry);
         assert_eq!(values, [-3.0, 2.5, -7.0, 4.0, 1.0]);
         let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(2), Cone::Zero(1)]);
-        let mut values = vec![7.0, 1.5, 4.0];
+        let mut values = vec![0.5, 2.0, 1e20];
         shift_into_interior(&mut values, &geometry);
-        assert_eq!(values, [7.0, 1.5, 4.0]);
+        assert_eq!(values, [0.5, 2.0, 1e20]);
+        let mut values = vec![1e-10, 2.0, -7.0];
+        shift_into_interior(&mut values, &geometry);
+        assert_eq!(values, [1.0, 3.0 - 1e-10, -7.0]);
+        let mut values = vec![2.0, 1e10, -7.0];
+        shift_into_interior(&mut values, &geometry);
+        assert_eq!(values, [1.0, 1e10 - 1.0, -7.0]);
         let geometry = crate::cone::test_geometry(vec![Cone::Zero(1)]);
         let mut values = vec![-2.0];
         shift_into_interior(&mut values, &geometry);
@@ -580,6 +771,90 @@ mod tests {
         // so the squared screening score is 87 / mu = 14.5.
         let score = local_score(&problem, &geometry, &state, &[0.5, 1.0], &[1.0]);
         assert!((score * score - 14.5).abs() < 1e-12);
+        let exact = path_proximity(&problem, &geometry, &state);
+        assert!((exact * exact - 14.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn geometric_starts_are_spherical_centered_and_close_to_the_path() {
+        // Include stiff quadratic curvature: the predictor must check the
+        // full QP residual and backtrack, not just the endpoint's frozen Q.
+        for curvature in [0.0, 2.0, 1e6] {
+            let problem = Problem::new(
+                Some(crate::linear_algebra::test_matrix(1, 1, vec![curvature]).unwrap()),
+                vec![-1.0],
+                crate::linear_algebra::test_matrix(3, 1, vec![3.0, -2.0, 1.0]).unwrap(),
+                vec![4.0, -1.0, 2.0],
+                vec![Cone::Nonnegative(1), Cone::Zero(1), Cone::Nonnegative(1)],
+            )
+            .unwrap();
+            let geometry = ConeGeometry::new(&problem).unwrap();
+            for predict in [false, true] {
+                let (mut state, _) = geometric_state(&problem, &geometry, predict).unwrap();
+                // Check the state as the solve loop receives it, including
+                // the loop's normalization and interior floor.
+                state.normalize_sphere(&geometry).unwrap();
+                state.validate(&problem, &geometry).unwrap();
+                assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
+                assert_eq!(state.s()[1], 0.0);
+                let mu = state.duality_measure(&geometry);
+                for i in [0, 2] {
+                    assert_close(state.s()[i] * state.y()[i], mu, 1e-12);
+                }
+                assert!(path_proximity(&problem, &geometry, &state) <= INITIAL_PROXIMITY + 1e-12);
+                if !predict {
+                    // q=(3, [4,-1,2], -6), ||q||^2_H^-1 = 38.
+                    assert_close(mu, 38.0_f64.sqrt() / INITIAL_PROXIMITY, 1e-12);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn positive_predictor_has_second_order_endpoint_accuracy() {
+        let problem = Problem::new(
+            Some(crate::linear_algebra::test_matrix(1, 1, vec![2.0]).unwrap()),
+            vec![-1.0],
+            crate::linear_algebra::test_matrix(1, 1, vec![3.0]).unwrap(),
+            vec![4.0],
+            vec![Cone::Nonnegative(1)],
+        )
+        .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let first = positive_predictor(&problem, &geometry, &[2.0], -4.0, 100.0).unwrap();
+        let second = positive_predictor(&problem, &geometry, &[2.0], -4.0, 200.0).unwrap();
+        let ratio = path_proximity(&problem, &geometry, &first)
+            / path_proximity(&problem, &geometry, &second);
+        assert!((3.9..4.1).contains(&ratio));
+        // The stable root must remain positive even when a*a would overflow.
+        for a in [-1e200, -1.0, 0.0, 1.0, 1e200] {
+            let w = barrier_root(a);
+            assert!(w > 0.0 && w.is_finite());
+            assert_close(w - 1.0 / w, -a, 1e-14);
+        }
+    }
+
+    #[test]
+    fn geometric_start_handles_zero_and_overflowing_endpoint_residuals() {
+        let problem = |c| {
+            Problem::new(
+                None,
+                vec![c],
+                crate::linear_algebra::test_matrix(2, 1, vec![0.0; 2]).unwrap(),
+                vec![0.0; 2],
+                vec![Cone::Nonnegative(2)],
+            )
+            .unwrap()
+        };
+        let zero = problem(0.0);
+        let geometry = ConeGeometry::new(&zero).unwrap();
+        let (state, used) = geometric_state(&zero, &geometry, true).unwrap();
+        assert_eq!(used, Initialization::CertifiedEndpoint);
+        assert_eq!(path_proximity(&zero, &geometry, &state), 0.0);
+        assert_eq!(
+            geometric_state(&problem(5e307), &geometry, false),
+            Err(StateError::InvalidMu)
+        );
     }
 
     #[test]

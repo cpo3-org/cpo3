@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::{
-    LinearSolver, Problem, Settings,
+    Initialization, LinearSolver, Problem, Settings,
     central_path::init,
     cone::ConeGeometry,
     linear_algebra::matrix_mul,
@@ -51,11 +51,9 @@ pub struct SolutionInfo {
     pub warm_start_used: Option<bool>,
     /// Score used to screen the best warm candidate; `None` without one.
     pub warm_start_score: Option<f64>,
-    /// `Some(true)` when the CVXOPT-style point started the solve and
-    /// `Some(false)` for the canonical point, including after a fallback;
-    /// `None` when an accepted warm start was used or no interior-point
-    /// iterate was formed.
-    pub cvxopt_init_used: Option<bool>,
+    /// Cold initialization actually used, including any fallback. `None`
+    /// when a warm start was accepted or no interior-point iterate was formed.
+    pub initialization_used: Option<Initialization>,
     /// Constraints and variables removed by presolve.
     pub presolve_rows_removed: usize,
     pub presolve_columns_removed: usize,
@@ -69,14 +67,13 @@ pub struct SolutionInfo {
 
 impl SolutionInfo {
     pub(crate) fn new(settings: &Settings, init_report: Option<init::InitReport>) -> Self {
-        let (warm_start_used, warm_start_score, cvxopt_init_used) = match init_report {
+        let (warm_start_used, warm_start_score, initialization_used) = match init_report {
             Some(init) => (
                 init.warm_start_supplied
                     .then_some(init.start == init::InitialStart::Warm),
                 init.warm_start_score,
                 match init.start {
-                    init::InitialStart::Canonical => Some(false),
-                    init::InitialStart::Cvxopt => Some(true),
+                    init::InitialStart::Cold(initialization) => Some(initialization),
                     init::InitialStart::Warm => None,
                 },
             ),
@@ -94,7 +91,7 @@ impl SolutionInfo {
             eliminate_bounds: settings.eliminate_bounds,
             warm_start_used,
             warm_start_score,
-            cvxopt_init_used,
+            initialization_used,
             presolve_rows_removed: 0,
             presolve_columns_removed: 0,
             presolve_time: Duration::ZERO,

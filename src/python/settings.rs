@@ -5,7 +5,7 @@ use std::time::Duration;
 use pyo3::{exceptions::PyValueError, prelude::*};
 
 use super::parse_linear_solver;
-use crate::Settings;
+use crate::{Initialization, Settings};
 
 pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
     let seconds: Option<f64> = values.getattr("time_limit")?.extract()?;
@@ -20,6 +20,18 @@ pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
         .transpose()?;
     let linear_solver = values.getattr("linear_solver")?.extract::<String>()?;
     let linear_solver = parse_linear_solver(&linear_solver)?;
+    let initialization = values.getattr("initialization")?.extract::<String>()?;
+    let initialization = match initialization.as_str() {
+        "canonical" => Initialization::Canonical,
+        "cvxopt" => Initialization::Cvxopt,
+        "certified_endpoint" => Initialization::CertifiedEndpoint,
+        "positive_predictor" => Initialization::PositivePredictor,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "unknown initialization {initialization:?}"
+            )));
+        }
+    };
     let settings = Settings {
         max_iters: values.getattr("max_iters")?.extract()?,
         time_limit,
@@ -34,7 +46,7 @@ pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
         certificate_ktratio: values.getattr("certificate_ktratio")?.extract()?,
 
         force_warm_start: values.getattr("force_warm_start")?.extract()?,
-        cvxopt_init: values.getattr("cvxopt_init")?.extract()?,
+        initialization,
         initial_mu: values.getattr("initial_mu")?.extract()?,
         ruiz_iters: values.getattr("ruiz_iters")?.extract()?,
         ruiz_tol: values.getattr("ruiz_tol")?.extract()?,

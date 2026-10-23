@@ -200,8 +200,10 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn cvxopt_init_used(&self) -> Option<bool> {
-        self.inner.cvxopt_init_used
+    fn initialization_used(&self) -> Option<&'static str> {
+        self.inner
+            .initialization_used
+            .map(crate::Initialization::as_str)
     }
 
     #[getter]

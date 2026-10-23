@@ -1,5 +1,7 @@
 mod common;
-use cpo3::{Cone, CscMatrix, Problem, Settings, Solution, SolveError, SolverStatus, solve};
+use cpo3::{
+    Cone, CscMatrix, Initialization, Problem, Settings, Solution, SolveError, SolverStatus, solve,
+};
 
 fn dot(x: &[f64], y: &[f64]) -> f64 {
     x.iter().zip(y).map(|(x, y)| x * y).sum()
@@ -291,7 +293,7 @@ fn equality_presolve_recovers_points_and_bypasses_initialization() {
     for presolve in [false, true] {
         let cfg = Settings {
             presolve,
-            cvxopt_init: true,
+            initialization: Initialization::Cvxopt,
             force_warm_start: true,
             threads: 1,
             linear_solver: cpo3::LinearSolver::Feral,
@@ -302,7 +304,7 @@ fn equality_presolve_recovers_points_and_bypasses_initialization() {
         assert!(s.x().iter().all(|x| (x - 1.).abs() < 1e-7));
         assert_eq!(s.info().linear_solver, cpo3::LinearSolver::Faer);
         assert_eq!(s.info().warm_start_used, Some(false));
-        assert_eq!(s.info().cvxopt_init_used, None);
+        assert_eq!(s.info().initialization_used, None);
         if presolve {
             assert!(s.info().presolve_columns_removed > 0);
         }

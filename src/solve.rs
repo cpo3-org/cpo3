@@ -515,8 +515,12 @@ mod tests {
             assert_eq!(solution.info().iters == 0, presolve);
             assert_eq!(solution.info().linear_algebra.factorizations == 0, presolve);
             assert_eq!(
-                solution.info().cvxopt_init_used,
-                if presolve { None } else { Some(false) }
+                solution.info().initialization_used,
+                if presolve {
+                    None
+                } else {
+                    Some(crate::Initialization::Canonical)
+                }
             );
             assert!(solution.info().pobj.is_nan() && solution.info().dobj.is_nan());
             assert_eq!(solution.info().presolve_parallel_comparisons, None);
@@ -547,8 +551,12 @@ mod tests {
             assert_eq!(solution.info().iters == 0, presolve);
             assert_eq!(solution.info().linear_algebra.factorizations == 0, presolve);
             assert_eq!(
-                solution.info().cvxopt_init_used,
-                if presolve { None } else { Some(false) }
+                solution.info().initialization_used,
+                if presolve {
+                    None
+                } else {
+                    Some(crate::Initialization::Canonical)
+                }
             );
             assert!(solution.info().pobj.is_nan() && solution.info().dobj.is_nan());
             assert_eq!(solution.info().presolve_parallel_comparisons, None);
@@ -595,7 +603,10 @@ mod tests {
         let cold = solve(&problem, &settings).unwrap();
         assert_eq!(cold.info.warm_start_used, None);
         assert_eq!(cold.info.warm_start_score, None);
-        assert_eq!(cold.info.cvxopt_init_used, Some(false));
+        assert_eq!(
+            cold.info.initialization_used,
+            Some(crate::Initialization::Canonical)
+        );
         let warm = WarmStart {
             x: cold.x().to_vec(),
             y: cold.y().to_vec(),
@@ -605,7 +616,7 @@ mod tests {
         assert_eq!(again.status(), SolverStatus::Solved);
         assert_eq!(again.info.warm_start_used, Some(true));
         assert!(again.info.warm_start_score.unwrap().is_finite());
-        assert_eq!(again.info.cvxopt_init_used, None);
+        assert_eq!(again.info.initialization_used, None);
         assert!(again.info.iters <= cold.info.iters);
 
         let junk = WarmStart {
@@ -616,7 +627,10 @@ mod tests {
         let rejected = solve_from(&problem, &settings, Some(&junk)).unwrap();
         assert_eq!(rejected.info.warm_start_used, Some(false));
         assert!(rejected.info.warm_start_score.unwrap().is_finite());
-        assert_eq!(rejected.info.cvxopt_init_used, Some(false));
+        assert_eq!(
+            rejected.info.initialization_used,
+            Some(crate::Initialization::Canonical)
+        );
         assert_eq!(rejected.info.iters, cold.info.iters);
 
         let forced = Settings {
@@ -627,7 +641,7 @@ mod tests {
         let used = solve_from(&problem, &forced, Some(&junk)).unwrap();
         assert_eq!(used.info.warm_start_used, Some(true));
         assert_eq!(used.info.warm_start_score, rejected.info.warm_start_score);
-        assert_eq!(used.info.cvxopt_init_used, None);
+        assert_eq!(used.info.initialization_used, None);
         assert_eq!(used.status(), SolverStatus::Solved);
 
         let without_warm = solve_from(&problem, &forced, None).unwrap();

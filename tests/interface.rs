@@ -1,5 +1,8 @@
 mod common;
-use cpo3::{Cone, CscMatrix, LinearSolver, Problem, ProblemError, Settings, SolverStatus, solve};
+use cpo3::{
+    Cone, CscMatrix, Initialization, LinearSolver, Problem, ProblemError, Settings, SolverStatus,
+    solve,
+};
 
 #[test]
 fn cones_report_their_vector_dim() {
@@ -21,7 +24,7 @@ fn settings_use_short_names() {
     assert_eq!(LinearSolver::default(), LinearSolver::Faer);
     assert!(settings.eliminate_bounds);
     assert_eq!(settings.refine_init_reg, 1e-12);
-    assert!(!settings.cvxopt_init);
+    assert_eq!(settings.initialization, Initialization::Canonical);
     assert_eq!(settings.initial_mu, 1e-3);
     assert_eq!(settings.step_fraction, 0.999);
 }
@@ -311,54 +314,78 @@ fn reference_problems() -> Vec<(Problem, Vec<f64>)> {
 }
 
 #[test]
-fn cvxopt_initialization_solves_the_reference_problems_with_every_solver() {
-    for (problem, expected) in reference_problems() {
-        for linear_solver in [LinearSolver::Faer, LinearSolver::Feral] {
-            for presolve in [false, true] {
-                let solution = solve(
-                    &problem,
-                    &Settings {
-                        presolve,
-                        cvxopt_init: true,
-                        ..solve_settings(linear_solver)
-                    },
-                )
-                .unwrap();
-                assert_eq!(solution.status(), SolverStatus::Solved);
-                let info = solution.info();
-                assert_ne!(info.cvxopt_init_used, Some(false));
-                if info.cvxopt_init_used.is_some() {
-                    assert!(info.linear_algebra.factorizations >= 1);
-                    assert!(info.linear_algebra.primary_solves >= 1);
-                }
-                for (actual, expected) in solution.x().iter().zip(&expected) {
-                    assert_close(*actual, *expected);
+fn initialization_strategies_solve_the_reference_problems_with_every_solver() {
+    for initialization in [
+        Initialization::Canonical,
+        Initialization::Cvxopt,
+        Initialization::CertifiedEndpoint,
+        Initialization::PositivePredictor,
+    ] {
+        for (problem, expected) in reference_problems() {
+            for linear_solver in [LinearSolver::Faer, LinearSolver::Feral] {
+                for presolve in [false, true] {
+                    let solution = solve(
+                        &problem,
+                        &Settings {
+                            presolve,
+                            initialization,
+                            ..solve_settings(linear_solver)
+                        },
+                    )
+                    .unwrap();
+                    assert_eq!(solution.status(), SolverStatus::Solved);
+                    let info = solution.info();
+                    if let Some(actual) = info.initialization_used {
+                        if initialization == Initialization::PositivePredictor {
+                            assert!(matches!(
+                                actual,
+                                Initialization::PositivePredictor
+                                    | Initialization::CertifiedEndpoint
+                            ));
+                        } else {
+                            assert_eq!(actual, initialization);
+                        }
+                        if actual == Initialization::Cvxopt {
+                            assert!(info.linear_algebra.factorizations >= 1);
+                            assert!(info.linear_algebra.primary_solves >= 1);
+                        }
+                    }
+                    for (actual, expected) in solution.x().iter().zip(&expected) {
+                        assert_close(*actual, *expected);
+                    }
                 }
             }
         }
     }
 }
 
-/// Equality-only problems bypass CVXOPT initialization and factor only once.
+/// Equality-only problems bypass cold-start initialization and factor only once.
 #[test]
-fn equality_solver_bypasses_optional_cvxopt_initialization() {
+fn equality_solver_bypasses_cold_start_initialization() {
     let (problem, expected) = reference_problems().pop().unwrap();
-    let solution = solve(
-        &problem,
-        &Settings {
-            presolve: false,
-            cvxopt_init: true,
-            ..Settings::default()
-        },
-    )
-    .unwrap();
-    assert_eq!(solution.status(), SolverStatus::Solved);
-    assert_eq!(solution.info().cvxopt_init_used, None);
-    assert_eq!(solution.info().linear_algebra.factorizations, 1);
-    assert_eq!(solution.info().linear_algebra.refinement_solves, 0);
-    assert!(solution.info().iters <= 1, "{}", solution.info().iters);
-    assert_close(solution.x()[0], expected[0]);
-    assert_close(solution.y()[0], -2.0);
+    for initialization in [
+        Initialization::Canonical,
+        Initialization::Cvxopt,
+        Initialization::CertifiedEndpoint,
+        Initialization::PositivePredictor,
+    ] {
+        let solution = solve(
+            &problem,
+            &Settings {
+                presolve: false,
+                initialization,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(solution.status(), SolverStatus::Solved);
+        assert_eq!(solution.info().initialization_used, None);
+        assert_eq!(solution.info().linear_algebra.factorizations, 1);
+        assert_eq!(solution.info().linear_algebra.refinement_solves, 0);
+        assert!(solution.info().iters <= 1, "{}", solution.info().iters);
+        assert_close(solution.x()[0], expected[0]);
+        assert_close(solution.y()[0], -2.0);
+    }
 }
 
 #[test]
@@ -392,11 +419,11 @@ fn solves_equality_chain_without_homogeneous_scale_stagnation() {
     assert!(solution.info().pres <= 2e-8);
     assert!(solution.info().dres <= 1e-8);
 
-    // The CVXOPT start solves the equality-constrained KKT system outright.
+    // Equality-only solving bypasses the requested cold-start strategy.
     let solution = solve(
         &problem,
         &Settings {
-            cvxopt_init: true,
+            initialization: Initialization::Cvxopt,
             ..Settings::default()
         },
     )

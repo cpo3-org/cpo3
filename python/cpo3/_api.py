@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from os import PathLike
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -128,14 +128,20 @@ class Settings:
         Accept the best finite interior warm-start candidate even if its local
         score exceeds the screening threshold. Has no effect without a warm
         start or for equality-only problems.
-    cvxopt_init : bool, default=False
-        Use a CVXOPT/Clarabel-style linear-system initialization when no warm
-        start is accepted. Falls back to the canonical spherical starting
-        point if initialization fails.
+    initialization : str, default="canonical"
+        Cold-start strategy when no warm start is accepted: "canonical" uses a
+        spherical point with prescribed complementarity; "cvxopt" uses a
+        linear-system initialization; "certified_endpoint" chooses the path
+        parameter at the large-parameter endpoint using a proximity bound;
+        "positive_predictor" predicts from that endpoint while preserving
+        positivity and spherical normalization, falling back to the certified
+        endpoint if needed. Failed alternative starts ultimately fall back to
+        "canonical". Has no effect on equality-only problems.
     initial_mu : float, default=1e-3
         Initial complementarity for the canonical spherical starting point.
-        Must be in (0, 1]. Has no effect on accepted warm or CVXOPT-style starts
-        or on equality-only problems.
+        Must be in (0, 1]. Also used after an alternative initialization fails.
+        Has no effect on accepted warm or alternative starts, or on
+        equality-only problems.
     ruiz_iters : int, default=2
         Maximum number of Ruiz equilibration passes on the augmented problem
         data (P, A, b, c). Zero disables equilibration.
@@ -193,7 +199,9 @@ class Settings:
     certificate_ktratio: float = 1e9
 
     force_warm_start: bool = False
-    cvxopt_init: bool = False
+    initialization: Literal[
+        "canonical", "cvxopt", "certified_endpoint", "positive_predictor"
+    ] = "canonical"
     initial_mu: float = 1e-3
     ruiz_iters: int = 2
     ruiz_tol: float = 1e-2
@@ -340,15 +348,14 @@ class SolutionInfo:
         return self._native.warm_start_used
 
     @property
-    def cvxopt_init_used(self) -> bool | None:
-        """Whether the CVXOPT-style point started the solve.
+    def initialization_used(self) -> str | None:
+        """Cold-start strategy actually used, including any fallback.
 
-        ``False`` covers the canonical point, including after a fallback;
         ``None`` when an accepted warm start was used or no interior-point
         iterate was formed.
         """
 
-        return self._native.cvxopt_init_used
+        return self._native.initialization_used
 
     @property
     def presolve_rows_removed(self) -> int:
