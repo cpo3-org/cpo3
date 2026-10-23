@@ -33,6 +33,9 @@ releases.
 
 ## Installation
 
+cpo3 is not yet published on PyPI or crates.io. Install it from source using
+the instructions below.
+
 To build the Python interface from source, install Rust 1.91 or later,
 Python 3.10 or later, and [uv](https://docs.astral.sh/uv/), then run:
 
