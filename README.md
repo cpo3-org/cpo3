@@ -24,6 +24,10 @@ The method uses a regularized homogeneous embedding with a canonical central
 path. Its predictor–corrector steps retain the nonlinear embedding equations
 while linearizing complementarity.
 
+The name **cpo3** combines *Conic Programming* with **O3**, a double reference to
+the compiler optimization flag `-O3` and the trioxide in rust—a nod to its
+implementation in Rust.
+
 cpo3 is under active development. The API and solver behavior may change between
 releases.
 
