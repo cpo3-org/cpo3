@@ -4,7 +4,7 @@ cpo3 is a sparse interior-point solver for convex linear and quadratic programs,
 written in Rust with a Python interface. It solves
 
 $$
-\min_{x,s}\; \tfrac12 x^\top P x + c^\top x
+\min_{x,s} \tfrac12 x^\top P x + c^\top x
 \quad\text{subject to}\quad Ax+s=b,\quad s\in\mathcal K,
 $$
 
@@ -72,7 +72,7 @@ solution = cpo3.solve(problem)
 print(solution.status)
 
 if solution.status == cpo3.SolverStatus.SOLVED:
-    print(solution.x)          # approximately [1.0, 2.0]
+    print(solution.x)  # approximately [1.0, 2.0]
     print(solution.info.pobj)  # approximately -2.5
 ```
 
