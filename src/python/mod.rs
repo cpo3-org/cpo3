@@ -280,6 +280,11 @@ impl PySolutionInfo {
     }
 
     #[getter]
+    fn lsmr_iterations(&self) -> usize {
+        self.inner.linear_algebra.lsmr_iterations
+    }
+
+    #[getter]
     fn refinement_solves(&self) -> usize {
         self.inner.linear_algebra.refinement_solves
     }

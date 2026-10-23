@@ -1,9 +1,6 @@
 //! FERAL factorization adapter.
 
-use super::{
-    LinearSystemError, PivotReport, TriangleSource, validate_finite, validate_rhs, validate_square,
-    validate_upper_triangle,
-};
+use super::{LinearSystemError, PivotReport, TriangleSource};
 use crate::CscMatrix;
 use ::feral::{
     CscMatrix as FeralCscMatrix, FactorStatus as FeralFactorStatus,
@@ -17,28 +14,18 @@ use ::feral::{
 pub(super) struct FeralFactorization {
     solver: FeralSolver,
     matrix: FeralCscMatrix,
-    /// Source position of each lower-triangle entry.
+    /// Diagonal slots in the lower triangle.
     source: TriangleSource,
     /// Output buffer for `solve_into`, which needs a distinct target.
     scratch: Vec<f64>,
 }
 
 impl FeralFactorization {
-    pub(super) fn new(
-        matrix: CscMatrix,
-        factorizations: &mut usize,
-    ) -> Result<Self, LinearSystemError> {
-        validate_square(matrix.rows(), matrix.columns())?;
-        if matrix.rows() == 0 {
-            return Err(LinearSystemError::Empty);
-        }
-        validate_upper_triangle(&matrix)?;
+    pub(super) fn new(matrix: CscMatrix, threads: usize) -> Result<Self, LinearSystemError> {
         let (prepared, source) = to_feral(&matrix)?;
         drop(matrix);
         let matrix = prepared;
-        let mut solver = feral_solver();
-        *factorizations += 1;
-        check_feral_status(solver.factor(&matrix, None))?;
+        let solver = feral_solver(threads);
         Ok(Self {
             solver,
             matrix,
@@ -52,13 +39,12 @@ impl FeralFactorization {
     }
 
     pub(super) fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
-        validate_rhs(self.dim(), vector)?;
         self.scratch.resize(vector.len(), 0.0);
         self.solver
             .solve_into(vector, &mut self.scratch)
             .map_err(|error| LinearSystemError::Factorization(error.to_string()))?;
         vector.copy_from_slice(&self.scratch);
-        validate_finite(vector)
+        Ok(())
     }
 
     pub(super) fn pivot_report(&self) -> Option<PivotReport> {
@@ -67,28 +53,7 @@ impl FeralFactorization {
             positive: inertia.positive,
             negative: inertia.negative,
             zero: inertia.zero,
-            min_abs: self.solver.min_pivot_magnitude()?,
-            max_abs: self.solver.max_pivot_magnitude()?,
         })
-    }
-
-    #[cfg(test)]
-    pub(super) fn refactor(
-        &mut self,
-        matrix: &CscMatrix,
-        factorizations: &mut usize,
-    ) -> Result<(), LinearSystemError> {
-        if matrix.rows() != self.dim() || matrix.columns() != self.dim() {
-            return Err(LinearSystemError::DimensionChanged {
-                expected: self.dim(),
-                actual: matrix.rows(),
-            });
-        }
-        let mut values = std::mem::take(&mut self.matrix.values);
-        self.source.gather_values(matrix, &mut values)?;
-        self.matrix.values = values;
-        *factorizations += 1;
-        check_feral_status(self.solver.factor(&self.matrix, None))
     }
 
     pub(super) fn refactor_diagonal(
@@ -98,6 +63,10 @@ impl FeralFactorization {
     ) -> Result<(), LinearSystemError> {
         self.source
             .gather_diagonal(diagonal, &mut self.matrix.values);
+        self.factor(factorizations)
+    }
+
+    pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         *factorizations += 1;
         check_feral_status(self.solver.factor(&self.matrix, None))
     }
@@ -106,13 +75,20 @@ impl FeralFactorization {
 /// Feral with a pattern-only ordering, so its symbolic cache stays valid as
 /// the KKT values change; the default value-dependent matching preprocess
 /// computes a much worse ordering on the first IPM matrix and then caches it.
-fn feral_solver() -> FeralSolver {
+fn feral_solver(threads: usize) -> FeralSolver {
     let supernode = FeralSupernodeParams {
         preprocess: FeralOrderingPreprocess::None,
         ..FeralSupernodeParams::default()
     };
-    FeralSolver::with_params(FeralNumericParams::default(), supernode)
-        .with_scaling(FeralScalingStrategy::Identity)
+    let solver = FeralSolver::with_params(FeralNumericParams::default(), supernode)
+        .with_scaling(FeralScalingStrategy::Identity);
+    // Feral 0.21 creates its own pool and exposes only an on/off switch.
+    // Use its sequential driver for any explicit cap so it cannot exceed it.
+    if threads == 0 {
+        solver
+    } else {
+        solver.with_parallel(false)
+    }
 }
 
 fn to_feral(matrix: &CscMatrix) -> Result<(FeralCscMatrix, TriangleSource), LinearSystemError> {
@@ -129,8 +105,6 @@ fn to_feral(matrix: &CscMatrix) -> Result<(FeralCscMatrix, TriangleSource), Line
     let mut rows = vec![0; nnz];
     let mut values = vec![0.0; nnz];
     let mut source = TriangleSource {
-        matrix_nonzeros: nnz,
-        positions: vec![0; nnz],
         diagonal: Vec::with_capacity(n),
     };
     for column in 0..n {
@@ -140,7 +114,6 @@ fn to_feral(matrix: &CscMatrix) -> Result<(FeralCscMatrix, TriangleSource), Line
             next[row] += 1;
             rows[slot] = column;
             values[slot] = matrix.values()[position];
-            source.positions[slot] = position;
             if row == column {
                 source.diagonal.push((slot, column));
             }
@@ -169,6 +142,42 @@ fn check_feral_status(status: FeralFactorStatus) -> Result<(), LinearSystemError
         }
         FeralFactorStatus::FatalError(error) => {
             Err(LinearSystemError::Factorization(error.to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::linear_solvers::{Factorization, FactorizationInner, KktSettings};
+
+    #[test]
+    fn explicit_thread_caps_disable_ferals_unbounded_pool() {
+        let matrix =
+            CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![2.0, -2.0]).unwrap();
+        for threads in [0, 1, 3] {
+            let settings = KktSettings::from(&crate::Settings {
+                linear_solver: crate::LinearSolver::Feral,
+                threads,
+                ..crate::Settings::default()
+            });
+            let mut factor = Factorization::prepare(matrix.clone(), &settings).unwrap();
+            factor.factor(&mut 0).unwrap();
+            let FactorizationInner::Feral(mut factor) = factor.inner else {
+                unreachable!()
+            };
+            assert_eq!(
+                factor.solver.parallel(),
+                threads == 0 && FeralSolver::default_use_parallel()
+            );
+            for diagonal in [2.0, 3.0] {
+                factor
+                    .refactor_diagonal(&[diagonal, -diagonal], &mut 0)
+                    .unwrap();
+                let mut rhs = [diagonal, diagonal];
+                factor.solve_in_place(&mut rhs).unwrap();
+                assert_eq!(rhs, [1.0, -1.0]);
+            }
         }
     }
 }

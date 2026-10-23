@@ -133,6 +133,22 @@ impl ConeGeometry {
         }))
     }
 
+    /// Reconstruct slack from a precomputed `Ax`: zero equality rows and
+    /// clamp `b - Ax` to zero on nonnegative-cone rows.
+    pub(crate) fn reconstruct_slack(&self, b: &[f64], ax: &[f64], out: &mut Vec<f64>) {
+        out.resize(self.dim, 0.0);
+        for block in &self.blocks {
+            match block {
+                ConeBlock::Zero(range) => out[range.clone()].fill(0.0),
+                ConeBlock::Nonnegative(range) => {
+                    for i in range.clone() {
+                        out[i] = (b[i] - ax[i]).max(0.0);
+                    }
+                }
+            }
+        }
+    }
+
     /// Floor nonnegative-cone components, leaving equality rows unchanged.
     pub(crate) fn floor_interior(&self, s: &mut [f64], y: &mut [f64]) {
         for block in &self.blocks {
@@ -185,24 +201,7 @@ impl ConeGeometry {
         v: &[f64],
         target: &[f64],
     ) -> Result<f64, ConeGeometryError> {
-        self.boundary_from_interior(v, target, |value, target| target - value)
-    }
-
-    /// Boundary from an accepted interior base along a new direction.
-    pub(crate) fn step_to_boundary_from_interior(
-        &self,
-        v: &[f64],
-        dv: &[f64],
-    ) -> Result<f64, ConeGeometryError> {
-        self.boundary_from_interior(v, dv, |_, direction| direction)
-    }
-
-    fn boundary_from_interior(
-        &self,
-        v: &[f64],
-        values: &[f64],
-        direction: impl Fn(f64, f64) -> f64,
-    ) -> Result<f64, ConeGeometryError> {
+        let values = target;
         debug_assert!(self.is_dual_interior(v).unwrap_or(false));
         self.ensure_length("dv", values)?;
         let mut alpha: f64 = 1.0;
@@ -218,7 +217,7 @@ impl ConeGeometry {
                         if !other.is_finite() {
                             return Err(ConeGeometryError::NonFiniteInput { argument: "dv" });
                         }
-                        let direction = direction(value, other);
+                        let direction = other - value;
                         if direction < 0.0 {
                             alpha = alpha.min(-value / direction);
                         }
@@ -227,33 +226,6 @@ impl ConeGeometry {
             }
         }
         Ok(alpha)
-    }
-
-    /// `-(a o b o c)` on nonnegative-cone rows, `-0.0` on zero-cone rows
-    /// (Mehrotra's second-order correction, as negating a zero fill gives).
-    pub(crate) fn negated_triple_product_in_place(
-        &self,
-        a: &[f64],
-        b: &mut [f64],
-        c: &[f64],
-    ) -> Result<(), ConeGeometryError> {
-        self.ensure_length("a", a)?;
-        self.ensure_length("b", b)?;
-        self.ensure_length("c", c)?;
-        for block in &self.blocks {
-            match block {
-                ConeBlock::Zero(range) => b[range.clone()].fill(-0.0),
-                ConeBlock::Nonnegative(range) => {
-                    faer::zip!(
-                        ColMut::from_slice_mut(&mut b[range.clone()]),
-                        ColRef::from_slice(&a[range.clone()]),
-                        ColRef::from_slice(&c[range.clone()])
-                    )
-                    .for_each(|faer::unzip!(b, a, c)| *b = -(a * (*b * c)));
-                }
-            }
-        }
-        Ok(())
     }
 
     fn ensure_length(
@@ -275,6 +247,17 @@ impl ConeGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slack_reconstruction_overwrites_mixed_cone_rows() {
+        let geometry =
+            crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(2), Cone::Zero(1)]);
+        let mut slack = vec![f64::NAN; 4];
+        geometry.reconstruct_slack(&[5.0, 3.0, 1.0, -2.0], &[0.0, 1.0, 4.0, 0.0], &mut slack);
+        assert_eq!(slack, [0.0, 2.0, 0.0, 0.0]);
+        geometry.reconstruct_slack(&[0.0; 4], &[1.0, 2.0, -3.0, 4.0], &mut slack);
+        assert_eq!(slack, [0.0, 0.0, 3.0, 0.0]);
+    }
 
     #[test]
     fn lays_out_mixed_blocks_and_builds_canonical_point() {
@@ -332,7 +315,7 @@ mod tests {
         assert!(!geometry.is_primal_interior(&[1.0, 0.0]).unwrap());
         assert!(!geometry.is_dual_interior(&[1.0, 0.0]).unwrap());
         assert_eq!(
-            geometry.step_to_boundary_from_interior(&[1.0, 1.0], &[0.0, f64::NAN]),
+            geometry.step_to_boundary_toward(&[1.0, 1.0], &[1.0, f64::NAN]),
             Err(ConeGeometryError::NonFiniteInput { argument: "dv" })
         );
     }
@@ -375,21 +358,16 @@ mod tests {
         let v = [5.0, 1.0, 2.0, 3.0];
         assert_eq!(
             geometry
-                .step_to_boundary_from_interior(&v, &[-100.0, -0.5, -8.0, 1.0])
+                .step_to_boundary_toward(&v, &[-95.0, 0.5, -6.0, 4.0])
                 .unwrap(),
             0.25
         );
         assert_eq!(
             geometry
-                .step_to_boundary_from_interior(&v, &[-100.0, 0.0, -1.0, -1.0])
+                .step_to_boundary_toward(&v, &[-95.0, 1.0, 1.0, 2.0])
                 .unwrap(),
             1.0
         );
-        assert_eq!(
-            geometry
-                .step_to_boundary_from_interior(&v, &[0.0; 4])
-                .unwrap(),
-            1.0
-        );
+        assert_eq!(geometry.step_to_boundary_toward(&v, &v).unwrap(), 1.0);
     }
 }

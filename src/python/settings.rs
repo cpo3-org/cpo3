@@ -40,6 +40,7 @@ pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
         ruiz_tol: values.getattr("ruiz_tol")?.extract()?,
 
         linear_solver,
+        threads: values.getattr("threads")?.extract()?,
         eliminate_bounds: values.getattr("eliminate_bounds")?.extract()?,
         refine_init_reg: values.getattr("refine_init_reg")?.extract()?,
         refine_iters: values.getattr("refine_iters")?.extract()?,

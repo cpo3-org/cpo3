@@ -303,15 +303,7 @@ impl Presolved {
         ax: &[f64],
         full: &mut Vec<f64>,
     ) {
-        full.resize(self.original_rows, 0.0);
-        full.fill(0.0);
-        for block in geometry.blocks() {
-            if let ConeBlock::Nonnegative(range) = block {
-                for i in range.clone() {
-                    full[i] = (original.b()[i] - ax[i]).max(0.0);
-                }
-            }
-        }
+        geometry.reconstruct_slack(original.b(), ax, full);
         for &row in self.postsolve.original_conic_rows() {
             full[row] = original.b()[row] - ax[row];
         }
@@ -321,46 +313,42 @@ impl Presolved {
         }
     }
     pub(crate) fn reduce_warm_start(&self, geometry: &ConeGeometry, warm: &WarmStart) -> WarmStart {
-        let original = native::postsolve::Solution {
-            x: warm.x.clone(),
-            y: self
-                .postsolve
-                .original_linear_rows()
-                .iter()
-                .map(|&i| -warm.y[i])
-                .collect(),
-            z: vec![0.0; self.original_columns],
-            conic_dual: self
-                .postsolve
-                .original_conic_rows()
-                .iter()
-                .map(|&i| warm.y[i])
-                .collect(),
-            conic_slack: self
-                .postsolve
-                .original_conic_rows()
-                .iter()
-                .map(|&i| warm.s[i])
-                .collect(),
-        };
-        let p = self.postsolve.reduce_warm_start(original.as_ref());
+        let y: Vec<_> = self
+            .postsolve
+            .original_linear_rows()
+            .iter()
+            .map(|&i| -warm.y[i])
+            .collect();
+        let z = vec![0.0; self.original_columns];
+        let conic_dual: Vec<_> = self
+            .postsolve
+            .original_conic_rows()
+            .iter()
+            .map(|&i| warm.y[i])
+            .collect();
+        let conic_slack: Vec<_> = self
+            .postsolve
+            .original_conic_rows()
+            .iter()
+            .map(|&i| warm.s[i])
+            .collect();
+        let p = self
+            .postsolve
+            .reduce_warm_start(native::postsolve::SolutionRef {
+                x: &warm.x,
+                y: &y,
+                z: &z,
+                conic_dual: &conic_dual,
+                conic_slack: &conic_slack,
+            });
         let mut y = self.map.warm_dual(&p);
         let ax = crate::linear_algebra::matrix_mul(self.problem.a(), &p.x);
-        let mut s: Vec<_> = self
-            .problem
-            .b()
-            .iter()
-            .zip(ax)
-            .map(|(b, ax)| b - ax)
-            .collect();
+        let mut s = Vec::new();
+        geometry.reconstruct_slack(self.problem.b(), &ax, &mut s);
         for block in geometry.blocks() {
-            match block {
-                ConeBlock::Zero(range) => s[range.clone()].fill(0.0),
-                ConeBlock::Nonnegative(range) => {
-                    for i in range.clone() {
-                        s[i] = s[i].max(0.0);
-                        y[i] = y[i].max(0.0);
-                    }
+            if let ConeBlock::Nonnegative(range) = block {
+                for value in &mut y[range.clone()] {
+                    *value = value.max(0.0);
                 }
             }
         }

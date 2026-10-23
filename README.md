@@ -46,6 +46,18 @@ print(solution.x)  # approximately [1.0, 2.0]
 
 Use SciPy sparse matrices for `A` and `P`; set `P=None` for a linear program.
 Options can be passed with `settings=cpo3.Settings(...)`.
+Use `cpo3.Settings(threads=1)` for sequential factorization and solves,
+or a larger value to limit their parallelism. The default, `threads=0`, retains
+each backend's automatic thread selection. Feral currently runs sequentially
+for every positive cap because its API cannot configure its private pool size.
+
+Equality-only problems (including unconstrained QPs) use a dedicated Faer LDL
+solve with dynamic regularization, up to ten refinement corrections, and an
+LSMR fallback using the same factors. Points and infeasibility certificates are
+verified before acceptance. This path bypasses warm-start and CVXOPT
+initialization, uses Faer regardless of `linear_solver`, and honors `threads`.
+Its fixed refinement policy ignores `refine_iters`, `refine_tol`, and
+`refine_init_reg`; `solution.info.lsmr_iterations` reports fallback iterations.
 
 `initial_mu` sets the canonical cold-start complementarity beta
 (default `1e-3`, range `(0, 1]`). Inequality slacks and multipliers start at

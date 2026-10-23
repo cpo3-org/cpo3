@@ -166,8 +166,22 @@ pub fn from_parser_with(
         &mut constraints,
         &mut c,
     )?;
-    collect_rhs(parsed, &row_lookup, &mut constraints, options)?;
-    collect_ranges(parsed, &row_lookup, &mut constraints, options)?;
+    collect_row_values(
+        "RHS",
+        parsed.rhs.as_deref(),
+        &row_lookup,
+        &mut constraints,
+        options,
+        |row, value| row.rhs = value,
+    )?;
+    collect_row_values(
+        "RANGES",
+        parsed.ranges.as_deref(),
+        &row_lookup,
+        &mut constraints,
+        options,
+        |row, value| row.range = Some(value),
+    )?;
     let bounds = collect_bounds(parsed, &variable_names, &variable_lookup, options)?;
 
     let objective_sign = match parsed.objective_sense.unwrap_or(ObjectiveSense::Min) {
@@ -378,57 +392,31 @@ fn collect_columns(
     Ok(())
 }
 
-fn collect_rhs(
-    parsed: &Parser<'_, f64>,
+/// Apply a named section's values once per constraint, ignoring N rows.
+fn collect_row_values(
+    section: &'static str,
+    lines: Option<&[WideLine<'_, f64>]>,
     row_lookup: &HashMap<String, SourceRow>,
     constraints: &mut [SourceConstraint],
     options: MpsOptions,
+    mut assign: impl FnMut(&mut SourceConstraint, f64),
 ) -> Result<(), MpsError> {
-    let Some(lines) = &parsed.rhs else {
+    let Some(lines) = lines else {
         return Ok(());
     };
     let mut assigned = vec![false; constraints.len()];
-    for line in wide_set("RHS", lines, options)? {
+    for line in wide_set(section, lines, options)? {
         for pair in line_pairs(line) {
-            finite("RHS", pair.row_name, pair.value)?;
+            finite(section, pair.row_name, pair.value)?;
             match row_lookup.get(pair.row_name).copied() {
                 Some(SourceRow::Constraint(row)) => {
                     if std::mem::replace(&mut assigned[row], true) {
                         return Err(MpsError::DuplicateValue {
-                            section: "RHS",
+                            section,
                             name: pair.row_name.to_string(),
                         });
                     }
-                    constraints[row].rhs = pair.value;
-                }
-                Some(SourceRow::Objective | SourceRow::Ignored) => {}
-                None => return Err(MpsError::UnknownRow(pair.row_name.to_string())),
-            }
-        }
-    }
-    Ok(())
-}
-
-fn collect_ranges(
-    parsed: &Parser<'_, f64>,
-    row_lookup: &HashMap<String, SourceRow>,
-    constraints: &mut [SourceConstraint],
-    options: MpsOptions,
-) -> Result<(), MpsError> {
-    let Some(lines) = &parsed.ranges else {
-        return Ok(());
-    };
-    for line in wide_set("RANGES", lines, options)? {
-        for pair in line_pairs(line) {
-            finite("RANGES", pair.row_name, pair.value)?;
-            match row_lookup.get(pair.row_name).copied() {
-                Some(SourceRow::Constraint(row)) => {
-                    if constraints[row].range.replace(pair.value).is_some() {
-                        return Err(MpsError::DuplicateValue {
-                            section: "RANGES",
-                            name: pair.row_name.to_string(),
-                        });
-                    }
+                    assign(&mut constraints[row], pair.value);
                 }
                 Some(SourceRow::Objective | SourceRow::Ignored) => {}
                 None => return Err(MpsError::UnknownRow(pair.row_name.to_string())),

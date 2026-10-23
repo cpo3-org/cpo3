@@ -1,11 +1,6 @@
 //! FAER factorization adapter.
 
-#[cfg(test)]
-use super::upper_triangle_usize;
-use super::{
-    LinearSystemError, TriangleSource, validate_finite, validate_rhs, validate_square,
-    validate_upper_triangle,
-};
+use super::{LinearSystemError, TriangleSource};
 use crate::CscMatrix;
 use ::faer::{
     Conj, MatMut, Par, Side,
@@ -21,7 +16,7 @@ const FAER_REGULARIZATION_DELTA: f64 = 0.0;
 pub(super) struct FaerFactorization {
     dim: usize,
     pattern: SymbolicSparseColMat<usize>,
-    /// Source position of each entry in the permuted triangle.
+    /// Diagonal slots in the permuted triangle.
     source: TriangleSource,
     values: Vec<f64>,
     symbolic: sparse_cholesky::SymbolicCholesky<usize>,
@@ -31,15 +26,7 @@ pub(super) struct FaerFactorization {
 }
 
 impl FaerFactorization {
-    pub(super) fn new(
-        matrix: CscMatrix,
-        factorizations: &mut usize,
-    ) -> Result<Self, LinearSystemError> {
-        validate_square(matrix.rows(), matrix.columns())?;
-        if matrix.rows() == 0 {
-            return Err(LinearSystemError::Empty);
-        }
-        validate_upper_triangle(&matrix)?;
+    pub(super) fn new(matrix: CscMatrix, threads: usize) -> Result<Self, LinearSystemError> {
         let symbolic = sparse_cholesky::factorize_symbolic_cholesky(
             matrix.as_faer().symbolic(),
             Side::Upper,
@@ -48,7 +35,6 @@ impl FaerFactorization {
         )
         .map_err(|error| LinearSystemError::Factorization(format!("Faer symbolic: {error:?}")))?;
         let dim = matrix.rows();
-        let source = TriangleSource::new(&matrix);
         let (column_pointers, row_indices, values) = matrix.into_parts();
         let pattern =
             SymbolicSparseColMat::new_checked(dim, dim, column_pointers, None, row_indices);
@@ -56,7 +42,8 @@ impl FaerFactorization {
         // Querying Rayon's thread count would start a pool they never use.
         let parallelism = match symbolic.raw() {
             sparse_cholesky::SymbolicCholeskyRaw::Simplicial(_) => Par::Seq,
-            sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_) => Par::rayon(0),
+            sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_) if threads == 1 => Par::Seq,
+            sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_) => Par::rayon(threads),
         };
         let factor_values = vec![0.0; symbolic.len_val()];
         let numeric_scratch = match symbolic.raw() {
@@ -75,7 +62,7 @@ impl FaerFactorization {
         };
         let scratch_requirement = StackReq::any_of(&[
             numeric_scratch,
-            symbolic.solve_in_place_scratch::<f64>(1, parallelism),
+            symbolic.solve_in_place_scratch::<f64>(2, parallelism),
         ]);
         let scratch = MemBuffer::try_new(scratch_requirement).map_err(|_| {
             LinearSystemError::Factorization("Faer scratch allocation failed".to_owned())
@@ -83,7 +70,7 @@ impl FaerFactorization {
         let mut factorization = Self {
             dim,
             pattern,
-            source,
+            source: TriangleSource::default(),
             values: Vec::new(),
             symbolic,
             factor_values,
@@ -91,7 +78,6 @@ impl FaerFactorization {
             parallelism,
         };
         let values = factorization.permute_input(values);
-        factorization.factor(&values, factorizations)?;
         factorization.values = values;
         Ok(factorization)
     }
@@ -100,32 +86,16 @@ impl FaerFactorization {
         self.dim
     }
 
-    pub(super) fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
-        validate_rhs(self.dim(), vector)?;
+    pub(super) fn solve_in_place(
+        &mut self,
+        vector: &mut [f64],
+        columns: usize,
+    ) -> Result<(), LinearSystemError> {
         let factor = sparse_cholesky::LdltRef::new(&self.symbolic, &self.factor_values);
-        let view = MatMut::from_column_major_slice_mut(vector, self.dim, 1);
+        let view = MatMut::from_column_major_slice_mut(vector, self.dim, columns);
         let stack = MemStack::new(&mut self.scratch);
         factor.solve_in_place_with_conj(Conj::No, view, self.parallelism, stack);
-        validate_finite(vector)
-    }
-
-    #[cfg(test)]
-    pub(super) fn refactor(
-        &mut self,
-        matrix: &CscMatrix,
-        factorizations: &mut usize,
-    ) -> Result<(), LinearSystemError> {
-        if matrix.rows() != self.dim || matrix.columns() != self.dim {
-            return Err(LinearSystemError::DimensionChanged {
-                expected: self.dim,
-                actual: matrix.rows(),
-            });
-        }
-        let mut values = std::mem::take(&mut self.values);
-        self.source.gather_values(matrix, &mut values)?;
-        let result = self.factor(&values, factorizations);
-        self.values = values;
-        result
+        Ok(())
     }
 
     pub(super) fn refactor_diagonal(
@@ -133,11 +103,8 @@ impl FaerFactorization {
         diagonal: &[f64],
         factorizations: &mut usize,
     ) -> Result<(), LinearSystemError> {
-        let mut values = std::mem::take(&mut self.values);
-        self.source.gather_diagonal(diagonal, &mut values);
-        let result = self.factor(&values, factorizations);
-        self.values = values;
-        result
+        self.source.gather_diagonal(diagonal, &mut self.values);
+        self.factor(factorizations)
     }
 
     /// Cache the input layout expected by Faer's numeric kernel. Preserve the
@@ -172,23 +139,19 @@ impl FaerFactorization {
         let mut rows = vec![0; values.len()];
         let mut permuted = vec![0.0; values.len()];
         let mut source = TriangleSource {
-            matrix_nonzeros: self.source.matrix_nonzeros,
-            positions: vec![0; values.len()],
             diagonal: Vec::with_capacity(self.dim),
         };
         for column in 0..self.dim {
             let range = self.pattern.col_ptr()[column]..self.pattern.col_ptr()[column + 1];
-            for ((&row, &value), &position) in self.pattern.row_idx()[range.clone()]
+            for (&row, &value) in self.pattern.row_idx()[range.clone()]
                 .iter()
-                .zip(&values[range.clone()])
-                .zip(&self.source.positions[range])
+                .zip(&values[range])
             {
                 let (new_row, new_column) = coordinates(row, column);
                 let slot = next[new_column];
                 next[new_column] += 1;
                 rows[slot] = new_row;
                 permuted[slot] = value;
-                source.positions[slot] = position;
                 if row == column {
                     source.diagonal.push((slot, column));
                 }
@@ -200,12 +163,8 @@ impl FaerFactorization {
         permuted
     }
 
-    fn factor(
-        &mut self,
-        values: &[f64],
-        factorizations: &mut usize,
-    ) -> Result<(), LinearSystemError> {
-        let matrix = SparseColMatRef::new(self.pattern.as_ref(), values);
+    pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
+        let matrix = SparseColMatRef::new(self.pattern.as_ref(), &self.values);
         let stack = MemStack::new(&mut self.scratch);
         let regularization = LdltRegularization {
             dynamic_regularization_signs: None,
@@ -248,11 +207,66 @@ mod tests {
     fn disabled_pivot_replacement_preserves_tiny_signed_pivots() {
         let matrix =
             CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![1e-20, -1e-20]).unwrap();
-        let mut factor = FaerFactorization::new(matrix, &mut 0).unwrap();
+        let mut factor = FaerFactorization::new(matrix, 3).unwrap();
+        factor.factor(&mut 0).unwrap();
+        assert_eq!(factor.parallelism, Par::Seq);
         let mut rhs = vec![1e-20, 1e-20];
-        factor.solve_in_place(&mut rhs).unwrap();
+        factor.solve_in_place(&mut rhs, 1).unwrap();
         assert!((rhs[0] - 1.0).abs() < 1e-12);
         assert!((rhs[1] + 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn configured_threads_apply_to_supernodal_factorization_and_solves() {
+        let n = 128;
+        let matrix = CscMatrix::from_triplets(
+            n,
+            n,
+            (0..n).flat_map(|column| 0..=column).collect(),
+            (0..n)
+                .flat_map(|column| std::iter::repeat_n(column, column + 1))
+                .collect(),
+            (0..n)
+                .flat_map(|column| {
+                    (0..=column).map(move |row| if row == column { 2.0 } else { 0.001 })
+                })
+                .collect(),
+        )
+        .unwrap();
+        for threads in [0, 1, 2, 3] {
+            let settings = super::super::KktSettings::from(&crate::Settings {
+                threads,
+                ..crate::Settings::default()
+            });
+            let mut factor =
+                super::super::Factorization::prepare(matrix.clone(), &settings).unwrap();
+            factor.factor(&mut 0).unwrap();
+            let super::super::FactorizationInner::Faer(mut factor) = factor.inner else {
+                unreachable!()
+            };
+            assert!(matches!(
+                factor.symbolic.raw(),
+                sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_)
+            ));
+            assert_eq!(
+                factor.parallelism,
+                if threads == 1 {
+                    Par::Seq
+                } else {
+                    Par::rayon(threads)
+                }
+            );
+            for diagonal in [2.0, 3.0] {
+                factor
+                    .refactor_diagonal(&vec![diagonal; n], &mut 0)
+                    .unwrap();
+                for columns in [1, 2] {
+                    let mut rhs = vec![diagonal + 0.001 * (n - 1) as f64; n * columns];
+                    factor.solve_in_place(&mut rhs, columns).unwrap();
+                    assert!(rhs.iter().all(|value| (value - 1.0).abs() < 1e-12));
+                }
+            }
+        }
     }
 
     #[test]
@@ -279,7 +293,8 @@ mod tests {
             let matrix = crate::linear_algebra::take_upper_triangle(
                 CscMatrix::from_triplets(n, n, rows, columns, values).unwrap(),
             );
-            let factor = FaerFactorization::new(matrix.clone(), &mut 0).unwrap();
+            let mut factor = FaerFactorization::new(matrix.clone(), 1).unwrap();
+            factor.factor(&mut 0).unwrap();
             assert_eq!(
                 matches!(
                     factor.symbolic.raw(),
@@ -287,7 +302,7 @@ mod tests {
                 ),
                 dense
             );
-            let (pointers, rows, values) = upper_triangle_usize(&matrix);
+            let (pointers, rows, values) = matrix.into_parts();
             let pattern = SymbolicSparseColMat::new_checked(n, n, pointers, None, rows);
             let mut reference = vec![0.0; factor.factor_values.len()];
             let mut scratch = MemBuffer::new(

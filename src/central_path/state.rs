@@ -44,31 +44,29 @@ impl State {
         let x_len = x.len();
         let mut xy = x;
         xy.extend(y);
-        if !tau.is_finite() || tau <= 0.0 {
-            return Err(StateError::NonPositiveTau);
-        }
-        if !xy.iter().chain(&s).all(|value| value.is_finite()) {
-            return Err(StateError::NonFiniteState);
-        }
-        Ok(Self { xy, x_len, s, tau })
+        Self::from_parts(xy, x_len, s, tau)
     }
 
     /// Adopt an accepted KKT point and floor its cone components in place.
     pub(crate) fn from_stacked(
-        mut xy: Vec<f64>,
+        xy: Vec<f64>,
         x_len: usize,
-        mut s: Vec<f64>,
+        s: Vec<f64>,
         tau: f64,
         geometry: &ConeGeometry,
     ) -> Result<Self, StateError> {
+        let mut state = Self::from_parts(xy, x_len, s, tau)?;
+        geometry.floor_interior(&mut state.s, &mut state.xy[x_len..]);
+        Ok(state)
+    }
+
+    fn from_parts(xy: Vec<f64>, x_len: usize, s: Vec<f64>, tau: f64) -> Result<Self, StateError> {
         if !tau.is_finite() || tau <= 0.0 {
             return Err(StateError::NonPositiveTau);
         }
         if !xy.iter().chain(&s).all(|value| value.is_finite()) {
             return Err(StateError::NonFiniteState);
         }
-        let (_, y) = xy.split_at_mut(x_len);
-        geometry.floor_interior(&mut s, y);
         Ok(Self { xy, x_len, s, tau })
     }
 
@@ -172,6 +170,33 @@ impl State {
 mod tests {
     use super::*;
     use crate::Cone;
+
+    #[test]
+    fn constructors_validate_before_flooring() {
+        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(1)]);
+        for (x, s, y, tau, error) in [
+            (0.0, 0.0, 0.0, 0.0, StateError::NonPositiveTau),
+            (0.0, 0.0, 0.0, f64::NAN, StateError::NonPositiveTau),
+            (0.0, 0.0, 0.0, f64::INFINITY, StateError::NonPositiveTau),
+            (f64::INFINITY, 0.0, 0.0, 1.0, StateError::NonFiniteState),
+            (0.0, f64::NAN, 0.0, 1.0, StateError::NonFiniteState),
+            (0.0, 0.0, f64::NAN, 1.0, StateError::NonFiniteState),
+        ] {
+            assert_eq!(
+                State::new(vec![x], vec![s], vec![y], tau),
+                Err(error.clone())
+            );
+            assert_eq!(
+                State::from_stacked(vec![x, y], 1, vec![s], tau, &geometry),
+                Err(error)
+            );
+        }
+        let initial = State::new(vec![0.0], vec![0.0], vec![0.0], 1.0).unwrap();
+        assert_eq!((initial.s(), initial.y()), (&[0.0][..], &[0.0][..]));
+        let accepted = State::from_stacked(vec![0.0; 2], 1, vec![0.0], 1.0, &geometry).unwrap();
+        assert_eq!(accepted.s(), [INTERIOR_FLOOR]);
+        assert_eq!(accepted.y(), [INTERIOR_FLOOR]);
+    }
 
     #[test]
     fn sphere_projection_preserves_the_projective_solution_and_cone_geometry() {

@@ -32,12 +32,18 @@ pub(crate) enum MehrotraError {
     InvalidDualityMeasure(f64),
 }
 
+impl MehrotraError {
+    /// Failures eligible for another step with a larger diagonal clamp.
+    fn is_numerical(&self) -> bool {
+        match self {
+            Self::Resolvent(error) => error.is_numerical(),
+            Self::State(_) | Self::ConeGeometry(_) | Self::InvalidDualityMeasure(_) => false,
+        }
+    }
+}
+
 /// One accepted outer iterate and the scalars that produced it.
 pub(crate) struct Step {
-    /// Factorization shift used for this step; the target remains mu_before.
-    pub(crate) rho: f64,
-    /// Complementarity used to construct this step.
-    pub(crate) mu_before: f64,
     pub(crate) state: State,
     pub(crate) sigma: f64,
     pub(crate) alpha_affine: f64,
@@ -53,12 +59,10 @@ pub(crate) fn step(
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
+    debug_assert!(geometry.barrier_parameter() > 0);
     let scaling = Scaling::new(problem, geometry, state)?;
-    let raw_mu = scaling.mu;
-    with_clamp_retries(kkt, raw_mu, cache, |trial, rho, cache| {
-        step_attempt(
-            problem, geometry, state, trial, rho, &scaling, settings, cache,
-        )
+    with_clamp_retries(kkt, scaling.mu, cache, |trial, cache| {
+        step_attempt(problem, geometry, state, trial, &scaling, settings, cache)
     })
 }
 
@@ -67,60 +71,31 @@ pub(crate) fn step(
 /// a numerical retry prevents immediate relaxation.
 fn with_clamp_retries<T>(
     kkt: &KktSettings,
-    raw_mu: f64,
+    mu: f64,
     cache: &mut KktCache,
-    mut attempt: impl FnMut(&KktSettings, f64, &mut KktCache) -> Result<T, MehrotraError>,
+    mut attempt: impl FnMut(&KktSettings, &mut KktCache) -> Result<T, MehrotraError>,
 ) -> Result<T, MehrotraError> {
-    const MAX_CLAMP: f64 = 1e-4;
-    let minimum = 1e-20;
-    let mut floor = cache.clamp_floor.unwrap_or(kkt.diagonal_floor).max(minimum);
-    cache.clamp_floor = Some(floor);
-    let starting_floor = floor;
+    let starting_floor = cache.clamp.start_step(kkt.diagonal_floor);
     let before = cache.stats();
-    let settled_before = before.refinement_settled;
     let mut trial = *kkt;
     trial.strict_refinement = false;
+    trial.diagonal_floor = starting_floor;
     loop {
-        trial.diagonal_floor = floor;
-        // The factor is K(mu) with clamped diagonals, never K(rho).
-        let result = attempt(&trial, raw_mu, cache);
+        let result = attempt(&trial, cache);
         cache.finish_step(result.is_ok());
         match result {
-            Err(error) if retryable(&error) && floor < MAX_CLAMP => {
+            Err(error) if error.is_numerical() => {
                 // h_i is nonnegative at an interior point. Also account for
                 // negative primal diagonals rather than assuming convex input.
-                let limit = cache.nonbinding_floor_limit(raw_mu);
-                // Preserve the x10 grid while skipping identical matrices.
-                loop {
-                    floor = (floor * 10.0).min(MAX_CLAMP);
-                    cache.clamp_increases += 1;
-                    if floor > limit || floor >= MAX_CLAMP {
-                        break;
-                    }
-                }
-                cache.clamp_floor = Some(floor);
-                if floor <= limit {
+                let limit = cache.nonbinding_floor_limit(mu);
+                let Some(next) = cache.clamp.retry(limit) else {
                     return Err(error);
-                }
+                };
+                trial.diagonal_floor = next;
             }
             Ok(step) => {
                 let after = cache.stats();
-                let clamp_limited =
-                    after.refinement_clamp_limited > before.refinement_clamp_limited;
-                let solve_limited =
-                    after.refinement_solve_limited > before.refinement_solve_limited;
-                if solve_limited && !clamp_limited {
-                    let next = (floor * 10.0).min(MAX_CLAMP);
-                    cache.clamp_increases += usize::from(next > floor);
-                    cache.clamp_floor = Some(next);
-                } else if floor == starting_floor
-                    && ((clamp_limited && !solve_limited)
-                        || after.refinement_settled == settled_before)
-                {
-                    let next = (floor / 10.0).max(minimum);
-                    cache.clamp_decreases += usize::from(next < floor);
-                    cache.clamp_floor = Some(next);
-                }
+                cache.clamp.accepted_step(starting_floor, before, after);
                 return Ok(step);
             }
             Err(error) => return Err(error),
@@ -128,46 +103,21 @@ fn with_clamp_retries<T>(
     }
 }
 
-fn retryable(error: &MehrotraError) -> bool {
-    matches!(error, MehrotraError::Resolvent(inner) if inner.is_numerical())
-}
-
-#[allow(clippy::too_many_arguments)]
 fn step_attempt(
     problem: &Problem,
     geometry: &ConeGeometry,
     state: &State,
     kkt: &KktSettings,
-    rho: f64,
     scaling: &Scaling,
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
-    let raw_mu = scaling.mu;
-    let mut resolvent = Resolvent::with_factor_shift(
-        problem, geometry, state, &scaling.d, raw_mu, rho, kkt, cache,
-    )?;
-    if geometry.barrier_parameter() == 0 {
-        // At mu=0 with only equality rows, the constant KKT column is the
-        // original primal-dual solution. Its homogeneous scale is arbitrary.
-        let point = State::from_stacked(
-            resolvent.constant_direction().to_vec(),
-            state.x().len(),
-            vec![0.0; state.s().len()],
-            1.0,
-            geometry,
-        )?;
-        return Ok(Step {
-            state: point,
-            rho,
-            mu_before: raw_mu,
-            sigma: 0.0,
-            alpha_affine: 1.0,
-            alpha: 1.0,
-        });
-    }
-    let mut first = predictor(geometry, state, raw_mu, scaling, &mut resolvent)?;
-    let second = corrector(state, raw_mu, scaling, &mut first, &mut resolvent)?;
+    let (mut resolvent, predictor_increment) =
+        Resolvent::new(problem, geometry, state, &scaling.d, scaling.mu, kkt, cache)?;
+    let first = predictor(state, scaling, predictor_increment, &mut resolvent)?;
+    let sigma = first.sigma;
+    let alpha_affine = first.alpha_affine;
+    let second = corrector(state, scaling, first, &mut resolvent)?;
     let boundary = geometry
         .step_to_boundary_toward(state.s(), &second.s_centered)?
         .min(geometry.step_to_boundary_toward(state.y(), second.centered.y())?);
@@ -195,10 +145,8 @@ fn step_attempt(
 
     Ok(Step {
         state: next,
-        rho,
-        mu_before: raw_mu,
-        sigma: first.sigma,
-        alpha_affine: first.alpha_affine,
+        sigma,
+        alpha_affine,
         alpha,
     })
 }
@@ -228,7 +176,7 @@ impl Scaling {
         state: &State,
     ) -> Result<Self, MehrotraError> {
         let mu = state.duality_measure(geometry);
-        if !mu.is_finite() || mu < 0.0 {
+        if !mu.is_finite() || mu <= 0.0 {
             return Err(MehrotraError::InvalidDualityMeasure(mu));
         }
         // Initialization and acceptance establish the interior invariant;
@@ -244,8 +192,6 @@ impl Scaling {
 /// The affine trial point and the centering parameter it induces.
 pub(crate) struct Predictor {
     pub(crate) affine: ResolventSolution,
-    #[cfg(test)]
-    pub(crate) s_affine: Vec<f64>,
     /// Second-order correction, reusing the slack-displacement allocation.
     pub(crate) correction: Vec<f64>,
     pub(crate) alpha_affine: f64,
@@ -255,65 +201,55 @@ pub(crate) struct Predictor {
 /// Solve the surrogate system at target zero with the current iterate as
 /// surrogate, then evaluate the step-length centering heuristic.
 ///
-/// The numerical shift `rho` is also the predictor anchor weight.
-/// Centering uses complementarity, independently of numerical shift retries.
+/// The current complementarity is both the KKT shift and the anchor weight.
 pub(crate) fn predictor(
-    geometry: &ConeGeometry,
     state: &State,
-    rho: f64,
     scaling: &Scaling,
+    increment: Vec<f64>,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Predictor, MehrotraError> {
-    if !rho.is_finite() || rho < 0.0 {
-        return Err(MehrotraError::InvalidDualityMeasure(rho));
+    let r_tau = scaling.mu * state.tau();
+    let affine = resolvent.reconstruct_increment(increment, r_tau, 0.0)?;
+
+    let mut correction = vec![-0.0; state.s().len()];
+    let mut alpha_affine = 1.0_f64;
+    let mut finite = true;
+    // Each affine displacement is needed only for its boundary and correction.
+    faer::zip!(
+        faer::ColMut::from_slice_mut(&mut correction),
+        faer::ColRef::from_slice(state.s()),
+        faer::ColRef::from_slice(state.y()),
+        faer::ColRef::from_slice(affine.y()),
+        faer::ColRef::from_slice(&scaling.d),
+        faer::ColRef::from_slice(&scaling.y_inverse)
+    )
+    .for_each(|faer::unzip!(correction, s, y, target_y, h, inverse)| {
+        let dy = target_y - y;
+        let ds = -h * dy - s;
+        finite &= ds.is_finite() & dy.is_finite();
+        if *inverse > 0.0 {
+            if ds < 0.0 {
+                alpha_affine = alpha_affine.min(-s / ds);
+            }
+            if dy < 0.0 {
+                alpha_affine = alpha_affine.min(-y / dy);
+            }
+            *correction = -(inverse * (ds * dy));
+        }
+    });
+    if !finite {
+        return Err(ConeGeometryError::NonFiniteInput { argument: "dv" }.into());
     }
-    // Current-anchor predictor RHS: (-r_dual, b tau - A x).
-    // H y = s cancels algebraically, before floating-point evaluation.
-    let mut rhs = Vec::with_capacity(state.x().len() + state.y().len());
-    rhs.extend(resolvent.dual_residual().iter().map(|rd| -rd));
-    rhs.extend_from_slice(resolvent.primal_rhs());
-    let r_tau = rho * state.tau();
-    let affine = resolvent.solve_increment_rhs(&rhs, r_tau, 0.0)?;
-
-    let dy = difference(affine.y(), state.y());
-    let mut ds = dy
-        .iter()
-        .zip(&scaling.d)
-        .zip(state.s())
-        .map(|((dy, h), s)| -h * dy - s)
-        .collect::<Vec<_>>();
-    #[cfg(test)]
-    let s_affine = dy.iter().zip(&scaling.d).map(|(dy, h)| -h * dy).collect();
-
-    let alpha_affine = geometry
-        .step_to_boundary_from_interior(state.s(), &ds)?
-        .min(geometry.step_to_boundary_from_interior(state.y(), &dy)?);
-    let raw_mu = scaling.mu;
     // A long feasible affine step supports a smaller centering target.
     // Keep mu as current complementarity; only the dimensionless sigma changes.
-    let sigma = if raw_mu > 0.0 {
-        (1.0 - alpha_affine).powi(3)
-    } else {
-        0.0
-    };
+    let sigma = (1.0 - alpha_affine).powi(3);
     if !sigma.is_finite() {
         return Err(StateError::NonFiniteResult.into());
     }
 
-    // The affine boundary is complete. Reuse
-    // ds for the correction and release dy before any centered solve.
-    if geometry.barrier_parameter() > 0 {
-        geometry.negated_triple_product_in_place(&scaling.y_inverse, &mut ds, &dy)?;
-    } else {
-        ds.fill(0.0);
-    }
-    drop(dy);
-
     Ok(Predictor {
         affine,
-        #[cfg(test)]
-        s_affine,
-        correction: ds,
+        correction,
         alpha_affine,
         sigma,
     })
@@ -325,55 +261,24 @@ pub(crate) struct Corrector {
     pub(crate) s_centered: Vec<f64>,
 }
 
-/// Solve the surrogate system at target `sigma * complementarity` with the given surrogate
-/// and Mehrotra's second-order correction in the dual block.
-#[allow(clippy::too_many_arguments)]
+/// Consume the predictor to solve at target `sigma * mu`, using its affine
+/// point as the anchor and reusing its second-order correction buffer for slack.
 pub(crate) fn corrector(
     state: &State,
-    rho: f64,
     scaling: &Scaling,
-    predictor: &mut Predictor,
+    predictor: Predictor,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Corrector, MehrotraError> {
-    if !rho.is_finite() || rho < 0.0 {
-        return Err(MehrotraError::InvalidDualityMeasure(rho));
-    }
-    let mu_centered = predictor.sigma * scaling.mu;
-
-    let correction = std::mem::take(&mut predictor.correction);
-
-    let (centered, s_centered) = centered_solve(
-        state,
-        rho,
-        scaling,
-        (
-            predictor.affine.x(),
-            predictor.affine.y(),
-            predictor.affine.tau,
-        ),
-        mu_centered,
-        correction,
-        resolvent,
-    )?;
-
-    Ok(Corrector {
-        centered,
-        s_centered,
-    })
-}
-
-/// Solve the surrogate system at target `mu_centered` with `correction` in
-/// the dual block; returns the point and its slack.
-fn centered_solve(
-    state: &State,
-    rho: f64,
-    scaling: &Scaling,
-    (anchor_x, anchor_y, anchor_tau): (&[f64], &[f64], f64),
-    mu_centered: f64,
-    mut correction: Vec<f64>,
-    resolvent: &mut Resolvent<'_>,
-) -> Result<(ResolventSolution, Vec<f64>), MehrotraError> {
-    let residual_weight = rho - mu_centered;
+    let Predictor {
+        affine,
+        mut correction,
+        sigma,
+        ..
+    } = predictor;
+    let mu = scaling.mu;
+    let mu_centered = sigma * mu;
+    let residual_weight = mu - mu_centered;
+    let (anchor_x, anchor_y) = (affine.x(), affine.y());
     let m = state.y().len();
     // Form the increment RHS from actual feasibility residuals. This
     // cancels H y = s and common shifted anchor terms algebraically.
@@ -390,15 +295,15 @@ fn centered_solve(
             .iter()
             .zip(state.x())
             .zip(resolvent.dual_residual())
-            .map(|((anchor, current), rd)| -rd + rho * (anchor - current) - mu_centered * anchor),
+            .map(|((anchor, current), rd)| -rd + mu * (anchor - current) - mu_centered * anchor),
     );
     rhs.extend((0..m).map(|index| {
-        resolvent.primal_rhs()[index] - rho * (anchor_y[index] - state.y()[index])
+        resolvent.primal_rhs()[index] - mu * (anchor_y[index] - state.y()[index])
             + mu_centered * anchor_y[index]
             - mu_over_y(index)
             - correction[index]
     }));
-    let r_tau = residual_weight * anchor_tau;
+    let r_tau = residual_weight * affine.tau;
     let centered = resolvent.solve_increment_rhs(&rhs, r_tau, mu_centered)?;
     // The second-order correction is no longer needed after the solve.
     // Reuse its allocation for slack, preserving the scalar evaluation order.
@@ -407,20 +312,20 @@ fn centered_solve(
         *value = mu_over_y(index) - scaling.d[index] * (centered.y()[index] - state.y()[index])
             + second_order_correction;
     }
-    Ok((centered, correction))
-}
-
-fn difference(left: &[f64], right: &[f64]) -> Vec<f64> {
-    left.iter()
-        .zip(right)
-        .map(|(left, right)| left - right)
-        .collect()
+    Ok(Corrector {
+        centered,
+        s_centered: correction,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cone, LinearSolver, Problem, linear_solvers::LinearSystemError};
+    use crate::{
+        Cone, LinearSolver, Problem,
+        linear_algebra::{dot, matrix_mul, matrix_transpose_mul},
+        linear_solvers::LinearSystemError,
+    };
 
     const TOLERANCE: f64 = 1e-12;
 
@@ -430,8 +335,7 @@ mod tests {
             let settings = KktSettings::new(LinearSolver::Faer);
             let mut cache = KktCache::new();
             let mut floors = Vec::new();
-            with_clamp_retries(&settings, mu, &mut cache, |trial, rho, _| {
-                assert_eq!(rho, mu);
+            with_clamp_retries(&settings, mu, &mut cache, |trial, _| {
                 assert!(!trial.strict_refinement);
                 floors.push(trial.diagonal_floor);
                 if floors.len() < 3 {
@@ -444,21 +348,20 @@ mod tests {
             assert_eq!(floors.len(), 3);
             assert!((floors[0] - 1e-12).abs() < 1e-25);
             assert!((floors[2] - 1e-10).abs() < 1e-23);
-            assert_eq!(cache.clamp_floor, Some(floors[2]));
-            with_clamp_retries(&settings, mu, &mut cache, |trial, rho, _| {
-                assert_eq!(rho, mu);
+            assert_eq!(cache.clamp.floor(), floors[2]);
+            with_clamp_retries(&settings, mu, &mut cache, |trial, _| {
                 assert_eq!(trial.diagonal_floor, floors[2]);
                 Ok(())
             })
             .unwrap();
-            assert_eq!(cache.clamp_floor, Some(floors[2] / 10.0));
+            assert_eq!(cache.clamp.floor(), floors[2] / 10.0);
             let mut fresh = KktCache::new();
-            with_clamp_retries(&settings, mu, &mut fresh, |trial, _, _| {
+            with_clamp_retries(&settings, mu, &mut fresh, |trial, _| {
                 assert_eq!(trial.diagonal_floor, 1e-12);
                 Ok(())
             })
             .unwrap();
-            assert_eq!(fresh.clamp_floor, Some(1e-13));
+            assert_eq!(fresh.clamp.floor(), 1e-13);
         }
     }
 
@@ -468,28 +371,55 @@ mod tests {
         let mut cache = KktCache::new();
         let error = MehrotraError::Resolvent(LinearSystemError::Singular.into());
         let mut floors = Vec::new();
-        let result: Result<(), _> =
-            with_clamp_retries(&settings, 1e-14, &mut cache, |trial, _, _| {
-                floors.push(trial.diagonal_floor);
-                Err(error.clone())
-            });
+        let result: Result<(), _> = with_clamp_retries(&settings, 1e-14, &mut cache, |trial, _| {
+            floors.push(trial.diagonal_floor);
+            Err(error.clone())
+        });
         assert_eq!(result, Err(error));
         assert_eq!(*floors.last().unwrap(), 1e-4);
         assert!(floors.len() <= 10);
         assert!(floors.windows(2).all(|w| w[1] > w[0]));
-        let error = MehrotraError::Resolvent(ResolventError::IncorrectRhsLength {
-            argument: "test",
-            expected: 2,
-            actual: 1,
-        });
-        let mut count = 0;
-        let result: Result<(), _> =
-            with_clamp_retries(&settings, 1e-14, &mut KktCache::new(), |_, _, _| {
-                count += 1;
-                Err(error.clone())
-            });
-        assert_eq!(count, 1);
-        assert_eq!(result, Err(error));
+        for (error, numerical) in [
+            (LinearSystemError::Singular, true),
+            (
+                LinearSystemError::WrongInertia {
+                    positive: 0,
+                    expected: 1,
+                },
+                true,
+            ),
+            (LinearSystemError::RefinementDiverged(1.0), true),
+            (LinearSystemError::Factorization("failed".into()), true),
+            (LinearSystemError::NonFiniteRightHandSide, true),
+            (
+                LinearSystemError::InvalidRightHandSide {
+                    expected: 2,
+                    actual: 1,
+                },
+                false,
+            ),
+            (LinearSystemError::Empty, false),
+        ] {
+            for wrapped in [
+                ResolventError::LinearSystem(error.clone()),
+                ResolventError::Kkt(crate::central_path::kkt::KktError::LinearSystem(
+                    error.clone(),
+                )),
+            ] {
+                let error = MehrotraError::Resolvent(wrapped);
+                let mut count = 0;
+                let result = with_clamp_retries(&settings, 1e-14, &mut KktCache::new(), |_, _| {
+                    count += 1;
+                    if count == 1 {
+                        Err(error.clone())
+                    } else {
+                        Ok(())
+                    }
+                });
+                assert_eq!(count, if numerical { 2 } else { 1 }, "{error:?}");
+                assert_eq!(result, if numerical { Ok(()) } else { Err(error) });
+            }
+        }
     }
 
     #[test]
@@ -497,50 +427,43 @@ mod tests {
         let problem = Problem::new(
             None,
             vec![-1.0],
-            crate::linear_algebra::test_matrix(0, 1, vec![]).unwrap(),
-            vec![],
-            vec![],
+            crate::CscMatrix::zeros(1, 1).unwrap(),
+            vec![0.0],
+            vec![Cone::Nonnegative(1)],
         )
         .unwrap();
-        let state = State::new(vec![0.0], vec![], vec![], 1.0).unwrap();
+        let state = State::new(vec![0.0], vec![1.0], vec![1.0], 1.0).unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
         let settings = KktSettings {
             refine_iters: 0,
             ..KktSettings::new(LinearSolver::Faer)
         };
         let mut cache = KktCache::new();
-        cache.clamp_floor = Some(1e-8);
+        cache.clamp.start_step(1e-8);
         let mut calls = 0;
-        with_clamp_retries(&settings, 1e-14, &mut cache, |trial, rho, cache| {
+        with_clamp_retries(&settings, 1e-14, &mut cache, |trial, cache| {
             calls += 1;
-            let _resolvent = Resolvent::with_factor_shift(
-                &problem,
-                &geometry,
-                &state,
-                &[],
-                1e-14,
-                rho,
-                trial,
-                cache,
-            )?;
+            let _resolvent =
+                Resolvent::new(&problem, &geometry, &state, &[1.0], 1e-14, trial, cache)?;
             Ok(())
         })
         .unwrap();
         assert!(cache.stats().refinement_settled > 0);
         assert_eq!(calls, 1);
-        assert_eq!(cache.clamp_floor, Some(1e-8));
+        assert_eq!(cache.clamp.floor(), 1e-8);
     }
 
     #[test]
-    fn corrector_uses_full_affine_anchor_even_when_working_mu_is_floored() {
+    fn corrector_uses_full_affine_anchor() {
         let problem = quadratic_problem();
         let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
-        let mu = 0.7; // Different from the state's raw complementarity.
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
+        let mu = scaling.mu;
         let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
+        let (mut resolvent, increment) = Resolvent::new(
             &problem,
+            &geometry,
             &state,
             &scaling.d,
             mu,
@@ -548,11 +471,10 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let mut first = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
+        let mut first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
         // The corrector must use the full anchor independently of the
         // reachable fraction (even when this particular predictor is interior).
         first.alpha_affine = 0.25;
-        let result = corrector(&state, mu, &scaling, &mut first, &mut resolvent).unwrap();
         let target = first.sigma * state.duality_measure(&geometry);
         let weight = mu - target;
         let rx = first
@@ -567,31 +489,33 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, y)| {
-                weight * y + state.s()[i] + target * scaling.y_inverse[i]
-                    - scaling.y_inverse[i]
-                        * (first.s_affine[i] - state.s()[i])
-                        * (first.affine.y()[i] - state.y()[i])
+                weight * y + state.s()[i] + target * scaling.y_inverse[i] + first.correction[i]
             })
             .collect::<Vec<_>>();
-        let expected = resolvent
-            .solve(&rx, &ry, weight * first.affine.tau, target)
-            .unwrap();
-        for (actual, expected) in result
-            .centered
-            .x()
-            .iter()
-            .chain(result.centered.y())
-            .chain(std::iter::once(&result.centered.tau))
-            .zip(
-                expected
-                    .x()
-                    .iter()
-                    .chain(expected.y())
-                    .chain(std::iter::once(&expected.tau)),
-            )
-        {
-            assert_close(*actual, *expected);
+        let r_tau = weight * first.affine.tau;
+        let result = corrector(&state, &scaling, first, &mut resolvent).unwrap();
+        // Check the point-coordinate equations independently of RHS assembly.
+        let point = result.centered;
+        let px = problem.p_mul(point.x());
+        let aty = matrix_transpose_mul(problem.a(), point.y());
+        let ax = matrix_mul(problem.a(), point.x());
+        for i in 0..problem.variable_count() {
+            assert_close(
+                px[i] + mu * point.x()[i] + aty[i] + problem.c()[i] * point.tau,
+                rx[i],
+            );
         }
+        for i in 0..problem.constraint_count() {
+            assert_close(
+                ax[i] - (scaling.d[i] + mu) * point.y()[i] - problem.b()[i] * point.tau,
+                -ry[i],
+            );
+        }
+        let q = dot(problem.c(), point.x()) + dot(problem.b(), point.y());
+        assert_close(
+            mu * point.tau * point.tau - r_tau * point.tau - q * point.tau - dot(point.x(), &px),
+            target,
+        );
     }
 
     #[test]
@@ -678,56 +602,44 @@ mod tests {
         );
     }
 
-    fn run_predictor(problem: &Problem) -> (State, f64, Scaling, Predictor) {
-        let geometry = ConeGeometry::new(problem).unwrap();
-        let state = interior_state(problem);
-        let mu = state.duality_measure(&geometry);
-        let scaling = Scaling::new(problem, &geometry, &state).unwrap();
-        let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
-            problem,
-            &state,
-            &scaling.d,
-            mu,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut cache,
-        )
-        .unwrap();
-        let result = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
-        (state, mu, scaling, result)
-    }
-
-    fn run_both(problem: &Problem) -> (State, f64, Predictor, Corrector) {
-        let geometry = ConeGeometry::new(problem).unwrap();
-        let state = interior_state(problem);
-        let mu = state.duality_measure(&geometry);
-        let scaling = Scaling::new(problem, &geometry, &state).unwrap();
-        let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
-            problem,
-            &state,
-            &scaling.d,
-            mu,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut cache,
-        )
-        .unwrap();
-        let mut first = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
-        let correction_allocation = first.correction.as_ptr();
-        let second = corrector(&state, mu, &scaling, &mut first, &mut resolvent).unwrap();
-        assert_eq!(second.s_centered.as_ptr(), correction_allocation);
-        (state, mu, first, second)
-    }
-
     #[test]
-    fn predictor_slack_is_the_newton_update_on_affine_complementarity() {
+    fn predictor_correction_and_boundary_follow_affine_complementarity() {
         for problem in [quadratic_problem(), linear_problem()] {
-            let (state, _, _, result) = run_predictor(&problem);
+            let geometry = ConeGeometry::new(&problem).unwrap();
+            let state = interior_state(&problem);
+            let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
+            let mut cache = KktCache::new();
+            let (mut resolvent, increment) = Resolvent::new(
+                &problem,
+                &geometry,
+                &state,
+                &scaling.d,
+                scaling.mu,
+                &KktSettings::new(LinearSolver::Faer),
+                &mut cache,
+            )
+            .unwrap();
+            let result = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
+            let mut boundary: f64 = 1.0;
             for index in 0..problem.constraint_count() {
                 let (s, y) = (state.s()[index], state.y()[index]);
-                let lhs = result.s_affine[index] * y + s * result.affine.y()[index];
-                assert_close(lhs, s * y);
+                if s == 0.0 {
+                    // Equality rows have no complementarity correction or boundary.
+                    assert_eq!(result.correction[index], 0.0);
+                    continue;
+                }
+                let dy = result.affine.y()[index] - y;
+                // Linearized complementarity: y * ds + s * y_affine = 0.
+                let ds = -s * result.affine.y()[index] / y;
+                assert_close(result.correction[index], -(ds * dy) / y);
+                if ds < 0.0 {
+                    boundary = boundary.min(-s / ds);
+                }
+                if dy < 0.0 {
+                    boundary = boundary.min(-y / dy);
+                }
             }
+            assert_close(result.alpha_affine, boundary);
             assert!(result.alpha_affine > 0.0 && result.alpha_affine <= 1.0);
             assert!((0.0..=1.0).contains(&result.sigma));
             assert_close(result.sigma, (1.0 - result.alpha_affine).powi(3));
@@ -735,30 +647,44 @@ mod tests {
     }
 
     #[test]
-    fn predictor_slack_vanishes_on_zero_rows() {
-        let problem = quadratic_problem();
-        let (_, _, _, result) = run_predictor(&problem);
-        assert_eq!(result.s_affine[0], 0.0);
-    }
-
-    #[test]
     fn corrector_slack_carries_the_second_order_correction() {
         for problem in [quadratic_problem(), linear_problem()] {
-            let (state, mu, first, second) = run_both(&problem);
+            let geometry = ConeGeometry::new(&problem).unwrap();
+            let state = interior_state(&problem);
+            let mu = state.duality_measure(&geometry);
+            let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
+            let mut cache = KktCache::new();
+            let (mut resolvent, increment) = Resolvent::new(
+                &problem,
+                &geometry,
+                &state,
+                &scaling.d,
+                mu,
+                &KktSettings::new(LinearSolver::Faer),
+                &mut cache,
+            )
+            .unwrap();
+            let first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
+            let expected: Vec<_> = (0..problem.constraint_count())
+                .map(|index| {
+                    if problem.cones()[0] == Cone::Zero(1) && index == 0 {
+                        return 0.0;
+                    }
+                    let (s, y) = (state.s()[index], state.y()[index]);
+                    let ds = -s * first.affine.y()[index] / y;
+                    let dy = first.affine.y()[index] - y;
+                    s * y + (first.sigma * mu) - ds * dy
+                })
+                .collect();
+            let correction_allocation = first.correction.as_ptr();
+            let second = corrector(&state, &scaling, first, &mut resolvent).unwrap();
+            assert_eq!(second.s_centered.as_ptr(), correction_allocation);
             // A zero centering target can place the trial on the boundary.
             // The accepted (damped) iterate is tested separately for interiority.
             assert!(second.centered.tau.is_finite() && second.centered.tau >= 0.0);
-            let nonneg = |index: usize| problem.cones()[0] != Cone::Zero(1) || index > 0;
-            for index in 0..problem.constraint_count() {
-                let (s, y) = (state.s()[index], state.y()[index]);
-                let ds = first.s_affine[index] - s;
-                let dy = first.affine.y()[index] - y;
-                let lhs = second.s_centered[index] * y + s * second.centered.y()[index];
-                let expected = if nonneg(index) {
-                    s * y + (first.sigma * mu) - ds * dy
-                } else {
-                    0.0
-                };
+            for (index, expected) in expected.into_iter().enumerate() {
+                let lhs = second.s_centered[index] * state.y()[index]
+                    + state.s()[index] * second.centered.y()[index];
                 assert_close(lhs, expected);
             }
         }
@@ -772,8 +698,9 @@ mod tests {
         let mu = state.duality_measure(&geometry);
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
         let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
+        let (mut resolvent, increment) = Resolvent::new(
             &problem,
+            &geometry,
             &state,
             &scaling.d,
             mu,
@@ -781,29 +708,32 @@ mod tests {
             &mut cache,
         )
         .unwrap();
-        let first = predictor(&geometry, &state, mu, &scaling, &mut resolvent).unwrap();
+        let first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
         // Force sigma = 1 with a zero affine displacement: the corrector must
         // then be the pure centering step at target mu, i.e. r = (0, s + mu y^-1, 0).
-        let mut pure = Predictor {
+        let pure = Predictor {
             affine: ResolventSolution {
                 xy: state.x().iter().chain(state.y()).copied().collect(),
                 x_len: state.x().len(),
                 tau: state.tau(),
-                used_tau_fallback: false,
             },
-            s_affine: state.s().to_vec(),
             correction: vec![-0.0; state.s().len()],
             alpha_affine: 1.0,
             sigma: 1.0,
         };
-        let second = corrector(&state, mu, &scaling, &mut pure, &mut resolvent).unwrap();
-        let r_y = state
-            .s()
-            .iter()
-            .zip(&scaling.y_inverse)
-            .map(|(s, y_inverse)| s + mu * y_inverse)
-            .collect::<Vec<_>>();
-        let direct = resolvent.solve(&[0.0; 2], &r_y, 0.0, mu).unwrap();
+        let second = corrector(&state, &scaling, pure, &mut resolvent).unwrap();
+        // For pure centering, subtract K z_a from tau_a (-c, b) + (0, -s - mu/y).
+        let aty = matrix_transpose_mul(problem.a(), state.y());
+        let ax = matrix_mul(problem.a(), state.x());
+        let mut residual: Vec<_> = (0..problem.variable_count())
+            .map(|i| -aty[i] - problem.c()[i] * state.tau() - mu * state.x()[i])
+            .collect();
+        residual.extend((0..problem.constraint_count()).map(|i| {
+            problem.b()[i] * state.tau() - ax[i] + (scaling.d[i] + mu) * state.y()[i]
+                - state.s()[i]
+                - mu * scaling.y_inverse[i]
+        }));
+        let direct = resolvent.solve_increment_rhs(&residual, 0.0, mu).unwrap();
         assert_close(second.centered.tau, direct.tau);
         for index in 0..2 {
             assert_close(second.centered.x()[index], direct.x()[index]);
@@ -844,41 +774,43 @@ mod tests {
     }
 
     #[test]
-    fn predictor_rejects_a_negative_duality_measure() {
+    fn resolvent_rejects_invalid_shifts() {
         let problem = linear_problem();
         let geometry = ConeGeometry::new(&problem).unwrap();
         let state = interior_state(&problem);
         let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
-        let mut cache = KktCache::new();
-        let mut resolvent = Resolvent::new(
-            &problem,
-            &state,
-            &scaling.d,
-            1.0,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut cache,
-        )
-        .unwrap();
-        assert_eq!(
-            predictor(&geometry, &state, -1.0, &scaling, &mut resolvent).err(),
-            Some(MehrotraError::InvalidDualityMeasure(-1.0))
-        );
+        for shift in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let mut cache = KktCache::new();
+            assert_eq!(
+                Resolvent::new(
+                    &problem,
+                    &geometry,
+                    &state,
+                    &scaling.d,
+                    shift,
+                    &KktSettings::new(LinearSolver::Faer),
+                    &mut cache,
+                )
+                .err(),
+                Some(ResolventError::State(StateError::InvalidMu))
+            );
+            assert_eq!(cache.stats().factorizations, 0);
+        }
     }
     #[test]
     fn accurate_steps_relax_to_a_positive_nonbinding_floor() {
         let settings = KktSettings::new(LinearSolver::Faer);
         let mut cache = KktCache::new();
         for _ in 0..30 {
-            with_clamp_retries(&settings, 1e-3, &mut cache, |trial, target, _| {
-                assert_eq!(target, 1e-3);
+            with_clamp_retries(&settings, 1e-3, &mut cache, |trial, _| {
                 assert!(trial.diagonal_floor > 0.0);
-                assert!(trial.diagonal_floor < target);
+                assert!(trial.diagonal_floor < 1e-3);
                 Ok(())
             })
             .unwrap();
         }
-        assert_eq!(cache.clamp_floor, Some(1e-20));
-        assert_eq!(cache.clamp_increases, 0);
-        assert!(cache.clamp_decreases >= 8);
+        assert_eq!(cache.clamp.floor(), 1e-20);
+        assert_eq!(cache.stats().clamp_increases, 0);
+        assert!(cache.stats().clamp_decreases >= 8);
     }
 }
