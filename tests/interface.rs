@@ -22,7 +22,7 @@ fn settings_use_short_names() {
     assert!(settings.eliminate_bounds);
     assert_eq!(settings.refine_init_reg, 1e-12);
     assert!(!settings.cvxopt_init);
-    assert_eq!(settings.initial_mu, 1e-3);
+    assert_eq!(settings.initial_mu, 1.0);
     assert_eq!(settings.step_fraction, 0.999);
 }
 

@@ -41,7 +41,7 @@ pub struct Settings {
     /// falls back to the canonical point.
     pub cvxopt_init: bool,
     /// Initial complementarity beta for the canonical cold start.
-    /// Defaults to 1e-3, with inequality slacks and multipliers sqrt(beta).
+    /// Defaults to 1.0, with inequality slacks and multipliers sqrt(beta).
     /// Must be finite and in (0, 1]. Tau is chosen to keep
     /// ||(x, y, tau)||^2 = nu + 1. Also used after a failed CVXOPT start;
     /// has no effect on accepted warm/CVXOPT starts or equality-only problems.
@@ -97,7 +97,7 @@ impl Default for Settings {
 
             force_warm_start: false,
             cvxopt_init: false,
-            initial_mu: 1e-3,
+            initial_mu: 1.0,
             ruiz_iters: 2,
             ruiz_tol: 1e-2,
 

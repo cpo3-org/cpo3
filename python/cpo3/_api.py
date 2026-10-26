@@ -132,7 +132,7 @@ class Settings:
         Use a CVXOPT/Clarabel-style linear-system initialization when no warm
         start is accepted. Falls back to the canonical spherical starting
         point if initialization fails.
-    initial_mu : float, default=1e-3
+    initial_mu : float, default=1.0
         Initial complementarity for the canonical spherical starting point.
         Must be in (0, 1]. Has no effect on accepted warm or CVXOPT-style starts
         or on equality-only problems.
@@ -194,7 +194,7 @@ class Settings:
 
     force_warm_start: bool = False
     cvxopt_init: bool = False
-    initial_mu: float = 1e-3
+    initial_mu: float = 1.0
     ruiz_iters: int = 2
     ruiz_tol: float = 1e-2
 
