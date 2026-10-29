@@ -230,65 +230,6 @@ pub(crate) fn visit_entries(matrix: &CscMatrix, mut visit: impl FnMut(usize, usi
     }
 }
 
-/// Build a small sparse fixture from row-major values. Test code only.
-#[cfg(test)]
-pub(crate) fn test_matrix(
-    rows: usize,
-    columns: usize,
-    values: Vec<f64>,
-) -> Result<CscMatrix, MatrixError> {
-    assert_eq!(values.len(), rows * columns);
-    let mut ri = Vec::new();
-    let mut ci = Vec::new();
-    let mut data = Vec::new();
-    for (i, v) in values.into_iter().enumerate() {
-        if v != 0.0 {
-            ri.push(i / columns);
-            ci.push(i % columns);
-            data.push(v);
-        }
-    }
-    CscMatrix::from_triplets(rows, columns, ri, ci, data)
-}
-
-#[cfg(test)]
-mod arithmetic_tests {
-    use super::*;
-
-    #[test]
-    fn rectangular_products_handle_explicit_sparse_zeros() {
-        let canonical: CscMatrix =
-            crate::linear_algebra::test_matrix(2, 3, vec![2.0, 0.0, -1.0, 0.0, 3.0, 4.0]).unwrap();
-        let sparse: CscMatrix = CscMatrix::new(
-            2,
-            3,
-            vec![0, 2, 3, 5],
-            vec![0, 1, 1, 0, 1],
-            vec![2.0, 0.0, 3.0, -1.0, 4.0],
-        )
-        .unwrap();
-        for matrix in [&canonical, &sparse] {
-            assert_eq!(matrix_mul(matrix, &[1.0, 2.0, 3.0]), vec![-1.0, 18.0]);
-            assert_eq!(
-                matrix_transpose_mul(matrix, &[2.0, -1.0]),
-                vec![4.0, -3.0, -6.0]
-            );
-        }
-        let mut entries = Vec::new();
-        visit_entries(&sparse, |row, col, value| entries.push((row, col, value)));
-        assert_eq!(
-            entries,
-            vec![
-                (0, 0, 2.0),
-                (1, 0, 0.0),
-                (1, 1, 3.0),
-                (0, 2, -1.0),
-                (1, 2, 4.0)
-            ]
-        );
-    }
-}
-
 /// Euclidean norm with a cheap ordinary path and scaled extreme-value fallback.
 /// A clonable iterator lets callers measure trial/residual coordinates without
 /// allocating a vector. Unlike a hypot fold, the common path takes one sqrt.
@@ -308,17 +249,4 @@ pub(crate) fn stable_norm(values: impl Iterator<Item = f64> + Clone) -> f64 {
 }
 
 #[cfg(test)]
-mod norm_tests {
-    use super::stable_norm;
-
-    #[test]
-    fn ordinary_extreme_and_nonfinite_norms() {
-        for scale in [1.0, 1e-200, 1e200] {
-            let norm = stable_norm([3.0 * scale, -4.0 * scale].into_iter());
-            assert!((norm / scale - 5.0).abs() < 1e-14);
-        }
-        assert_eq!(stable_norm([0.0, 0.0].into_iter()), 0.0);
-        assert_eq!(stable_norm([1.0, f64::INFINITY].into_iter()), f64::INFINITY);
-        assert!(stable_norm([f64::NAN].into_iter()).is_nan());
-    }
-}
+pub(crate) use csc::tests::matrix;

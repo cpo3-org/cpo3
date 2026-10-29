@@ -21,6 +21,9 @@ impl PartialEq for CscMatrix {
 
 impl CscMatrix {
     /// Adopt CSC buffers, checking the pattern once before faer uses it.
+    ///
+    /// # Panics
+    /// Panics if the CSC pattern is invalid or the index and value lengths differ.
     pub fn from_parts(
         rows: usize,
         columns: usize,
@@ -36,6 +39,10 @@ impl CscMatrix {
         }
     }
 
+    /// Construct a matrix from CSC buffers.
+    ///
+    /// # Errors
+    /// Returns an error for invalid CSC storage or dimensions that exceed the supported range.
     pub fn new(
         rows: usize,
         columns: usize,
@@ -49,6 +56,10 @@ impl CscMatrix {
         NativeMatrix::new(rows, columns, pointers, indices, values).map(Self::from_native)
     }
 
+    /// Construct a matrix from row, column, and value triplets.
+    ///
+    /// # Errors
+    /// Returns an error for mismatched lengths, invalid indices or values, or unsupported dimensions.
     pub fn from_triplets(
         rows: usize,
         columns: usize,
@@ -63,6 +74,10 @@ impl CscMatrix {
             .map(Self::from_native)
     }
 
+    /// Construct an identity matrix.
+    ///
+    /// # Errors
+    /// Returns an error if the dimension exceeds the supported range.
     pub fn identity(size: usize) -> Result<Self, MatrixError> {
         if size > isize::MAX as usize {
             return Err(MatrixError::DimensionOverflow);
@@ -70,6 +85,10 @@ impl CscMatrix {
         NativeMatrix::identity(size).map(Self::from_native)
     }
 
+    /// Construct a matrix with no stored entries.
+    ///
+    /// # Errors
+    /// Returns an error if a dimension exceeds the supported range.
     pub fn zeros(rows: usize, columns: usize) -> Result<Self, MatrixError> {
         if rows > isize::MAX as usize || columns > isize::MAX as usize {
             return Err(MatrixError::DimensionOverflow);
@@ -139,5 +158,37 @@ impl CscMatrix {
         let (rows, columns) = (self.rows(), self.columns());
         let (pointers, indices, values) = self.into_parts();
         NativeMatrix::from_parts(rows, columns, pointers, indices, values)
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::CscMatrix;
+
+    pub(crate) fn matrix(rows: usize, cols: usize, data: &[f64]) -> CscMatrix {
+        assert_eq!(data.len(), rows * cols);
+        matrix_from_fn(rows, cols, |i, j| data[i * cols + j])
+    }
+
+    fn matrix_from_fn(rows: usize, cols: usize, entry: impl Fn(usize, usize) -> f64) -> CscMatrix {
+        let mut row = Vec::new();
+        let mut col = Vec::new();
+        let mut values = Vec::new();
+        for i in 0..rows {
+            for j in 0..cols {
+                let value = entry(i, j);
+                if value != 0.0 {
+                    row.push(i);
+                    col.push(j);
+                    values.push(value);
+                }
+            }
+        }
+        CscMatrix::from_triplets(rows, cols, row, col, values).unwrap()
+    }
+
+    #[test]
+    fn rejects_malformed_sparse_storage() {
+        assert!(CscMatrix::new(2, 2, vec![0, 1], vec![0], vec![1.]).is_err());
     }
 }

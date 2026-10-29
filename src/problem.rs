@@ -48,6 +48,10 @@ impl Problem {
     }
 
     /// Construct from a full symmetric `P`, retaining only its upper triangle.
+    ///
+    /// # Errors
+    /// Returns an error for incompatible dimensions, invalid cone parameters,
+    /// nonfinite data, or an asymmetric `P`.
     pub fn new(
         p: Option<CscMatrix>,
         c: Vec<f64>,
@@ -193,5 +197,44 @@ impl From<Problem> for ::presolve::Problem {
             variable_bounds: vec![],
             cones,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::linear_algebra::matrix;
+    use crate::{Cone, CscMatrix, Problem, ProblemError};
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::shape(vec![0.], vec![0.,0.], vec![Cone::Nonnegative(2)], ProblemError::InvalidConstraintColumnCount)]
+    #[case::rhs(vec![0.,0.], vec![0.], vec![Cone::Nonnegative(2)], ProblemError::InvalidConstraintRowCount)]
+    #[case::cones(vec![0.,0.], vec![0.,0.], vec![Cone::Zero(1)], ProblemError::ConeDimensionMismatch {expected:2,actual:1})]
+    #[case::nonfinite(vec![f64::NAN,0.], vec![0.,0.], vec![Cone::Nonnegative(2)], ProblemError::NonFiniteVector)]
+    fn rejects_invalid_problem_data(
+        #[case] c: Vec<f64>,
+        #[case] b: Vec<f64>,
+        #[case] cones: Vec<Cone>,
+        #[case] expected: ProblemError,
+    ) {
+        assert_eq!(
+            Problem::new(None, c, matrix(2, 2, &[1., 0., 0., 1.]), b, cones).unwrap_err(),
+            expected
+        );
+    }
+
+    #[test]
+    fn rejects_asymmetric_curvature() {
+        let result = Problem::new(
+            Some(matrix(2, 2, &[1., 2., 0., 1.])),
+            vec![0.; 2],
+            CscMatrix::zeros(0, 2).unwrap(),
+            vec![],
+            vec![],
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ProblemError::NonsymmetricQuadraticMatrix
+        );
     }
 }

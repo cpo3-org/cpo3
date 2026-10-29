@@ -56,7 +56,7 @@ pub(crate) fn domains(
             Cone::Zero(_) => {
                 rows.extend(b[offset..offset + n].iter().map(|&b| {
                     native::problem::Constraint::Linear(native::problem::Bounds::fixed(b))
-                }))
+                }));
             }
             Cone::Nonnegative(_) => rows.extend(b[offset..offset + n].iter().map(|&b| {
                 native::problem::Constraint::Linear(native::problem::Bounds {

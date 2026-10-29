@@ -377,3 +377,107 @@ fn row_norms<const UNIT_SCALING: bool>(
     }
     max_t
 }
+
+#[cfg(test)]
+mod tests {
+    use super::EquilibratedProblem;
+    use crate::linear_algebra::matrix;
+    use crate::{Cone, Problem, Settings};
+    use approx::assert_relative_eq;
+    use rstest::rstest;
+
+    fn problem() -> Problem {
+        Problem::new(
+            Some(matrix(2, 2, &[2., 1., 1., 3.])),
+            vec![-5., 1.],
+            matrix(3, 2, &[1., 0., 0., -2., 1., 2.]),
+            vec![4., 0., 5.],
+            vec![Cone::Nonnegative(2), Cone::Zero(1)],
+        )
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::disabled(0)]
+    #[case::enabled(4)]
+    fn ruiz_maps_coordinates_and_equations_consistently(#[case] passes: usize) {
+        // Ax + s = b and Px + A^T y + c = 0.
+        let p = problem();
+        let x = [1., 2.];
+        let y = [2., 3., -1.];
+        let s = [3., 4., 0.];
+
+        let eq = EquilibratedProblem::new(
+            &p,
+            &Settings {
+                ruiz_iters: passes,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        let sx = eq.scale_x(&x);
+        let sy = eq.scale_y(&y);
+        let ss = eq.scale_s(&s);
+        assert_relative_eq!(
+            &eq.unscale_x(&sx)[..],
+            &x[..],
+            epsilon = 1e-10,
+            max_relative = 1e-10
+        );
+        assert_relative_eq!(
+            &eq.unscale_y(&sy)[..],
+            &y[..],
+            epsilon = 1e-10,
+            max_relative = 1e-10
+        );
+        assert_relative_eq!(
+            &eq.unscale_s(&ss)[..],
+            &s[..],
+            epsilon = 1e-10,
+            max_relative = 1e-10
+        );
+        let mut recovered = vec![99.; 7];
+        eq.unscale_x_into(&sx, 0.5, &mut recovered);
+        assert_relative_eq!(
+            &recovered[..],
+            &[0.5, 1.][..],
+            epsilon = 1e-10,
+            max_relative = 1e-10
+        );
+        eq.unscale_y_into(&sy, 0.5, &mut recovered);
+        assert_relative_eq!(
+            &recovered[..],
+            &[1., 1.5, -0.5][..],
+            epsilon = 1e-10,
+            max_relative = 1e-10
+        );
+        eq.unscale_s_into(&ss, 0.5, &mut recovered);
+        assert_relative_eq!(
+            &recovered[..],
+            &[1.5, 2., 0.][..],
+            epsilon = 1e-10,
+            max_relative = 1e-10
+        );
+        let q = eq.problem();
+        for (i, slack) in ss.iter().enumerate() {
+            let ax: f64 = (0..2).map(|j| q.a().get(i, j).unwrap_or(0.) * sx[j]).sum();
+            assert_relative_eq!(ax + slack, q.b()[i], epsilon = 1e-10, max_relative = 1e-10);
+        }
+        for i in 0..2 {
+            let px: f64 = (0..2)
+                .map(|j| q.p().unwrap().get(i.min(j), i.max(j)).unwrap_or(0.) * sx[j])
+                .sum();
+            let aty: f64 = sy
+                .iter()
+                .enumerate()
+                .map(|(j, y)| q.a().get(j, i).unwrap_or(0.) * y)
+                .sum();
+            assert_relative_eq!(
+                px + aty + q.c()[i],
+                0.,
+                epsilon = 1e-10,
+                max_relative = 1e-10
+            );
+        }
+    }
+}

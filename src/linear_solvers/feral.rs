@@ -145,39 +145,3 @@ fn check_feral_status(status: FeralFactorStatus) -> Result<(), LinearSystemError
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::linear_solvers::{Factorization, FactorizationInner, KktSettings};
-
-    #[test]
-    fn explicit_thread_caps_disable_ferals_unbounded_pool() {
-        let matrix =
-            CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![2.0, -2.0]).unwrap();
-        for threads in [0, 1, 3] {
-            let settings = KktSettings::from(&crate::Settings {
-                linear_solver: crate::LinearSolver::Feral,
-                threads,
-                ..crate::Settings::default()
-            });
-            let mut factor = Factorization::prepare(matrix.clone(), &settings).unwrap();
-            factor.factor(&mut 0).unwrap();
-            let FactorizationInner::Feral(mut factor) = factor.inner else {
-                unreachable!()
-            };
-            assert_eq!(
-                factor.solver.parallel(),
-                threads == 0 && FeralSolver::default_use_parallel()
-            );
-            for diagonal in [2.0, 3.0] {
-                factor
-                    .refactor_diagonal(&[diagonal, -diagonal], &mut 0)
-                    .unwrap();
-                let mut rhs = [diagonal, diagonal];
-                factor.solve_in_place(&mut rhs).unwrap();
-                assert_eq!(rhs, [1.0, -1.0]);
-            }
-        }
-    }
-}

@@ -47,17 +47,3 @@ impl Cone {
         }
     }
 }
-
-#[cfg(test)]
-pub(crate) fn test_geometry(cones: Vec<Cone>) -> ConeGeometry {
-    let dim = cones.iter().map(Cone::vector_dim).sum();
-    let problem = crate::Problem::new(
-        None,
-        vec![],
-        crate::CscMatrix::zeros(dim, 0).unwrap(),
-        vec![0.0; dim],
-        cones,
-    )
-    .unwrap();
-    ConeGeometry::new(&problem).unwrap()
-}

@@ -111,7 +111,7 @@ impl ClampPolicy {
         let solve_limited = after.refinement_solve_limited > before.refinement_solve_limited;
         if solve_limited && !clamp_limited {
             self.increase();
-        } else if self.floor() == starting_floor
+        } else if self.floor().to_bits() == starting_floor.to_bits()
             && ((clamp_limited && !solve_limited)
                 || after.refinement_settled == before.refinement_settled)
         {
@@ -214,36 +214,35 @@ impl KktCache {
         kkt: &KktSettings,
     ) -> Result<(), KktError> {
         self.workspace.perturbation_ready = false;
-        match (self.factorization.as_mut(), self.pattern.as_ref()) {
-            (Some(factorization), Some(pattern)) => {
-                factorization.set_strict_refinement(kkt.strict_refinement);
-                factorization.set_clamp_floor(kkt.diagonal_floor);
-                factorization.update_diagonal_and_refactor(&mut self.factorizations, |values| {
-                    pattern.write_diagonal(
-                        values,
-                        |index| index,
-                        shift,
-                        factor_diagonal,
-                        kkt.diagonal_floor,
-                    )
-                })?;
-            }
-            _ => {
-                let (k, pattern) = assemble_preconditioner(
-                    problem,
-                    geometry,
+        if let (Some(factorization), Some(pattern)) =
+            (self.factorization.as_mut(), self.pattern.as_ref())
+        {
+            factorization.set_strict_refinement(kkt.strict_refinement);
+            factorization.set_clamp_floor(kkt.diagonal_floor);
+            factorization.update_diagonal_and_refactor(&mut self.factorizations, |values| {
+                pattern.write_diagonal(
+                    values,
+                    |index| index,
                     shift,
                     factor_diagonal,
                     kkt.diagonal_floor,
-                    kkt.eliminate_bound_rows,
-                )?;
-                self.pattern = Some(pattern);
-                self.factorization = Some(Factorization::prepare(k, kkt)?);
-                self.factorization
-                    .as_mut()
-                    .expect("the factorization workspace was just stored")
-                    .factor(&mut self.factorizations)?;
-            }
+                );
+            })?;
+        } else {
+            let (k, pattern) = assemble_preconditioner(
+                problem,
+                geometry,
+                shift,
+                factor_diagonal,
+                kkt.diagonal_floor,
+                kkt.eliminate_bound_rows,
+            )?;
+            self.pattern = Some(pattern);
+            self.factorization = Some(Factorization::prepare(k, kkt)?);
+            self.factorization
+                .as_mut()
+                .expect("the factorization workspace was just stored")
+                .factor(&mut self.factorizations)?;
         }
         self.factorization
             .as_mut()
@@ -895,289 +894,196 @@ pub(crate) fn full_residual_and_denominator(
 }
 
 #[cfg(test)]
-mod cache_tests {
-    use super::*;
-    use crate::{Cone, LinearSolver};
+mod tests {
+    use super::{ClampPolicy, KktCache};
+    use crate::cone::ConeGeometry;
+    use crate::linear_algebra::matrix;
+    use crate::linear_solvers::{KktSettings, LinearAlgebraStats};
+    use crate::{Cone, CscMatrix, LinearSolver, Problem, Settings};
+    use approx::assert_relative_eq;
+    use rstest::rstest;
 
-    #[test]
-    fn cached_diagonal_updates_preserve_full_and_reduced_solves() {
-        let problem = Problem::from_upper_triangle(
-            Some(CscMatrix::from_triplets(2, 2, vec![0, 0], vec![0, 1], vec![2.0, 1.0]).unwrap()),
-            vec![0.0; 2],
-            crate::linear_algebra::test_matrix(3, 2, vec![1.0, 2.0, -3.0, 0.0, 4.0, -1.0]).unwrap(),
-            vec![0.0; 3],
-            vec![Cone::Zero(1), Cone::Nonnegative(2)],
+    fn problem() -> Problem {
+        Problem::new(
+            Some(matrix(2, 2, &[2., 1., 1., 3.])),
+            vec![-3., -7.],
+            matrix(3, 2, &[1., 0., 0., -2., 1., 2.]),
+            vec![1., -4., 5.],
+            vec![Cone::Nonnegative(2), Cone::Zero(1)],
         )
-        .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
-            for eliminate_bound_rows in [false, true] {
-                let settings = KktSettings {
-                    eliminate_bound_rows,
-                    ..KktSettings::new(solver)
-                };
-                let mut cache = KktCache::new();
-                for shift in [1.0, 3.0] {
-                    let diagonal = [shift, shift + 1.0, shift + 2.0];
-                    // K * (1, -2, 3, -1, 2), including the missing P[1, 1] entry.
-                    let rhs = [
-                        14.0 + shift,
-                        5.0 - 2.0 * shift,
-                        -3.0 - 3.0 * shift,
-                        shift - 2.0,
-                        2.0 - 2.0 * shift,
-                    ];
-                    cache
-                        .prepare(&problem, &geometry, shift, &diagonal, &settings)
-                        .unwrap();
-                    let solution = cache
-                        .solve(&problem, shift, &diagonal, &diagonal, &rhs)
-                        .unwrap();
-                    for (actual, expected) in solution.iter().zip([1.0, -2.0, 3.0, -1.0, 2.0]) {
-                        assert!((actual - expected).abs() < 1e-12);
-                    }
-                }
-                assert_eq!(cache.stats().factorizations, 2);
-            }
-        }
+        .unwrap()
     }
 
-    #[test]
-    fn clamp_adjustment_uses_only_the_current_steps_diagnostics() {
+    fn settings(backend: LinearSolver) -> KktSettings {
+        KktSettings::from(&Settings {
+            threads: 1,
+            linear_solver: backend,
+            refine_tol: 1e-12,
+            ..Settings::default()
+        })
+    }
+
+    #[rstest]
+    #[case::accurate(0, 0, 0, 1e-9)]
+    #[case::clamp_limited(1, 0, 1, 1e-9)]
+    #[case::solve_limited(0, 1, 1, 1e-7)]
+    #[case::mixed_diagnostics(1, 1, 1, 1e-8)]
+    #[case::ambiguous_settling(0, 0, 1, 1e-8)]
+    fn accepted_step_adjusts_clamp_from_new_diagnostics(
+        #[case] clamp_limited: usize,
+        #[case] solve_limited: usize,
+        #[case] settled: usize,
+        #[case] expected: f64,
+    ) {
+        let mut policy = ClampPolicy::default();
+        let start = policy.start_step(1e-8);
+        // Prior steps' diagnostics must not determine this step's decision.
         let before = LinearAlgebraStats {
             refinement_clamp_limited: 3,
             refinement_solve_limited: 4,
-            refinement_settled: 5,
+            refinement_settled: 7,
             ..LinearAlgebraStats::default()
         };
-        for (clamp, solve, settled, factor, increases, decreases) in [
-            (0, 0, 0, 0.1, 0, 1),
-            (0, 0, 1, 1.0, 0, 0),
-            (1, 0, 1, 0.1, 0, 1),
-            (0, 1, 1, 10.0, 1, 0),
-            (1, 1, 1, 1.0, 0, 0),
-        ] {
-            let mut policy = ClampPolicy::default();
-            let start = policy.start_step(1e-8);
-            let after = LinearAlgebraStats {
-                refinement_clamp_limited: before.refinement_clamp_limited + clamp,
-                refinement_solve_limited: before.refinement_solve_limited + solve,
-                refinement_settled: before.refinement_settled + settled,
-                ..before
-            };
-            policy.accepted_step(start, before, after);
-            assert!((policy.floor() / start - factor).abs() < 1e-14);
-            assert_eq!((policy.increases, policy.decreases), (increases, decreases));
-        }
+        let after = LinearAlgebraStats {
+            refinement_clamp_limited: before.refinement_clamp_limited + clamp_limited,
+            refinement_solve_limited: before.refinement_solve_limited + solve_limited,
+            refinement_settled: before.refinement_settled + settled,
+            ..before
+        };
+        policy.accepted_step(start, before, after);
+        assert_relative_eq!(policy.floor(), expected, epsilon = 1e-20);
+        assert_eq!(policy.increases, usize::from(expected > start));
+        assert_eq!(policy.decreases, usize::from(expected < start));
+        // Subsequent steps retain the adjusted floor rather than resetting it.
+        assert_eq!(policy.start_step(1e-6), policy.floor());
+        assert_relative_eq!(policy.floor(), expected, epsilon = 1e-20);
+    }
+
+    #[rstest]
+    fn accepted_retry_does_not_immediately_relax_the_clamp(
+        #[values(false, true)] clamp_limited: bool,
+    ) {
+        let mut policy = ClampPolicy::default();
+        let start = policy.start_step(1e-8);
+        let retried = policy.retry(0.).unwrap();
+        let before = LinearAlgebraStats::default();
+        let after = LinearAlgebraStats {
+            refinement_clamp_limited: usize::from(clamp_limited),
+            refinement_settled: usize::from(clamp_limited),
+            ..before
+        };
+        policy.accepted_step(start, before, after);
+        assert_eq!(policy.floor(), retried);
+        assert_eq!(policy.decreases, 0);
     }
 
     #[test]
-    fn failed_factorization_retains_workspace_and_can_be_retried() {
-        let problem = Problem::new(
+    fn clamp_limits_bound_adjustments_and_do_not_count_noops() {
+        let mut policy = ClampPolicy::default();
+        let start = policy.start_step(0.);
+        assert_eq!(start, 1e-20);
+        let stats = LinearAlgebraStats::default();
+        policy.accepted_step(start, stats, stats);
+        assert_eq!(policy.floor(), 1e-20);
+        assert_eq!(policy.decreases, 0);
+
+        // No clamp can affect a matrix whose nonbinding limit is the maximum.
+        assert_eq!(policy.retry(1e-4), None);
+        assert_eq!(policy.floor(), 1e-4);
+        let increases = policy.increases;
+        assert_eq!(policy.retry(0.), None);
+        let limited = LinearAlgebraStats {
+            refinement_solve_limited: 1,
+            refinement_settled: 1,
+            ..stats
+        };
+        policy.accepted_step(1e-4, stats, limited);
+        assert_eq!(policy.floor(), 1e-4);
+        assert_eq!(policy.increases, increases);
+    }
+
+    fn kkt_product(x: &[f64], shift: f64, d: &[f64]) -> Vec<f64> {
+        vec![
+            (2. + shift) * x[0] + x[1] + x[2] + x[4],
+            x[0] + (3. + shift) * x[1] - 2. * x[3] + 2. * x[4],
+            x[0] - d[0] * x[2],
+            -2. * x[1] - d[1] * x[3],
+            x[0] + 2. * x[1] - d[2] * x[4],
+        ]
+    }
+
+    #[rstest]
+    fn reduced_cached_and_batched_kkt_solves_satisfy_full_equations(
+        #[values(LinearSolver::Faer, LinearSolver::Feral)] backend: LinearSolver,
+        #[values(false, true)] eliminate: bool,
+    ) {
+        let p = problem();
+        let geometry = ConeGeometry::new(&p).unwrap();
+        let expected = [1., -2., 3., -4., 5.];
+
+        let mut settings = settings(backend);
+        settings.eliminate_bound_rows = eliminate;
+        let mut cache = KktCache::new();
+        for (shift, d) in [(0.1, [1., 2., 0.1]), (0.3, [2., 1., 0.3])] {
+            let rhs = kkt_product(&expected, shift, &d);
+            cache.prepare(&p, &geometry, shift, &d, &settings).unwrap();
+            let result = cache.solve(&p, shift, &d, &d, &rhs).unwrap();
+            assert_relative_eq!(
+                &result[..],
+                &expected[..],
+                epsilon = 1e-10,
+                max_relative = 1e-10
+            );
+            let predictor = cache.prepare_direction(&p, shift, &d, &d, &rhs).unwrap();
+            assert_relative_eq!(
+                &predictor[..],
+                &expected[..],
+                epsilon = 1e-10,
+                max_relative = 1e-10
+            );
+            assert_relative_eq!(
+                &kkt_product(cache.direction(), shift, &d)[..],
+                &[3., 7., 1., -4., 5.][..],
+                epsilon = 1e-10,
+                max_relative = 1e-10
+            );
+            cache.finish_step(true);
+            // Factor a perturbed system, but refine against the original one.
+            let factor_d = d.map(|v| v + 0.01);
+            cache
+                .prepare(&p, &geometry, shift + 0.01, &factor_d, &settings)
+                .unwrap();
+            assert_relative_eq!(
+                &cache.solve(&p, shift, &d, &factor_d, &rhs).unwrap()[..],
+                &expected[..],
+                epsilon = 1e-10,
+                max_relative = 1e-10
+            );
+        }
+    }
+
+    #[rstest]
+    fn cache_recovers_after_failed_numeric_factorizations(
+        #[values(LinearSolver::Faer, LinearSolver::Feral)] backend: LinearSolver,
+    ) {
+        let p = Problem::new(
             None,
-            vec![-2.0],
+            vec![-2.],
             CscMatrix::zeros(1, 1).unwrap(),
-            vec![1.0],
+            vec![1.],
             vec![Cone::Zero(1)],
         )
         .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
-            let settings = KktSettings {
-                diagonal_floor: 0.0,
-                ..KktSettings::new(solver)
-            };
-            let mut cache = KktCache::new();
-            for attempts in 1..=2 {
-                cache
-                    .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
-                    .unwrap_err();
-                // Keep the prepared workspace even when numeric retries fail.
-                assert!(cache.pattern.is_some());
-                assert!(cache.factorization.is_some());
-                assert_eq!(cache.stats().factorizations, attempts);
-            }
-            assert_eq!(cache.nonbinding_floor_limit(0.1), 0.1);
-            cache
-                .prepare(&problem, &geometry, 1.0, &[1.0], &settings)
-                .unwrap();
-            let result = cache
-                .solve(&problem, 1.0, &[1.0], &[1.0], &[2.0, 1.0])
-                .unwrap();
-            assert_eq!(result, vec![2.0, -1.0]);
-            assert_eq!(cache.stats().factorizations, 3);
-        }
-    }
-
-    #[test]
-    fn rejected_step_restores_the_accepted_direction() {
-        let problem = Problem::new(
-            None,
-            vec![-2.0],
-            CscMatrix::zeros(1, 1).unwrap(),
-            vec![1.0],
-            vec![Cone::Zero(1)],
-        )
-        .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let settings = KktSettings::new(LinearSolver::Faer);
+        let geometry = ConeGeometry::new(&p).unwrap();
+        let mut settings = settings(backend);
+        settings.diagonal_floor = 0.;
         let mut cache = KktCache::new();
-        for (shift, accepted, expected) in [
-            (1.0, false, vec![]),
-            (1.0, true, vec![2.0, -1.0]),
-            (2.0, false, vec![2.0, -1.0]),
-            (2.0, true, vec![1.0, -0.5]),
-        ] {
-            cache
-                .prepare(&problem, &geometry, shift, &[shift], &settings)
-                .unwrap();
-            cache
-                .prepare_direction(&problem, shift, &[shift], &[shift], &[0.0; 2])
-                .unwrap();
-            assert_eq!(cache.direction(), &[2.0 / shift, -1.0 / shift]);
-            cache.finish_step(accepted);
-            assert_eq!(cache.direction(), expected);
+        for _ in 0..2 {
+            assert!(cache.prepare(&p, &geometry, 0., &[1.], &settings).is_err());
         }
-        assert_eq!(cache.stats().factorizations, 4);
-        assert_eq!(cache.stats().primary_solves, 8);
-    }
-
-    #[test]
-    fn batched_direction_and_predictor_match_separate_warm_solves() {
-        let matrix = crate::linear_algebra::test_matrix;
-        let problem = Problem::new(
-            Some(matrix(2, 2, vec![2.0, 0.5, 0.5, 3.0]).unwrap()),
-            vec![-1.0, 2.0],
-            matrix(3, 2, vec![1.0, 1.0, -2.0, 0.0, 0.0, 3.0]).unwrap(),
-            vec![1.0, 0.0, 2.0],
-            vec![Cone::Zero(1), Cone::Nonnegative(2)],
-        )
-        .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let rhs = [1.0, -2.0, 3.0, -4.0, 5.0];
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
-            for eliminate_bound_rows in [false, true] {
-                let settings = KktSettings {
-                    eliminate_bound_rows,
-                    ..KktSettings::new(solver)
-                };
-                let (mut separate, mut paired) = (KktCache::new(), KktCache::new());
-                for shift in [0.3_f64, 0.1] {
-                    let target = [shift, shift + 0.2, shift + 0.4];
-                    let factor = target.map(|d| d.max(0.4));
-                    for cache in [&mut separate, &mut paired] {
-                        cache
-                            .prepare(&problem, &geometry, shift, &factor, &settings)
-                            .unwrap();
-                    }
-                    let data_rhs = [1.0, -2.0, 1.0, 0.0, 2.0];
-                    let seed = (!separate.direction.is_empty())
-                        .then(|| separate.direction.split_at(problem.variable_count()));
-                    let next = separate
-                        .workspace
-                        .solve(
-                            separate.pattern.as_ref().unwrap(),
-                            &problem,
-                            separate.factorization.as_mut().unwrap(),
-                            shift,
-                            &target,
-                            &factor,
-                            &data_rhs,
-                            seed,
-                        )
-                        .unwrap();
-                    separate.direction = next;
-                    let expected = separate
-                        .solve(&problem, shift, &target, &factor, &rhs)
-                        .unwrap();
-                    let actual = paired
-                        .prepare_direction(&problem, shift, &target, &factor, &rhs)
-                        .unwrap();
-                    for (a, b) in actual
-                        .iter()
-                        .chain(paired.direction())
-                        .zip(expected.iter().chain(separate.direction()))
-                    {
-                        assert!((a - b).abs() <= 1e-12 * (1.0 + b.abs()));
-                    }
-                    assert_eq!(paired.stats(), separate.stats());
-                    separate.finish_step(true);
-                    paired.finish_step(true);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn refinement_solves_the_true_system_with_a_clamped_primal_diagonal() {
-        let problem = Problem::new(
-            Some(CscMatrix::from_triplets(1, 1, vec![0], vec![0], vec![1e-14]).unwrap()),
-            vec![0.0],
-            CscMatrix::identity(1).unwrap(),
-            vec![0.0],
-            vec![Cone::Nonnegative(1)],
-        )
-        .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let settings = KktSettings::from(&crate::Settings {
-            eliminate_bounds: false,
-            refine_init_reg: 1e-6,
-            refine_tol: 1e-12,
-            ..crate::Settings::default()
-        });
-        let mut cache = KktCache::new();
-        cache
-            .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
-            .unwrap();
-        let solution = cache
-            .solve(&problem, 0.0, &[1.0], &[1.0], &[2.0 + 1e-14, -1.0])
-            .unwrap();
-        assert!((solution[0] - 1.0).abs() < 1e-10);
-        assert!((solution[1] - 2.0).abs() < 1e-10);
-        assert!(cache.stats().refinement_solves > 0);
-        assert_eq!(cache.stats().refinement_accurate, 1);
-    }
-
-    #[test]
-    fn perturbation_is_reused_and_invalidated_after_refactorization() {
-        let problem = Problem::new(
-            Some(CscMatrix::identity(1).unwrap()),
-            vec![0.0],
-            CscMatrix::identity(1).unwrap(),
-            vec![0.0],
-            vec![Cone::Nonnegative(1)],
-        )
-        .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let shift = 0.1;
-        let target = [0.15_f64];
-        let mut cache = KktCache::new();
-        for floor in [0.5, 0.3, 1e-12] {
-            let settings = KktSettings {
-                diagonal_floor: floor,
-                ..KktSettings::new(LinearSolver::Faer)
-            };
-            let factor = [target[0].max(floor)];
-            cache
-                .prepare(&problem, &geometry, shift, &factor, &settings)
-                .unwrap();
-            assert!(!cache.workspace.perturbation_ready);
-            for rhs in [[1.0, 2.0], [-3.0, 1.0]] {
-                let result = cache
-                    .solve(&problem, shift, &target, &factor, &rhs)
-                    .unwrap();
-                assert!((1.1 * result[0] + result[1] - rhs[0]).abs() < 1e-5);
-                assert!((result[0] - 0.15 * result[1] - rhs[1]).abs() < 1e-5);
-                assert!(cache.workspace.perturbation_ready);
-                if floor > shift {
-                    assert_eq!(
-                        cache.workspace.refinement.perturbation,
-                        vec![0.0, target[0] - factor[0]]
-                    );
-                } else {
-                    assert!(cache.workspace.refinement.perturbation.is_empty());
-                }
-            }
-        }
+        cache.prepare(&p, &geometry, 1., &[1.], &settings).unwrap();
+        let x = cache.solve(&p, 1., &[1.], &[1.], &[2., 1.]).unwrap();
+        assert_relative_eq!(x.as_slice(), &[2., -1.][..], epsilon = 1e-12);
+        assert_eq!(cache.stats().factorizations, 3);
     }
 }

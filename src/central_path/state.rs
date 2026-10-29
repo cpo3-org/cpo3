@@ -169,106 +169,150 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Cone;
+    use crate::{Cone, CscMatrix};
+    use approx::assert_relative_eq;
+    use rstest::rstest;
 
-    #[test]
-    fn constructors_validate_before_flooring() {
-        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(1)]);
-        for (x, s, y, tau, error) in [
-            (0.0, 0.0, 0.0, 0.0, StateError::NonPositiveTau),
-            (0.0, 0.0, 0.0, f64::NAN, StateError::NonPositiveTau),
-            (0.0, 0.0, 0.0, f64::INFINITY, StateError::NonPositiveTau),
-            (f64::INFINITY, 0.0, 0.0, 1.0, StateError::NonFiniteState),
-            (0.0, f64::NAN, 0.0, 1.0, StateError::NonFiniteState),
-            (0.0, 0.0, f64::NAN, 1.0, StateError::NonFiniteState),
-        ] {
-            assert_eq!(
-                State::new(vec![x], vec![s], vec![y], tau),
-                Err(error.clone())
-            );
-            assert_eq!(
-                State::from_stacked(vec![x, y], 1, vec![s], tau, &geometry),
-                Err(error)
-            );
+    fn problem(cones: Vec<Cone>, rows: usize) -> Problem {
+        Problem::new(
+            None,
+            vec![0.; 2],
+            CscMatrix::zeros(rows, 2).unwrap(),
+            vec![0.; rows],
+            cones,
+        )
+        .unwrap()
+    }
+
+    fn mixed_problem() -> Problem {
+        problem(
+            vec![Cone::Nonnegative(1), Cone::Zero(1), Cone::Nonnegative(1)],
+            3,
+        )
+    }
+
+    #[rstest]
+    #[case::ordinary(1.)]
+    #[case::small(1e-6)]
+    #[case::large(1e150)]
+    #[case::overflowing_norm(1.5e308)]
+    fn normalization_preserves_homogeneous_coordinates_and_scales_slack(#[case] magnitude: f64) {
+        let problem = mixed_problem();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let mut state = State::new(
+            vec![magnitude, -0.5 * magnitude],
+            vec![0.5 * magnitude, 0., magnitude],
+            vec![0.25 * magnitude, -0.75 * magnitude, 0.5 * magnitude],
+            0.5 * magnitude,
+        )
+        .unwrap();
+        state.normalize_sphere(&geometry).unwrap();
+        state.validate(&problem, &geometry).unwrap();
+        let expected_scale = (3. / 2.375_f64).sqrt();
+        let expected = [1., -0.5, 0.25, -0.75, 0.5];
+        for (value, base) in state.xy.iter().zip(expected) {
+            assert_relative_eq!(*value, base * expected_scale, epsilon = 1e-14);
+            assert_relative_eq!(*value / state.tau(), 2. * base, epsilon = 1e-14);
         }
-        let initial = State::new(vec![0.0], vec![0.0], vec![0.0], 1.0).unwrap();
-        assert_eq!((initial.s(), initial.y()), (&[0.0][..], &[0.0][..]));
-        let accepted = State::from_stacked(vec![0.0; 2], 1, vec![0.0], 1.0, &geometry).unwrap();
-        assert_eq!(accepted.s(), [INTERIOR_FLOOR]);
-        assert_eq!(accepted.y(), [INTERIOR_FLOOR]);
+        for (value, base) in state.s().iter().zip([0.5, 0., 1.]) {
+            assert_relative_eq!(*value, base * expected_scale, epsilon = 1e-14);
+            assert_relative_eq!(*value / state.tau(), 2. * base, epsilon = 1e-14);
+        }
+        let squared_norm = state.xy.iter().map(|v| v * v).sum::<f64>() + state.tau().powi(2);
+        assert_relative_eq!(squared_norm, 3., epsilon = 1e-14);
+        assert_relative_eq!(
+            state.duality_measure(&geometry),
+            0.3125 * expected_scale.powi(2),
+            epsilon = 1e-14
+        );
+        let normalized = state.clone();
+        state.normalize_sphere(&geometry).unwrap();
+        assert_relative_eq!(
+            state.xy.as_slice(),
+            normalized.xy.as_slice(),
+            epsilon = 1e-14
+        );
+        assert_relative_eq!(state.s(), normalized.s(), epsilon = 1e-14);
+        assert_relative_eq!(state.tau(), normalized.tau(), epsilon = 1e-14);
     }
 
     #[test]
-    fn sphere_projection_preserves_the_projective_solution_and_cone_geometry() {
-        let problem = test_problem();
+    fn equality_only_normalization_uses_unit_sphere_and_unrestricted_multipliers() {
+        let problem = problem(vec![Cone::Zero(2)], 2);
         let geometry = ConeGeometry::new(&problem).unwrap();
-        let original = State::new(vec![3.0, -4.0], vec![0.0, 7.0], vec![-2.0, 5.0], 0.5).unwrap();
-        let mut state = original.clone();
+        let mut state = State::new(vec![2., -1.], vec![0., 0.], vec![-3., 4.], 2.).unwrap();
         state.normalize_sphere(&geometry).unwrap();
-        let norm_squared =
-            dot(state.x(), state.x()) + dot(state.y(), state.y()) + state.tau().powi(2);
-        assert!((norm_squared - (geometry.barrier_parameter() + 1) as f64).abs() < 1e-14);
-        for (before, after) in original
-            .x()
-            .iter()
-            .chain(original.y())
-            .chain(original.s())
-            .zip(state.x().iter().chain(state.y()).chain(state.s()))
-        {
-            assert!((before / original.tau() - after / state.tau()).abs() < 1e-13);
-        }
-        let old_gap = original.duality_measure(&geometry) / original.tau().powi(2);
-        let new_gap = state.duality_measure(&geometry) / state.tau().powi(2);
-        assert!((old_gap - new_gap).abs() < 1e-12);
+        let norm = 34_f64.sqrt();
+        assert_relative_eq!(state.x(), &[2. / norm, -1. / norm][..], epsilon = 1e-14);
+        assert_relative_eq!(state.y(), &[-3. / norm, 4. / norm][..], epsilon = 1e-14);
+        assert_relative_eq!(state.tau(), 2. / norm, epsilon = 1e-14);
+        assert_eq!(state.s(), &[0., 0.]);
+        assert_eq!(state.duality_measure(&geometry), 0.);
         state.validate(&problem, &geometry).unwrap();
     }
 
     #[test]
-    fn sphere_projection_handles_extreme_scales_and_the_norm_floor() {
-        let geometry = crate::cone::test_geometry(vec![Cone::Zero(2), Cone::Nonnegative(1)]);
-        let mut underflow = State::new(
-            vec![1e300, 1e-300],
-            vec![0.0, 0.0, 1e-300],
-            vec![-1e-300, 1e-300, 1e-300],
-            1e-300,
+    fn normalization_floors_only_constrained_coordinates_and_tau() {
+        let problem = mixed_problem();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let mut state = State::new(
+            vec![1., -1e-100],
+            vec![1e-100, 0., 1e-100],
+            vec![1e-100, -1e-100, 1e-100],
+            1e-100,
         )
         .unwrap();
-        underflow.normalize_sphere(&geometry).unwrap();
-        assert_eq!(underflow.x()[1], 0.0);
-        assert_eq!(underflow.s(), [0.0, 0.0, INTERIOR_FLOOR]);
-        assert_eq!(underflow.y(), [0.0, 0.0, INTERIOR_FLOOR]);
-        assert_eq!(underflow.tau(), INTERIOR_FLOOR);
-
-        let unconstrained = crate::cone::test_geometry(vec![]);
-        let mut tiny = State::new(vec![], vec![], vec![], 1e-300).unwrap();
-        tiny.normalize_sphere(&unconstrained).unwrap();
-        assert_eq!(tiny.tau(), INTERIOR_FLOOR);
-        for magnitude in [1e-7, 1.0, 1e300] {
-            let mut state =
-                State::new(vec![3.0 * magnitude], vec![], vec![], 4.0 * magnitude).unwrap();
-            state.normalize_sphere(&unconstrained).unwrap();
-            assert!((state.x()[0] - 0.6).abs() < 1e-14);
-            assert!((state.tau() - 0.8).abs() < 1e-14);
+        state.normalize_sphere(&geometry).unwrap();
+        let scale = 3_f64.sqrt();
+        assert_relative_eq!(state.x()[0], scale, epsilon = 1e-14);
+        for value in [state.x()[1], state.y()[1]] {
+            assert_relative_eq!(value, -scale * 1e-100, epsilon = 0., max_relative = 1e-14);
         }
+        assert_eq!(state.s(), &[INTERIOR_FLOOR, 0., INTERIOR_FLOOR]);
+        assert_eq!(state.y()[0], INTERIOR_FLOOR);
+        assert_eq!(state.y()[2], INTERIOR_FLOOR);
+        assert_eq!(state.tau(), INTERIOR_FLOOR);
+        state.validate(&problem, &geometry).unwrap();
     }
 
     #[test]
-    fn overflowing_slack_scaling_leaves_the_state_unchanged() {
-        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(1)]);
-        let original = State::new(vec![], vec![1e308], vec![1e-300], 1e-300).unwrap();
-        let mut state = original.clone();
-        assert!(state.normalize_sphere(&geometry).is_err());
-        assert_eq!(state, original);
+    fn tiny_norm_guard_limits_scaling_before_applying_interior_floors() {
+        let problem = mixed_problem();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let mut state = State::new(
+            vec![1e-100, 0.],
+            vec![1e-100, 0., 1e-100],
+            vec![1e-100, -1e-100, 1e-100],
+            1e-100,
+        )
+        .unwrap();
+        state.normalize_sphere(&geometry).unwrap();
+        // Below the norm guard, the method deliberately does not scale all
+        // the way to the sphere; unrestricted coordinates retain their sign.
+        let expected = 1e-100 * (3e15_f64).sqrt();
+        assert_relative_eq!(state.x()[0], expected, epsilon = 0., max_relative = 1e-14);
+        assert_relative_eq!(state.y()[1], -expected, epsilon = 0., max_relative = 1e-14);
+        assert_eq!(state.tau(), INTERIOR_FLOOR);
+        state.validate(&problem, &geometry).unwrap();
     }
 
-    fn test_problem() -> Problem {
-        Problem::new(
-            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
-            vec![0.5, -1.0],
-            crate::linear_algebra::test_matrix(2, 2, vec![1.0, -2.0, 3.0, 0.25]).unwrap(),
-            vec![1.5, -0.75],
-            vec![Cone::Zero(1), Cone::Nonnegative(1)],
+    #[test]
+    fn failed_normalization_does_not_modify_the_state() {
+        let problem = mixed_problem();
+        let geometry = ConeGeometry::new(&problem).unwrap();
+        let mut state = State::new(
+            vec![1e-8, 0.],
+            vec![f64::MAX, 0., 1.],
+            vec![1e-8, -1e-8, 1e-8],
+            1e-8,
         )
-        .unwrap()
+        .unwrap();
+        let before = state.clone();
+        // The norm itself is safe, but the common scale would overflow s.
+        assert_eq!(
+            state.normalize_sphere(&geometry),
+            Err(StateError::NonFiniteResult)
+        );
+        assert_eq!(state, before);
     }
 }

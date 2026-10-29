@@ -117,11 +117,18 @@ pub struct MpsOptions {
 }
 
 /// Read an MPS/QPS file and convert it into a sparse cpo3 problem.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or parsed, or model conversion fails
+/// with an error described in [`from_parser`].
 pub fn read(path: impl AsRef<Path>) -> Result<Problem, MpsError> {
     read_with(path, MpsOptions::default())
 }
 
 /// [`read`] with explicit reader options.
+///
+/// # Errors
+/// Returns the same errors as [`read`], subject to the supplied reader options.
 pub fn read_with(path: impl AsRef<Path>, options: MpsOptions) -> Result<Problem, MpsError> {
     let path = path.as_ref();
     let contents = fs::read_to_string(path).map_err(|error| MpsError::Read {
@@ -143,11 +150,19 @@ pub fn read_with(path: impl AsRef<Path>, options: MpsOptions) -> Result<Problem,
 /// rejected unless `MpsOptions::first_named_set` keeps the first one.
 /// Objective constants do not affect the optimizer and are therefore
 /// omitted from [`Problem`].
+///
+/// # Errors
+/// Returns an error for invalid model data, unsupported extensions or bound types,
+/// or multiple named sets. See [`MpsError`] for specific conditions.
 pub fn from_parser(parsed: &Parser<'_, f64>) -> Result<Problem, MpsError> {
     from_parser_with(parsed, MpsOptions::default())
 }
 
 /// [`from_parser`] with explicit reader options.
+///
+/// # Errors
+/// Returns the same errors as [`from_parser`], except that `first_named_set`
+/// allows multiple named sets by selecting the first.
 pub fn from_parser_with(
     parsed: &Parser<'_, f64>,
     options: MpsOptions,
@@ -580,7 +595,7 @@ fn collect_quadratic_objective(
                     reverse: pair.reverse,
                 });
             }
-            0.5 * (pair.forward + pair.reverse)
+            pair.forward.midpoint(pair.reverse)
         } * objective_sign;
         rows.push(first);
         columns.push(second);
@@ -697,5 +712,56 @@ fn finite(section: &'static str, name: &str, value: f64) -> Result<(), MpsError>
             section,
             name: name.to_string(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Settings, SolverStatus, solve};
+    use approx::assert_relative_eq;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::linear("", 3., -3.)]
+    #[case::quadratic("QUADOBJ\n    X         X         2.0\n", 1., 0.)]
+    fn mps_ranges_and_quadratic_data_survive_conversion(
+        #[case] quadratic: &str,
+        #[case] expected: f64,
+        #[case] objective: f64,
+    ) {
+        // min x^2-x (QP) or -x (LP), with 1 <= x <= 3.
+        let text = format!(
+            "NAME SMALL\nROWS\n N OBJ\n L LIMIT\nCOLUMNS\n X OBJ -1 LIMIT 1\nRHS\n RHS1 LIMIT 3\nRANGES\n RNG1 LIMIT 2\nBOUNDS\n FR BND X\n{quadratic}ENDATA\n"
+        );
+        let parsed = mps::Parser::<f64>::parse(&text).unwrap();
+        let p = crate::mps::from_parser(&parsed).unwrap();
+        let solution = solve(
+            &p,
+            &Settings {
+                threads: 1,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(solution.status(), SolverStatus::Solved);
+        assert_relative_eq!(solution.x()[0], expected, epsilon = 1e-7);
+        assert_relative_eq!(solution.info().pobj, objective, epsilon = 1e-7);
+        assert_relative_eq!(solution.info().dobj, objective, epsilon = 1e-7);
+    }
+
+    #[test]
+    fn large_symmetric_quadratic_entries_remain_finite() {
+        let text = "NAME LARGE\nROWS\n N OBJ\nCOLUMNS\n X OBJ 0\n Y OBJ 0\nQUADOBJ\n    X         X         1.0e308\n    X         Y         1.0e308\n    Y         X         1.0e308\n    Y         Y         1.0e308\nENDATA\n";
+        let parsed = mps::Parser::<f64>::parse(text).unwrap();
+        let problem = super::from_parser(&parsed).unwrap();
+        assert_relative_eq!(problem.p().unwrap().get(0, 1).unwrap(), 1e308);
+    }
+
+    #[test]
+    fn mps_read_error_identifies_the_path() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/absent.mps");
+        assert!(
+            matches!(crate::mps::read(&path),Err(crate::mps::MpsError::Read {path:p,..}) if p==path)
+        );
     }
 }

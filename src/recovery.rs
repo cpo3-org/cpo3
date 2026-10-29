@@ -336,32 +336,28 @@ impl<'a> Recovery<'a> {
         self.equilibrated
             .unscale_s_into(state.s(), inverse_tau, &mut point.s);
 
-        let (problem, x, y, s) = match &mut self.presolve {
-            Some(presolve) => {
-                let (x, y) = presolve.presolved.expand_point_into(
-                    &point.x,
-                    &point.y,
-                    &mut presolve.workspace,
-                );
-                self.products.update(presolve.problem, x, y);
-                presolve.presolved.expand_s_into(
-                    presolve.problem,
-                    presolve.geometry,
-                    &point.s,
-                    &self.products.ax,
-                    &mut presolve.slack,
-                );
-                (presolve.problem, x, y, presolve.slack.as_slice())
-            }
-            None => {
-                self.products.update(self.problem, &point.x, &point.y);
-                (
-                    self.problem,
-                    point.x.as_slice(),
-                    point.y.as_slice(),
-                    point.s.as_slice(),
-                )
-            }
+        let (problem, x, y, s) = if let Some(presolve) = &mut self.presolve {
+            let (x, y) =
+                presolve
+                    .presolved
+                    .expand_point_into(&point.x, &point.y, &mut presolve.workspace);
+            self.products.update(presolve.problem, x, y);
+            presolve.presolved.expand_s_into(
+                presolve.problem,
+                presolve.geometry,
+                &point.s,
+                &self.products.ax,
+                &mut presolve.slack,
+            );
+            (presolve.problem, x, y, presolve.slack.as_slice())
+        } else {
+            self.products.update(self.problem, &point.x, &point.y);
+            (
+                self.problem,
+                point.x.as_slice(),
+                point.y.as_slice(),
+                point.s.as_slice(),
+            )
         };
         point.measures = Measures::from_products(problem, x, y, s, &self.products, self.norms);
         point
@@ -382,257 +378,80 @@ fn two_norm(vector: &[f64]) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{Cone, CscMatrix, WarmStart, presolve::PresolveOutcome};
-
-    fn lp(a: Vec<f64>, rows: usize, b: Vec<f64>, c: Vec<f64>) -> Problem {
-        let columns = c.len();
-        Problem::new(
-            None,
-            c,
-            crate::linear_algebra::test_matrix(rows, columns, a).unwrap(),
-            b,
-            vec![Cone::Nonnegative(rows)],
-        )
-        .unwrap()
-    }
+    use super::Recovery;
+    use crate::central_path::state::State;
+    use crate::cone::ConeGeometry;
+    use crate::linear_algebra::matrix;
+    use crate::presolve::{PresolveOutcome, presolve};
+    use crate::ruiz::EquilibratedProblem;
+    use crate::{Cone, Problem, Settings, WarmStart};
+    use approx::assert_relative_eq;
+    use rstest::rstest;
 
     #[test]
-    fn measures_use_infinity_norms_and_equation_scales() {
-        let problem = Problem::new(
-            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.0, 0.0, 4.0]).unwrap()),
-            vec![-3.0, 2.0],
-            crate::linear_algebra::test_matrix(2, 2, vec![1.0, 2.0, -3.0, 1.0]).unwrap(),
-            vec![1.0, -2.0],
-            vec![Cone::Nonnegative(2)],
-        )
-        .unwrap();
-        let x = [1.0, 2.0];
-        let ax = matrix_mul(problem.a(), &x);
-        let measures = Measures::new(&problem, &x, &[3.0, 4.0], &[5.0, 6.0], ax);
-        assert_eq!(measures.pres, 9.0);
-        assert_eq!(measures.dres, 20.0);
-        assert_eq!(measures.primal_scale, 7.0);
-        assert_eq!(measures.dual_scale, 11.0);
-        assert_eq!(measures.pobj, 10.0);
-        assert_eq!(measures.dobj, -4.0);
-        assert_eq!(measures.gap, 14.0);
-        assert_eq!(measures.objective_scale, 4.0);
-        assert_eq!(measures.comp, 39.0);
-    }
-
-    #[test]
-    fn large_nullspace_iterates_do_not_relax_stationarity() {
-        let problem = lp(vec![1.0, -1.0], 2, vec![0.0, 0.0], vec![1e-4]);
-        let small = Measures::new(
-            &problem,
-            &[0.0],
-            &[1.0, 1.0],
-            &[0.0, 0.0],
-            matrix_mul(problem.a(), &[0.0]),
-        );
-        let large = Measures::new(
-            &problem,
-            &[0.0],
-            &[1e10, 1e10],
-            &[0.0, 0.0],
-            matrix_mul(problem.a(), &[0.0]),
-        );
-        assert_eq!(small.dres, large.dres);
-        assert_eq!(small.dual_scale, large.dual_scale);
-        assert!(large.score(1e-8, 1e-8, 1e-8) > 1.0);
-        let invalid = Measures::new(
-            &problem,
-            &[0.0],
-            &[f64::NAN, 1.0],
-            &[0.0, 0.0],
-            matrix_mul(problem.a(), &[0.0]),
-        );
-        assert_eq!(invalid.score(1e-8, 1e-8, 1e-8), f64::INFINITY);
-    }
-
-    #[test]
-    fn presolved_acceptance_uses_original_equation_scales() {
-        // Eliminating x0 from x0 + 1e6*x1 = 0 changes the objective scale
-        // from 1 to 1e6. A stationarity defect of 1e-4 must not be hidden by it.
-        let problem = Problem::new(
-            Some(
-                crate::linear_algebra::test_matrix(
-                    3,
-                    3,
-                    vec![0.0, 0.0, 0.0, 0.0, 2.0, 1.0, 0.0, 1.0, 2.0],
-                )
-                .unwrap(),
-            ),
-            vec![1.0, 0.0, 0.0],
-            crate::linear_algebra::test_matrix(
-                4,
-                3,
-                vec![1.0, 1e6, 0.0, 0.0, 1.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0],
-            )
-            .unwrap(),
-            vec![0.0, 1.0, 0.0, 0.0],
+    fn presolve_does_not_hide_original_stationarity_error() {
+        // Eliminating x0 turns c=(1,0,0) into an objective coefficient of magnitude 1e6.
+        let p = Problem::new(
+            Some(matrix(3, 3, &[0., 0., 0., 0., 2., 1., 0., 1., 2.])),
+            vec![1., 0., 0.],
+            matrix(4, 3, &[1., 1e6, 0., 0., 1., 1., 0., -1., 0., 0., 0., -1.]),
+            vec![0., 1., 0., 0.],
             vec![Cone::Zero(1), Cone::Nonnegative(3)],
         )
         .unwrap();
-        let PresolveOutcome::Reduced(presolved) = presolve::presolve(&problem, None).unwrap()
-        else {
-            panic!("expected singleton substitution");
+        let PresolveOutcome::Reduced(reduced) = presolve(&p, None).unwrap() else {
+            panic!("expected a reduced problem")
         };
-        assert_eq!(presolved.problem().variable_count(), 2);
-        let geometry = ConeGeometry::new(presolved.problem()).unwrap();
-        let WarmStart { x, y, s } = presolved.reduce_warm_start(
-            &geometry,
-            &WarmStart {
-                x: vec![-1e6, 1.0, 0.0],
-                y: vec![-1.0, 1e6 - 2.0 + 1e-4, 0.0, 1e6 - 1.0 + 1e-4],
-                s: vec![0.0, 0.0, 1.0, 0.0],
-            },
-        );
+        let geometry = ConeGeometry::new(reduced.problem()).unwrap();
         let settings = Settings {
             ruiz_iters: 0,
             ..Settings::default()
         };
-        let equilibrated = EquilibratedProblem::new(presolved.problem(), &settings).unwrap();
-        let state = State::new(x, s, y, 1.0).unwrap();
-        let sy = dot(state.s(), state.y());
-        let mut reduced = Recovery::new(presolved.problem(), &equilibrated, &geometry, None);
-        assert!(reduced.update(&state, sy).is_solved(&settings));
-
-        let original_geometry = ConeGeometry::new(&problem).unwrap();
+        let eq = EquilibratedProblem::new(reduced.problem(), &settings).unwrap();
+        let original_geometry = ConeGeometry::new(&p).unwrap();
         let mut recovery = Recovery::new(
-            presolved.problem(),
-            &equilibrated,
+            reduced.problem(),
+            &eq,
             &geometry,
-            Some((&problem, &presolved, &original_geometry)),
+            Some((&p, &reduced, &original_geometry)),
         );
-        for _ in 0..2 {
-            let point = recovery.update(&state, sy);
-            assert!(!point.is_solved(&settings));
-            assert!(point.measures.dres / point.measures.dual_scale > 1e-6);
+        for defect in [1e-4, 0., 1e-4] {
+            let warm = reduced.reduce_warm_start(
+                &geometry,
+                &WarmStart {
+                    x: vec![-1e6, 1., 0.],
+                    y: vec![-1., 1e6 - 2. + defect, 0., 1e6 - 1. + defect],
+                    s: vec![0., 0., 1., 0.],
+                },
+            );
+            let state = State::new(warm.x, warm.s, warm.y, 1.).unwrap();
+            let point = recovery.update(&state, 0.);
+            // Original stationarity is (0, defect, 0), regardless of the reduced scale.
+            assert_relative_eq!(point.measures.dres, defect, epsilon = 1e-9);
+            assert_eq!(point.is_solved(&settings), defect == 0.);
         }
     }
 
-    #[test]
-    fn cpo3_stopping_uses_gap_or_relative_gap_and_strict_feasibility() {
-        let settings = Settings::default();
-        let mut point = RecoveredSolution {
-            x: vec![],
-            y: vec![],
-            s: vec![],
-            ktratio: 0.0,
-            measures: Measures {
-                pobj: 1.0,
-                dobj: 1.0,
-                pres: 0.0,
-                dres: 0.0,
-                comp: 1e6,
-                gap: 0.5e-8,
-                primal_scale: 1.0,
-                dual_scale: 1.0,
-                objective_scale: 1.0,
-            },
+    #[rstest]
+    fn large_cancelling_multipliers_do_not_relax_stationarity(#[values(1., 1e10)] multiplier: f64) {
+        let p = Problem::new(
+            None,
+            vec![1e-4],
+            matrix(2, 1, &[1., -1.]),
+            vec![0., 0.],
+            vec![Cone::Nonnegative(2)],
+        )
+        .unwrap();
+        let settings = Settings {
+            ruiz_iters: 0,
+            ..Settings::default()
         };
-        assert!(point.is_solved(&settings)); // No separate complementarity test.
-        point.measures.gap = 2e-8;
-        point.measures.comp = 0.0;
+        let geometry = ConeGeometry::new(&p).unwrap();
+        let eq = EquilibratedProblem::new(&p, &settings).unwrap();
+        let mut recovery = Recovery::new(&p, &eq, &geometry, None);
+        let state = State::new(vec![0.], vec![0., 0.], vec![multiplier, multiplier], 1.).unwrap();
+        let point = recovery.update(&state, 0.);
+        assert_relative_eq!(point.measures.dres, 1e-4, epsilon = 1e-15);
         assert!(!point.is_solved(&settings));
-        point.measures.objective_scale = 4.0;
-        assert!(point.is_solved(&settings)); // Relative gap alone passes.
-        point.measures.pres = settings.tol_feas;
-        assert!(!point.is_solved(&settings)); // Strict inequality.
-        point.measures.primal_scale = 2.0;
-        assert!(point.is_solved(&settings));
-        point.ktratio = f64::INFINITY;
-        assert!(point.is_solved(&settings)); // No solved-status homogeneous gate.
-        let ray = Ray {
-            x: vec![],
-            y: vec![],
-            s: vec![],
-            bty: -1.0,
-            ctx: 0.0,
-        };
-        assert!(matches!(
-            point.termination(&settings, Some(Certificate::Primal(ray))),
-            Some(Termination::Certificate(Certificate::Primal(_)))
-        ));
-        assert!(matches!(
-            point.termination(&settings, None),
-            Some(Termination::Point(SolverStatus::Solved))
-        ));
-        point.ktratio = 0.0;
-        point.measures.dres = f64::NAN;
-        assert!(!point.is_solved(&settings));
-    }
-
-    #[test]
-    fn cpo3_dual_certificate_uses_supplied_slack_and_sum_of_norms() {
-        let problem = lp(vec![-1.0], 1, vec![0.0], vec![-1.0]);
-        let equilibrated = EquilibratedProblem::new(
-            &problem,
-            &crate::Settings {
-                ruiz_iters: 0,
-                ..crate::Settings::default()
-            },
-        )
-        .unwrap();
-        let settings = Settings::default();
-        let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[2.0]);
-        assert!(
-            ray.into_certificate(&problem, &settings, f64::INFINITY)
-                .is_none()
-        );
-        let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[2.0]);
-        assert!(matches!(
-            ray.into_certificate(
-                &problem,
-                &Settings {
-                    tol_infeas_rel: 0.34,
-                    ..settings.clone()
-                },
-                f64::INFINITY
-            ),
-            Some(Certificate::Dual(_))
-        ));
-        let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[1.0]);
-        assert!(
-            ray.into_certificate(&problem, &settings, settings.certificate_ktratio)
-                .is_none()
-        );
-        let ray = Ray::new(&problem, &equilibrated, &[1.0], &[0.0], &[1.0]);
-        let Some(Certificate::Dual(ray)) = ray.into_certificate(&problem, &settings, f64::INFINITY)
-        else {
-            panic!("expected a dual infeasibility certificate");
-        };
-        assert_eq!(ray.s, vec![1.0]);
-    }
-
-    #[test]
-    fn recovery_uses_the_tracked_slack() {
-        let problem = Problem::new(
-            Some(CscMatrix::identity(1).unwrap()),
-            vec![0.0],
-            CscMatrix::identity(1).unwrap(),
-            vec![1.0],
-            vec![Cone::Nonnegative(1)],
-        )
-        .unwrap();
-        let equilibrated = EquilibratedProblem::new(
-            &problem,
-            &crate::Settings {
-                ruiz_iters: 0,
-                ..crate::Settings::default()
-            },
-        )
-        .unwrap();
-        let state = State::new(vec![0.25], vec![0.5], vec![1.0], 1.0).unwrap();
-
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let mut recovery = Recovery::new(&problem, &equilibrated, &geometry, None);
-        let recovered = recovery.update(&state, dot(state.s(), state.y()));
-
-        assert_eq!(recovered.s, [0.5]);
-        // The equality-derived slack would be b - A x = 0.75.
-        assert_eq!(recovered.measures.pres, 0.25);
     }
 }

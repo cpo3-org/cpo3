@@ -103,7 +103,7 @@ impl SolutionInfo {
         }
     }
 
-    fn set_measures(&mut self, measures: Measures) {
+    fn set_measures(&mut self, measures: &Measures) {
         self.pobj = measures.pobj;
         self.dobj = measures.dobj;
         self.pres = measures.pres;
@@ -126,7 +126,7 @@ impl Solution {
     fn new(
         status: SolverStatus,
         (x, y, s): (Vec<f64>, Vec<f64>, Vec<f64>),
-        measures: Measures,
+        measures: &Measures,
         mut info: SolutionInfo,
     ) -> Self {
         info.set_measures(measures);
@@ -187,7 +187,7 @@ pub(crate) fn expand_solution(
             let ax = matrix_mul(problem.a(), &x);
             let s = presolved.expand_s_from_ax(problem, geometry, &reduced.s, &ax);
             let measures = Measures::new(problem, &x, &y, &s, ax);
-            info.set_measures(measures);
+            info.set_measures(&measures);
             (x, y, s)
         }
     };
@@ -213,7 +213,7 @@ pub(crate) fn direct_solution(
     } else {
         Measures::nan()
     };
-    Solution::new(status, (x, y, s), measures, info)
+    Solution::new(status, (x, y, s), &measures, info)
 }
 
 pub(crate) fn build_solution(
@@ -224,7 +224,7 @@ pub(crate) fn build_solution(
     Solution::new(
         status,
         (recovered.x, recovered.y, recovered.s),
-        recovered.measures,
+        &recovered.measures,
         info,
     )
 }
@@ -247,5 +247,5 @@ pub(crate) fn build_certificate(certificate: Certificate, info: SolutionInfo) ->
             ),
         ),
     };
-    Solution::new(status, point, Measures::nan(), info)
+    Solution::new(status, point, &Measures::nan(), info)
 }

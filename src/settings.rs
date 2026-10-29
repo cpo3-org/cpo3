@@ -115,6 +115,9 @@ impl Default for Settings {
 
 impl Settings {
     /// Check numerical ranges before solving. Defaults satisfy these invariants.
+    ///
+    /// # Errors
+    /// Returns [`SolveError::InvalidSetting`] if a setting is outside its valid range.
     pub fn validate(&self) -> Result<(), SolveError> {
         let beta = self.initial_mu;
         if !beta.is_finite() || beta <= 0.0 || beta > 1.0 {

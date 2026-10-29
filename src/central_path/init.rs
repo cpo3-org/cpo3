@@ -386,268 +386,299 @@ pub(crate) fn initial_state(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{Cone, LinearSolver, Problem};
+    use crate::central_path::{init, kkt::KktCache};
+    use crate::cone::ConeGeometry;
+    use crate::linear_algebra::matrix;
+    use crate::linear_solvers::KktSettings;
+    use crate::ruiz::EquilibratedProblem;
+    use crate::{Cone, LinearSolver, Problem, Settings, WarmStart};
+    use approx::assert_relative_eq;
+    use rstest::rstest;
 
-    fn assert_close(actual: f64, expected: f64, tolerance: f64) {
-        assert!(
-            (actual - expected).abs() <= tolerance * (1.0 + expected.abs()),
-            "expected {expected}, got {actual}"
-        );
-    }
-
-    /// `||(x, y, tau)||`, the embedding sphere radius of a state.
-    fn sphere_radius(state: &State) -> f64 {
-        stable_norm(
-            state
-                .x()
-                .iter()
-                .chain(state.y())
-                .copied()
-                .chain(std::iter::once(state.tau())),
-        )
-    }
-
-    fn cvxopt_settings() -> Settings {
-        Settings {
-            ruiz_iters: 0,
-            cvxopt_init: true,
-            ..Settings::default()
-        }
-    }
-
-    /// The CVXOPT start of an unscaled problem and its report.
-    fn cvxopt_start(problem: &Problem) -> (State, InitReport) {
-        let settings = cvxopt_settings();
-        let equilibrated = EquilibratedProblem::new(problem, &settings).unwrap();
-        let geometry = ConeGeometry::new(problem).unwrap();
-        initial_state(
-            &geometry,
-            &equilibrated,
-            None,
-            &settings,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut KktCache::new(),
+    fn problem() -> Problem {
+        Problem::new(
+            Some(matrix(2, 2, &[2., 1., 1., 3.])),
+            vec![-3., -7.],
+            matrix(3, 2, &[1., 0., 0., -2., 1., 2.]),
+            vec![1., -4., 5.],
+            vec![Cone::Nonnegative(2), Cone::Zero(1)],
         )
         .unwrap()
     }
 
-    #[test]
-    fn cold_start_is_centered_on_the_sphere_after_data_scaling() {
-        let problem = Problem::new(
+    #[rstest]
+    #[case::default(None)]
+    #[case::small(Some(1e-12))]
+    #[case::one_e_minus_four(Some(1e-4))]
+    #[case::intermediate(Some(0.25))]
+    #[case::endpoint(Some(1.))]
+    fn canonical_initialization_uses_requested_complementarity(#[case] beta: Option<f64>) {
+        let p = problem();
+        let mut settings = Settings {
+            threads: 1,
+            ..Settings::default()
+        };
+        if let Some(beta) = beta {
+            settings.initial_mu = beta;
+        }
+        let beta = settings.initial_mu;
+        let eq = EquilibratedProblem::new(&p, &settings).unwrap();
+        let geometry = ConeGeometry::new(eq.problem()).unwrap();
+        let mut cache = KktCache::new();
+        let (state, report) = init::initial_state(
+            &geometry,
+            &eq,
             None,
-            vec![1000.0],
-            crate::linear_algebra::test_matrix(2, 1, vec![100.0, 0.001]).unwrap(),
-            vec![1e4, 0.02],
-            vec![Cone::Zero(1), Cone::Nonnegative(1)],
+            &settings,
+            &KktSettings::from(&settings),
+            &mut cache,
         )
         .unwrap();
-        let scaled = EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
-        let geometry = ConeGeometry::new(scaled.problem()).unwrap();
-        for beta in [Settings::default().initial_mu, 0.25, 1.0] {
-            let settings = Settings {
-                initial_mu: beta,
-                ..Settings::default()
-            };
-            let (state, report) = initial_state(
-                &geometry,
-                &scaled,
-                None,
-                &settings,
-                &KktSettings::new(LinearSolver::Faer),
-                &mut KktCache::new(),
-            )
-            .unwrap();
-            assert_eq!(state.x(), [0.0]);
-            assert_eq!(state.y(), [0.0, beta.sqrt()]);
-            assert_eq!(state.s(), [0.0, beta.sqrt()]);
-            assert_close(state.duality_measure(&geometry), beta, 1e-12);
-            assert_close(sphere_radius(&state), 2.0_f64.sqrt(), 1e-12);
-            state.validate(&problem, &geometry).unwrap();
-            assert_eq!(report.start, InitialStart::Canonical);
-            assert_ne!(scaled.unscale_s(state.s()), state.s());
-        }
+        assert_eq!(report.start, init::InitialStart::Canonical);
+        assert!(!report.warm_start_supplied);
+        assert_eq!(report.warm_start_score, None);
+        assert_eq!(state.x(), &[0., 0.]);
+        assert_relative_eq!(
+            state.s(),
+            &[beta.sqrt(), beta.sqrt(), 0.][..],
+            epsilon = 0.,
+            max_relative = 1e-14
+        );
+        assert_eq!(state.y(), state.s());
+        assert_relative_eq!(state.tau(), (3. - 2. * beta).sqrt(), epsilon = 1e-14);
+        assert_relative_eq!(
+            state.duality_measure(&geometry),
+            beta,
+            epsilon = 0.,
+            max_relative = 1e-14
+        );
+        assert_relative_eq!(
+            state.y().iter().map(|v| v * v).sum::<f64>() + state.tau().powi(2),
+            3.,
+            epsilon = 1e-14
+        );
+        state.validate(eq.problem(), &geometry).unwrap();
+        assert_eq!(cache.stats().factorizations, 0);
     }
 
-    #[test]
-    fn cvxopt_linear_program_splits_the_primal_and_dual_solves() {
-        // With A = I the primal solve gives x = b and the dual solve gives
-        // y = -c up to the 1e-8 regularization; a coupled (-c, b) solve would
-        // give x = b - c and a shifted slack of (2, 1) instead of (1, 1).
-        let problem = Problem::new(
+    #[rstest]
+    #[case::smallest_floor(1e-12)]
+    #[case::middle_floor(1e-6)]
+    #[case::largest_floor(1e-3)]
+    fn automatic_warm_screening_selects_the_best_interior_floor(#[case] floor: f64) {
+        // min -f*x, x+s=f. At x=0, the candidate y=s=f satisfies
+        // primal and dual feasibility; the other floors disturb both.
+        let p = Problem::new(
             None,
-            vec![-1.0, -2.0],
-            crate::linear_algebra::test_matrix(2, 2, vec![1.0, 0.0, 0.0, 1.0]).unwrap(),
-            vec![3.0, 4.0],
-            vec![Cone::Nonnegative(2)],
-        )
-        .unwrap();
-        let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.start, InitialStart::Cvxopt);
-        // The unscaled point (3, 4 | 1, 2 | 1) has norm sqrt(31); the sphere
-        // of the two-dimensional orthant has radius sqrt(3).
-        let tau = state.tau();
-        assert_close(tau, (3.0_f64 / 31.0).sqrt(), 1e-6);
-        assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
-        for (actual, expected) in state.x().iter().zip([3.0, 4.0]) {
-            assert_close(actual / tau, expected, 1e-6);
-        }
-        for (actual, expected) in state.s().iter().zip([1.0, 1.0]) {
-            assert_close(actual / tau, expected, 1e-6);
-        }
-        for (actual, expected) in state.y().iter().zip([1.0, 2.0]) {
-            assert_close(actual / tau, expected, 1e-6);
-        }
-    }
-
-    #[test]
-    fn cvxopt_quadratic_start_solves_the_initial_kkt_system_and_shifts_cone_rows() {
-        let problem = Problem::new(
-            Some(crate::linear_algebra::test_matrix(2, 2, vec![2.0, 0.5, 0.5, 1.0]).unwrap()),
-            vec![0.5, -1.0],
-            crate::linear_algebra::test_matrix(3, 2, vec![1.0, -2.0, 3.0, 0.25, -1.0, 1.0])
-                .unwrap(),
-            vec![1.5, -0.75, 2.0],
-            vec![Cone::Zero(1), Cone::Nonnegative(2)],
-        )
-        .unwrap();
-        let (state, report) = cvxopt_start(&problem);
-        assert_eq!(report.start, InitialStart::Cvxopt);
-        let tau = state.tau();
-        assert!(tau > 0.0 && tau < 1.0);
-        assert_close(sphere_radius(&state), 3.0_f64.sqrt(), 1e-12);
-        let x = state.x().iter().map(|v| v / tau).collect::<Vec<_>>();
-        let s = state.s().iter().map(|v| v / tau).collect::<Vec<_>>();
-        let y = state.y().iter().map(|v| v / tau).collect::<Vec<_>>();
-        let ax = matrix_mul(problem.a(), &x);
-        // The equality row holds exactly and its slack is exactly zero.
-        assert_close(ax[0], problem.b()[0], 1e-6);
-        assert_eq!(state.s()[0], 0.0);
-        // Cone rows: the raw least-squares point has y = A x - b = -s, and
-        // both vectors are shifted by one constant each to a minimum of one.
-        let raw_s = [problem.b()[1] - ax[1], problem.b()[2] - ax[2]];
-        let s_shift = [s[1] - raw_s[0], s[2] - raw_s[1]];
-        let y_shift = [y[1] + raw_s[0], y[2] + raw_s[1]];
-        assert_close(s_shift[0], s_shift[1], 1e-6);
-        assert_close(y_shift[0], y_shift[1], 1e-6);
-        assert!(s_shift[0] >= 0.0 && y_shift[0] >= 0.0);
-        assert_close(s[1].min(s[2]), 1.0, 1e-6);
-        assert_close(y[1].min(y[2]), 1.0, 1e-6);
-        // The unshifted duals satisfy the first block, P x + A' y + c = 0.
-        let raw_y = [y[0], -raw_s[0], -raw_s[1]];
-        let px = problem.p_mul(&x);
-        let aty = matrix_transpose_mul(problem.a(), &raw_y);
-        for i in 0..2 {
-            assert_close(px[i] + aty[i] + problem.c()[i], 0.0, 1e-6);
-        }
-    }
-
-    #[test]
-    fn interior_shift_moves_only_cone_rows_and_only_upward() {
-        let geometry = crate::cone::test_geometry(vec![
-            Cone::Zero(1),
-            Cone::Nonnegative(1),
-            Cone::Zero(1),
-            Cone::Nonnegative(2),
-        ]);
-        let mut values = vec![-3.0, 0.5, -7.0, 2.0, -1.0];
-        shift_into_interior(&mut values, &geometry);
-        assert_eq!(values, [-3.0, 2.5, -7.0, 4.0, 1.0]);
-        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(2), Cone::Zero(1)]);
-        let mut values = vec![7.0, 1.5, 4.0];
-        shift_into_interior(&mut values, &geometry);
-        assert_eq!(values, [7.0, 1.5, 4.0]);
-        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1)]);
-        let mut values = vec![-2.0];
-        shift_into_interior(&mut values, &geometry);
-        assert_eq!(values, [-2.0]);
-    }
-
-    #[test]
-    fn local_score_matches_the_guarded_metric_with_an_equality_row() {
-        let problem = Problem::new(
-            Some(crate::linear_algebra::test_matrix(1, 1, vec![2.0]).unwrap()),
-            vec![3.0],
-            crate::linear_algebra::test_matrix(2, 1, vec![1.0, 2.0]).unwrap(),
-            vec![4.0, 5.0],
-            vec![Cone::Zero(1), Cone::Nonnegative(1)],
-        )
-        .unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let state = State::new(vec![1.0], vec![0.0, 3.0], vec![-1.0, 2.0], 2.0).unwrap();
-        // Here mu=6, residuals are (17, [1,17], -1), and the metric
-        // weights are (6, [6,7.5], 7.5). The squared local norm is 87,
-        // so the squared screening score is 87 / mu = 14.5.
-        let score = local_score(&problem, &geometry, &state, &[0.5, 1.0], &[1.0]);
-        assert!((score * score - 14.5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn screening_can_select_each_of_the_three_floors() {
-        for (rhs, expected_floor) in [(1e-12, 1e-12), (1e-6, 1e-6), (1e-3, 1e-3)] {
-            let problem = Problem::new(
-                None,
-                vec![0.0],
-                crate::linear_algebra::test_matrix(1, 1, vec![0.0]).unwrap(),
-                vec![rhs],
-                vec![Cone::Nonnegative(1)],
-            )
-            .unwrap();
-            let equilibrated = EquilibratedProblem::new(
-                &problem,
-                &crate::Settings {
-                    ruiz_iters: 0,
-                    ..crate::Settings::default()
-                },
-            )
-            .unwrap();
-            let geometry = ConeGeometry::new(&problem).unwrap();
-            let warm = WarmStart {
-                x: vec![0.0],
-                y: vec![0.0],
-                s: vec![0.0],
-            };
-            let (candidate, score) = warm_state(&geometry, &equilibrated, &warm).unwrap();
-            assert!(score.is_finite());
-            assert!((candidate.y()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
-            assert!((candidate.s()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
-        }
-    }
-
-    #[test]
-    fn warm_start_uses_interleaved_cone_blocks() {
-        let problem = Problem::new(
-            None,
-            vec![0.0],
-            crate::linear_algebra::test_matrix(5, 1, vec![0.0; 5]).unwrap(),
-            vec![1.0, 0.0, 1.0, 1.0, 0.0],
-            vec![
-                Cone::Nonnegative(1),
-                Cone::Zero(1),
-                Cone::Nonnegative(2),
-                Cone::Zero(1),
-            ],
+            vec![-floor],
+            matrix(1, 1, &[1.]),
+            vec![floor],
+            vec![Cone::Nonnegative(1)],
         )
         .unwrap();
         let settings = Settings {
+            threads: 1,
             ruiz_iters: 0,
+            initial_mu: 0.25,
+            force_warm_start: false,
             ..Settings::default()
         };
-        let equilibrated = EquilibratedProblem::new(&problem, &settings).unwrap();
-        let geometry = ConeGeometry::new(&problem).unwrap();
+        let eq = EquilibratedProblem::new(&p, &settings).unwrap();
+        let geometry = ConeGeometry::new(eq.problem()).unwrap();
         let warm = WarmStart {
-            x: vec![0.0],
-            y: vec![-3.0, -2.0, 0.0, 4.0, 7.0],
-            s: vec![-1.0, 9.0, 2.0, 0.0, 8.0],
+            x: vec![0.],
+            y: vec![0.],
+            s: vec![0.],
         };
-        let (state, score) = warm_state(&geometry, &equilibrated, &warm).unwrap();
-        assert!(score.is_finite());
-        state.validate(&problem, &geometry).unwrap();
-        assert_eq!(state.s()[1], 0.0);
-        assert_eq!(state.s()[4], 0.0);
-        for (i, expected) in [(1, -2.0), (3, 4.0), (4, 7.0)] {
-            assert_close(state.y()[i] / state.tau(), expected, 1e-12);
+        let before = warm.clone();
+        let mut cache = KktCache::new();
+        let (state, report) = init::initial_state(
+            &geometry,
+            &eq,
+            Some(&warm),
+            &settings,
+            &KktSettings::from(&settings),
+            &mut cache,
+        )
+        .unwrap();
+        assert_eq!(report.start, init::InitialStart::Warm);
+        assert!(report.warm_start_supplied);
+        let score = report.warm_start_score.unwrap();
+        assert!(score.is_finite() && score <= init::WARM_THRESHOLD);
+        // Ratios recover the winning floor independently of normalization.
+        assert_relative_eq!(
+            state.y()[0] / state.tau(),
+            floor,
+            epsilon = 0.,
+            max_relative = 1e-14
+        );
+        assert_relative_eq!(
+            state.s()[0] / state.tau(),
+            floor,
+            epsilon = 0.,
+            max_relative = 1e-14
+        );
+        assert_relative_eq!(
+            state.tau(),
+            (2. / (1. + floor * floor)).sqrt(),
+            epsilon = 1e-14
+        );
+        assert_eq!(state.x(), &[0.]);
+        state.validate(&p, &geometry).unwrap();
+        assert_eq!(warm, before);
+        assert_eq!(cache.stats().factorizations, 0);
+    }
+
+    #[rstest]
+    fn poor_warm_start_is_rejected_unless_forced(#[values(false, true)] force: bool) {
+        let p = Problem::new(
+            None,
+            vec![-1.],
+            matrix(1, 1, &[1.]),
+            vec![1.],
+            vec![Cone::Nonnegative(1)],
+        )
+        .unwrap();
+        let settings = Settings {
+            threads: 1,
+            ruiz_iters: 0,
+            initial_mu: 0.25,
+            force_warm_start: force,
+            ..Settings::default()
+        };
+        let eq = EquilibratedProblem::new(&p, &settings).unwrap();
+        let geometry = ConeGeometry::new(eq.problem()).unwrap();
+        let warm = WarmStart {
+            x: vec![1e6],
+            y: vec![1.],
+            s: vec![1.],
+        };
+        let (state, report) = init::initial_state(
+            &geometry,
+            &eq,
+            Some(&warm),
+            &settings,
+            &KktSettings::from(&settings),
+            &mut KktCache::new(),
+        )
+        .unwrap();
+        assert!(report.warm_start_supplied);
+        let score = report.warm_start_score.unwrap();
+        assert!(score.is_finite() && score > init::WARM_THRESHOLD);
+        if force {
+            assert_eq!(report.start, init::InitialStart::Warm);
+            assert_relative_eq!(state.x()[0] / state.tau(), 1e6, max_relative = 1e-14);
+        } else {
+            assert_eq!(report.start, init::InitialStart::Canonical);
+            assert_eq!(state.x(), &[0.]);
+            assert_eq!(state.y(), &[0.5]);
+            assert_eq!(state.s(), &[0.5]);
+            assert_relative_eq!(state.tau(), 1.75_f64.sqrt(), epsilon = 1e-14);
         }
-        assert_close(state.s()[2] / state.tau(), 2.0, 1e-12);
+        state.validate(&p, &geometry).unwrap();
+    }
+
+    #[rstest]
+    fn failed_cvxopt_initialization_falls_back_to_configured_canonical_start(
+        #[values(LinearSolver::Faer, LinearSolver::Feral)] backend: LinearSolver,
+        #[values(1e-4, 0.25)] beta: f64,
+    ) {
+        // Finite LP data, but the uncoupled dual solve requires dividing
+        // 1e308 by a diagonal no larger than roughly 1e-4. Every allowed
+        // CVXOPT shift therefore overflows, on either backend.
+        let p = Problem::new(
+            None,
+            vec![1e308, 1e308],
+            matrix(1, 2, &[0., 0.]),
+            vec![1.],
+            vec![Cone::Nonnegative(1)],
+        )
+        .unwrap();
+        let settings = Settings {
+            threads: 1,
+            ruiz_iters: 0,
+            cvxopt_init: true,
+            initial_mu: beta,
+            linear_solver: backend,
+            ..Settings::default()
+        };
+        let eq = EquilibratedProblem::new(&p, &settings).unwrap();
+        let geometry = ConeGeometry::new(eq.problem()).unwrap();
+        let kkt = KktSettings::from(&settings);
+        assert!(init::cvxopt_state(&p, &geometry, &kkt, &mut KktCache::new()).is_err());
+        let mut cache = KktCache::new();
+        let (state, report) =
+            init::initial_state(&geometry, &eq, None, &settings, &kkt, &mut cache).unwrap();
+        assert!(
+            cache.stats().factorizations > 1,
+            "CVXOPT must actually try and fail before fallback"
+        );
+        assert_eq!(report.start, init::InitialStart::Canonical);
+        assert!(!report.warm_start_supplied);
+        assert_eq!(report.warm_start_score, None);
+        assert_eq!(state.x(), &[0., 0.]);
+        assert_relative_eq!(
+            state.s()[0],
+            beta.sqrt(),
+            epsilon = 0.,
+            max_relative = 1e-14
+        );
+        assert_eq!(state.y(), state.s());
+        assert_relative_eq!(state.tau(), (2. - beta).sqrt(), epsilon = 1e-14);
+        assert_relative_eq!(
+            state.duality_measure(&geometry),
+            beta,
+            epsilon = 0.,
+            max_relative = 1e-14
+        );
+        state.validate(&p, &geometry).unwrap();
+    }
+
+    #[rstest]
+    #[case::canonical(false)]
+    #[case::cvxopt(true)]
+    fn initialization_preserves_sphere_and_cone_interior(#[case] cvxopt_init: bool) {
+        let p = problem();
+
+        let settings = Settings {
+            threads: 1,
+            cvxopt_init,
+            ..Settings::default()
+        };
+        let eq = EquilibratedProblem::new(&p, &settings).unwrap();
+        let geometry = ConeGeometry::new(eq.problem()).unwrap();
+        let (state, report) = init::initial_state(
+            &geometry,
+            &eq,
+            None,
+            &settings,
+            &KktSettings::from(&settings),
+            &mut KktCache::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            report.start,
+            if cvxopt_init {
+                init::InitialStart::Cvxopt
+            } else {
+                init::InitialStart::Canonical
+            }
+        );
+        let squared: f64 = state
+            .x()
+            .iter()
+            .chain(state.y())
+            .map(|v| v * v)
+            .sum::<f64>()
+            + state.tau().powi(2);
+        assert_relative_eq!(squared, 3., epsilon = 1e-10, max_relative = 1e-10);
+        assert!(state.tau() > 0.);
+        assert_eq!(state.s()[2], 0.);
+        assert!(
+            state.s()[..2]
+                .iter()
+                .chain(&state.y()[..2])
+                .all(|v| *v > 0.)
+        );
     }
 }

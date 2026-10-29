@@ -154,7 +154,7 @@ or return `SolveError` in Rust.
 From the solver checkout:
 
 ```sh
-cargo test --features mps
+cargo test --features mps --locked
 uv run pytest
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings

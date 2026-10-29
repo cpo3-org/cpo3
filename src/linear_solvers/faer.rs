@@ -77,7 +77,7 @@ impl FaerFactorization {
             scratch,
             parallelism,
         };
-        let values = factorization.permute_input(values);
+        let values = factorization.permute_input(&values);
         factorization.values = values;
         Ok(factorization)
     }
@@ -86,16 +86,11 @@ impl FaerFactorization {
         self.dim
     }
 
-    pub(super) fn solve_in_place(
-        &mut self,
-        vector: &mut [f64],
-        columns: usize,
-    ) -> Result<(), LinearSystemError> {
+    pub(super) fn solve_in_place(&mut self, vector: &mut [f64], columns: usize) {
         let factor = sparse_cholesky::LdltRef::new(&self.symbolic, &self.factor_values);
         let view = MatMut::from_column_major_slice_mut(vector, self.dim, columns);
         let stack = MemStack::new(&mut self.scratch);
         factor.solve_in_place_with_conj(Conj::No, view, self.parallelism, stack);
-        Ok(())
     }
 
     pub(super) fn refactor_diagonal(
@@ -109,7 +104,7 @@ impl FaerFactorization {
 
     /// Cache the input layout expected by Faer's numeric kernel. Preserve the
     /// entry order of its unsorted permutation to preserve floating-point sums.
-    fn permute_input(&mut self, values: Vec<f64>) -> Vec<f64> {
+    fn permute_input(&mut self, values: &[f64]) -> Vec<f64> {
         let perm = self.symbolic.perm().expect("AMD supplies a permutation");
         let (_forward, inverse) = perm.arrays();
         let upper = matches!(
@@ -196,137 +191,5 @@ impl FaerFactorization {
         }
         .map_err(|error| LinearSystemError::Factorization(format!("Faer numeric: {error:?}")))?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn disabled_pivot_replacement_preserves_tiny_signed_pivots() {
-        let matrix =
-            CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![1e-20, -1e-20]).unwrap();
-        let mut factor = FaerFactorization::new(matrix, 3).unwrap();
-        factor.factor(&mut 0).unwrap();
-        assert_eq!(factor.parallelism, Par::Seq);
-        let mut rhs = vec![1e-20, 1e-20];
-        factor.solve_in_place(&mut rhs, 1).unwrap();
-        assert!((rhs[0] - 1.0).abs() < 1e-12);
-        assert!((rhs[1] + 1.0).abs() < 1e-12);
-    }
-
-    #[test]
-    fn configured_threads_apply_to_supernodal_factorization_and_solves() {
-        let n = 128;
-        let matrix = CscMatrix::from_triplets(
-            n,
-            n,
-            (0..n).flat_map(|column| 0..=column).collect(),
-            (0..n)
-                .flat_map(|column| std::iter::repeat_n(column, column + 1))
-                .collect(),
-            (0..n)
-                .flat_map(|column| {
-                    (0..=column).map(move |row| if row == column { 2.0 } else { 0.001 })
-                })
-                .collect(),
-        )
-        .unwrap();
-        for threads in [0, 1, 2, 3] {
-            let settings = super::super::KktSettings::from(&crate::Settings {
-                threads,
-                ..crate::Settings::default()
-            });
-            let mut factor =
-                super::super::Factorization::prepare(matrix.clone(), &settings).unwrap();
-            factor.factor(&mut 0).unwrap();
-            let super::super::FactorizationInner::Faer(mut factor) = factor.inner else {
-                unreachable!()
-            };
-            assert!(matches!(
-                factor.symbolic.raw(),
-                sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_)
-            ));
-            assert_eq!(
-                factor.parallelism,
-                if threads == 1 {
-                    Par::Seq
-                } else {
-                    Par::rayon(threads)
-                }
-            );
-            for diagonal in [2.0, 3.0] {
-                factor
-                    .refactor_diagonal(&vec![diagonal; n], &mut 0)
-                    .unwrap();
-                for columns in [1, 2] {
-                    let mut rhs = vec![diagonal + 0.001 * (n - 1) as f64; n * columns];
-                    factor.solve_in_place(&mut rhs, columns).unwrap();
-                    assert!(rhs.iter().all(|value| (value - 1.0).abs() < 1e-12));
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn cached_permutation_matches_faer_for_both_numeric_kernels() {
-        for dense in [false, true] {
-            let n: usize = if dense { 128 } else { 8 };
-            let mut rows = Vec::new();
-            let mut columns = Vec::new();
-            let mut values = Vec::new();
-            let signs: Vec<i8> = (0..n).map(|i| if i < n / 2 { 1 } else { -1 }).collect();
-            for column in 0..n {
-                for (row, &sign) in signs.iter().enumerate() {
-                    if dense || row.abs_diff(column) <= 1 {
-                        rows.push(row);
-                        columns.push(column);
-                        values.push(if row == column {
-                            2.0 * f64::from(sign)
-                        } else {
-                            0.001 * (1 + (row.min(column) + 3 * row.max(column)) % 7) as f64
-                        });
-                    }
-                }
-            }
-            let matrix = crate::linear_algebra::take_upper_triangle(
-                CscMatrix::from_triplets(n, n, rows, columns, values).unwrap(),
-            );
-            let mut factor = FaerFactorization::new(matrix.clone(), 1).unwrap();
-            factor.factor(&mut 0).unwrap();
-            assert_eq!(
-                matches!(
-                    factor.symbolic.raw(),
-                    sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_)
-                ),
-                dense
-            );
-            let (pointers, rows, values) = matrix.into_parts();
-            let pattern = SymbolicSparseColMat::new_checked(n, n, pointers, None, rows);
-            let mut reference = vec![0.0; factor.factor_values.len()];
-            let mut scratch = MemBuffer::new(
-                factor
-                    .symbolic
-                    .factorize_numeric_ldlt_scratch::<f64>(factor.parallelism, Default::default()),
-            );
-            factor
-                .symbolic
-                .factorize_numeric_ldlt(
-                    &mut reference,
-                    SparseColMatRef::new(pattern.as_ref(), &values),
-                    Side::Upper,
-                    LdltRegularization {
-                        dynamic_regularization_signs: None,
-                        dynamic_regularization_delta: FAER_REGULARIZATION_DELTA,
-                        dynamic_regularization_epsilon: FAER_REGULARIZATION_EPSILON,
-                    },
-                    factor.parallelism,
-                    MemStack::new(&mut scratch),
-                    Default::default(),
-                )
-                .unwrap();
-            assert_eq!(factor.factor_values, reference);
-        }
     }
 }

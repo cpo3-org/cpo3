@@ -37,12 +37,12 @@ features = ["python", "mps"]
 module-name = "cpo3._core"
 python-source = "python"
 
-[tool.pytest.ini_options]
-pythonpath = ["."]
-testpaths = ["tests"]
-
 [tool.ruff]
 target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["full: benchmark instances outside the default short selection"]
 
 [tool.uv]
 cache-keys = [

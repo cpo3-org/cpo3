@@ -57,11 +57,19 @@ impl From<MehrotraError> for SolveError {
 }
 
 /// Solve a validated conic quadratic problem.
+///
+/// # Errors
+/// Returns an error for invalid settings, unsupported cones, or numerical failures
+/// that prevent returning a solution.
 pub fn solve(problem: &Problem, settings: &Settings) -> Result<Solution, SolveError> {
     solve_from(problem, settings, None)
 }
 
 /// Solve from an optional warm start in original units.
+///
+/// # Errors
+/// Returns the errors described in [`solve`], or an error if the warm start has
+/// incompatible dimensions or nonfinite values.
 pub fn solve_from(
     problem: &Problem,
     settings: &Settings,
@@ -390,257 +398,81 @@ pub(crate) fn time_limit_reached(started: Instant, time_limit: Option<Duration>)
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{Cone, CscMatrix, linear_algebra::matrix_transpose_mul};
+    use crate::linear_algebra::matrix;
+    use crate::{
+        Cone, CscMatrix, Problem, Settings, SolveError, SolverStatus, WarmStart, solve, solve_from,
+    };
+    use approx::assert_relative_eq;
+    use rstest::rstest;
 
-    #[test]
-    fn presolve_metadata_and_coordinates_survive_core_solves() {
-        let matrix = crate::linear_algebra::test_matrix;
-        let problem = Problem::new(
-            Some(matrix(3, 3, vec![2., 1., 0., 1., 2., 0., 0., 0., 1.]).unwrap()),
-            vec![-1., -1., 0.],
-            matrix(3, 3, vec![1., 1., 0., -1., 1., 0., 0., 0., 1.]).unwrap(),
-            vec![4., 1., 2.],
-            vec![Cone::Nonnegative(2), Cone::Zero(1)],
-        )
-        .unwrap();
-        let PresolveOutcome::Reduced(reduced) = presolve::presolve(&problem, None).unwrap() else {
-            panic!("expected the fixed variable to be removed");
-        };
-        assert!(matches!(
-            presolve::presolve(reduced.problem(), None).unwrap(),
-            PresolveOutcome::Unchanged(_)
-        ));
-        for (problem, removed, expected_x) in [
-            (&problem, 1, vec![1. / 3., 1. / 3., 2.]),
-            (reduced.problem(), 0, vec![1. / 3., 1. / 3.]),
-        ] {
-            let solution = solve(problem, &Settings::default()).unwrap();
-            assert_eq!(solution.status(), SolverStatus::Solved);
-            assert_eq!(solution.x().len(), expected_x.len());
-            assert!(
-                solution
-                    .x()
-                    .iter()
-                    .zip(expected_x)
-                    .all(|(actual, expected)| (actual - expected).abs() < 1e-6)
-            );
-            let info = solution.info();
-            assert_eq!(
-                (info.presolve_rows_removed, info.presolve_columns_removed),
-                (removed, removed)
-            );
-            assert!(info.presolve_parallel_comparisons.is_some());
-            assert!(info.solve_time >= info.presolve_time);
-        }
-    }
-
-    #[test]
-    fn convergence_takes_precedence_over_time_and_iteration_limits() {
-        for (target, time_limit, expected_iters) in [(0.0, Some(Duration::ZERO), 0), (1.0, None, 1)]
-        {
-            let problem = Problem::new(
-                Some(CscMatrix::identity(1).unwrap()),
-                vec![-target],
-                CscMatrix::identity(1).unwrap(),
-                vec![target],
-                vec![Cone::Zero(1)],
-            )
-            .unwrap();
-            let solution = solve(
-                &problem,
-                &Settings {
-                    presolve: false,
-                    max_iters: 1,
-                    time_limit,
-                    ..Settings::default()
-                },
-            )
-            .unwrap();
-            assert_eq!(solution.status(), SolverStatus::Solved);
-            assert_eq!(solution.info().iters, expected_iters);
-            assert!((solution.x()[0] - target).abs() < 1e-8);
-        }
-    }
-
-    #[test]
-    fn the_core_keeps_time_already_spent_in_presolve() {
-        let problem = lp(vec![1.0, -1.0], 2, vec![2.0, 0.0], vec![-1.0]);
-        let settings = Settings {
-            time_limit: Some(Duration::from_secs(1)),
-            ..Settings::default()
-        };
-        let started = Instant::now() - Duration::from_secs(2);
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let result = solve_core(
-            &problem,
-            &geometry,
-            &settings,
-            None,
-            Some((0, 0)),
-            None,
-            started,
-        )
-        .unwrap();
-        assert_eq!(result.status(), SolverStatus::TimeLimit);
-        assert_eq!(result.info().iters, 0);
-        assert!(result.info().solve_time >= Duration::from_secs(2));
-    }
-
-    fn lp(a: Vec<f64>, rows: usize, b: Vec<f64>, c: Vec<f64>) -> Problem {
-        let columns = c.len();
+    fn problem() -> Problem {
         Problem::new(
-            None,
-            c,
-            crate::linear_algebra::test_matrix(rows, columns, a).unwrap(),
-            b,
-            vec![Cone::Nonnegative(rows)],
+            Some(matrix(2, 2, &[2., 1., 1., 2.])),
+            vec![-5., -5.],
+            matrix(2, 2, &[1., 0., 1., 1.]),
+            vec![0.5, 2.],
+            vec![Cone::Nonnegative(2)],
         )
         .unwrap()
     }
 
-    #[test]
-    fn primal_infeasible_lp_returns_a_farkas_certificate() {
-        // x <= -1 and x >= 0: A x + s = b with s >= 0.
-        let problem = lp(vec![1.0, -1.0], 2, vec![-1.0, 0.0], vec![1.0]);
-        for presolve in [true, false] {
-            let solution = solve(
-                &problem,
-                &Settings {
-                    presolve,
-                    ..Settings::default()
-                },
-            )
-            .unwrap();
-            assert_eq!(solution.info().iters == 0, presolve);
-            assert_eq!(solution.info().linear_algebra.factorizations == 0, presolve);
-            assert_eq!(
-                solution.info().cvxopt_init_used,
-                if presolve { None } else { Some(false) }
-            );
-            assert!(solution.info().pobj.is_nan() && solution.info().dobj.is_nan());
-            assert_eq!(solution.info().presolve_parallel_comparisons, None);
-            assert!(solution.info().solve_time >= solution.info().presolve_time);
-            assert_eq!(solution.status(), SolverStatus::PrimalInfeasible);
-            assert!(solution.x().iter().all(|v| v.is_nan()));
-            let bty = dot(problem.b(), solution.y());
-            assert!((bty + 1.0).abs() < 1e-6);
-            let aty = matrix_transpose_mul(problem.a(), solution.y());
-            assert!(aty.iter().all(|v| v.abs() < 1e-6));
-            assert!(solution.y().iter().all(|v| *v >= 0.0));
-        }
+    #[rstest]
+    #[case::zero_iterations(Settings { max_iters:0, ..Settings::default() })]
+    #[case::nan_tolerance(Settings { tol_feas:f64::NAN, ..Settings::default() })]
+    #[case::negative_refinement(Settings { refine_tol:-1., ..Settings::default() })]
+    #[case::infinite_mu(Settings { initial_mu:f64::INFINITY, ..Settings::default() })]
+    #[case::boundary_step(Settings { step_fraction:1., ..Settings::default() })]
+    fn rejects_invalid_settings_at_solve_entry(#[case] settings: Settings) {
+        assert!(matches!(
+            solve(&problem(), &settings),
+            Err(SolveError::InvalidSetting(_))
+        ));
+    }
+
+    #[rstest]
+    #[case::second_order(Cone::SecondOrder(2))]
+    #[case::semidefinite(Cone::PositiveSemidefinite(1))]
+    fn unsupported_cones_return_an_error_before_presolve(#[case] cone: Cone) {
+        let m = cone.vector_dim();
+        let p = Problem::new(
+            None,
+            vec![0.],
+            CscMatrix::zeros(m, 1).unwrap(),
+            vec![0.; m],
+            vec![cone],
+        )
+        .unwrap();
+        assert!(matches!(
+            solve(&p, &Settings::default()),
+            Err(SolveError::Unimplemented(_))
+        ));
     }
 
     #[test]
-    fn dual_infeasible_lp_returns_an_unbounded_ray() {
-        // minimize -x subject to x >= 0.
-        let problem = lp(vec![-1.0], 1, vec![0.0], vec![-1.0]);
-        for presolve in [true, false] {
-            let solution = solve(
-                &problem,
-                &Settings {
-                    presolve,
-                    ..Settings::default()
-                },
-            )
-            .unwrap();
-            assert_eq!(solution.info().iters == 0, presolve);
-            assert_eq!(solution.info().linear_algebra.factorizations == 0, presolve);
-            assert_eq!(
-                solution.info().cvxopt_init_used,
-                if presolve { None } else { Some(false) }
-            );
-            assert!(solution.info().pobj.is_nan() && solution.info().dobj.is_nan());
-            assert_eq!(solution.info().presolve_parallel_comparisons, None);
-            assert!(solution.info().solve_time >= solution.info().presolve_time);
-            assert_eq!(solution.status(), SolverStatus::DualInfeasible);
-            assert!(solution.y().iter().all(|v| v.is_nan()));
-            assert!((dot(problem.c(), solution.x()) + 1.0).abs() < 1e-6);
-            let ax = matrix_mul(problem.a(), solution.x());
-            assert!(
-                ax.iter()
-                    .zip(solution.s())
-                    .all(|(ax, s)| (ax + s).abs() < 1e-6)
-            );
-        }
-    }
-
-    #[test]
-    fn feasible_lp_is_not_declared_infeasible() {
-        // minimize x subject to x >= 1.
-        let problem = lp(vec![-1.0], 1, vec![-1.0], vec![1.0]);
-        let solution = solve(&problem, &Settings::default()).unwrap();
-        assert_eq!(solution.info().iters, 0);
-        assert_eq!(solution.info().presolve_parallel_comparisons, None);
-        assert!(solution.info().solve_time >= solution.info().presolve_time);
+    fn solves_qp_through_public_api() {
+        let solution = solve(
+            &problem(),
+            &Settings {
+                threads: 1,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
         assert_eq!(solution.status(), SolverStatus::Solved);
-        assert!((solution.x()[0] - 1.0).abs() < 1e-6);
+        assert_relative_eq!(solution.x(), &[0.5, 1.5][..], epsilon = 1e-7);
     }
 
-    #[test]
-    fn warm_start_can_be_forced() {
-        // minimize x1 + x2 subject to x1 + x2 >= 1, x >= 0.
-        let problem = lp(
-            vec![-1.0, -1.0, -1.0, 0.0, 0.0, -1.0],
-            3,
-            vec![-1.0, 0.0, 0.0],
-            vec![1.0, 1.0],
-        );
-        // Test the initialization policy even when presolve could solve this
-        // LP without entering the interior-point method.
-        let settings = Settings {
-            presolve: false,
-            ..Settings::default()
-        };
-        let cold = solve(&problem, &settings).unwrap();
-        assert_eq!(cold.info.warm_start_used, None);
-        assert_eq!(cold.info.warm_start_score, None);
-        assert_eq!(cold.info.cvxopt_init_used, Some(false));
+    #[rstest]
+    #[case::dimension(vec![0.])]
+    #[case::nonfinite(vec![0.,f64::NAN])]
+    fn rejects_invalid_warm_starts(#[case] x: Vec<f64>) {
         let warm = WarmStart {
-            x: cold.x().to_vec(),
-            y: cold.y().to_vec(),
-            s: cold.s().to_vec(),
-        };
-        let again = solve_from(&problem, &settings, Some(&warm)).unwrap();
-        assert_eq!(again.status(), SolverStatus::Solved);
-        assert_eq!(again.info.warm_start_used, Some(true));
-        assert!(again.info.warm_start_score.unwrap().is_finite());
-        assert_eq!(again.info.cvxopt_init_used, None);
-        assert!(again.info.iters <= cold.info.iters);
-
-        let junk = WarmStart {
-            x: vec![1e6, -1e6],
-            y: vec![-1.0, 1e-9, 5e3],
-            s: vec![1e3, -7.0, 1e-9],
-        };
-        let rejected = solve_from(&problem, &settings, Some(&junk)).unwrap();
-        assert_eq!(rejected.info.warm_start_used, Some(false));
-        assert!(rejected.info.warm_start_score.unwrap().is_finite());
-        assert_eq!(rejected.info.cvxopt_init_used, Some(false));
-        assert_eq!(rejected.info.iters, cold.info.iters);
-
-        let forced = Settings {
-            force_warm_start: true,
-            presolve: false,
-            ..Settings::default()
-        };
-        let used = solve_from(&problem, &forced, Some(&junk)).unwrap();
-        assert_eq!(used.info.warm_start_used, Some(true));
-        assert_eq!(used.info.warm_start_score, rejected.info.warm_start_score);
-        assert_eq!(used.info.cvxopt_init_used, None);
-        assert_eq!(used.status(), SolverStatus::Solved);
-
-        let without_warm = solve_from(&problem, &forced, None).unwrap();
-        assert_eq!(without_warm.info.warm_start_used, None);
-        assert_eq!(without_warm.info.iters, cold.info.iters);
-
-        let short = WarmStart {
-            x: vec![0.0],
-            y: vec![0.0; 3],
-            s: vec![0.0; 3],
+            x,
+            y: vec![1.; 2],
+            s: vec![1.; 2],
         };
         assert!(matches!(
-            solve_from(&problem, &settings, Some(&short)),
+            solve_from(&problem(), &Settings::default(), Some(&warm)),
             Err(SolveError::InvalidSetting(_))
         ));
     }

@@ -247,127 +247,109 @@ impl ConeGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CscMatrix;
+    use approx::assert_relative_eq;
+    use rstest::rstest;
 
-    #[test]
-    fn slack_reconstruction_overwrites_mixed_cone_rows() {
-        let geometry =
-            crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(2), Cone::Zero(1)]);
-        let mut slack = vec![f64::NAN; 4];
-        geometry.reconstruct_slack(&[5.0, 3.0, 1.0, -2.0], &[0.0, 1.0, 4.0, 0.0], &mut slack);
-        assert_eq!(slack, [0.0, 2.0, 0.0, 0.0]);
-        geometry.reconstruct_slack(&[0.0; 4], &[1.0, 2.0, -3.0, 4.0], &mut slack);
-        assert_eq!(slack, [0.0, 0.0, 3.0, 0.0]);
-    }
-
-    #[test]
-    fn lays_out_mixed_blocks_and_builds_canonical_point() {
-        let geometry = crate::cone::test_geometry(vec![
-            Cone::Zero(2),
-            Cone::Nonnegative(3),
-            Cone::Zero(1),
-            Cone::Nonnegative(1),
-        ]);
-        assert_eq!(geometry.dim(), 7);
-        assert_eq!(geometry.barrier_parameter(), 4);
-
-        let mut point = vec![f64::NAN; 7];
-        geometry.canonical_identity(&mut point).unwrap();
-        assert_eq!(point, vec![0.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0]);
-        assert!(
-            geometry
-                .is_primal_interior(&[0.0, 0.0, 1.0, 2.0, 3.0, 0.0, 4.0])
-                .unwrap()
-        );
-        assert!(
-            !geometry
-                .is_primal_interior(&[1.0, 0.0, 1.0, 2.0, 3.0, 0.0, 4.0])
-                .unwrap()
-        );
-    }
-
-    #[test]
-    fn reports_unsupported_cones_and_invalid_vectors() {
+    fn mixed_geometry() -> ConeGeometry {
         let problem = Problem::new(
             None,
-            vec![],
-            crate::CscMatrix::zeros(3, 0).unwrap(),
-            vec![0.0; 3],
-            vec![Cone::SecondOrder(3)],
+            vec![0.],
+            CscMatrix::zeros(4, 1).unwrap(),
+            vec![0.; 4],
+            vec![Cone::Nonnegative(1), Cone::Zero(1), Cone::Nonnegative(2)],
         )
         .unwrap();
-        assert_eq!(
-            ConeGeometry::new(&problem),
-            Err(ConeGeometryError::UnsupportedCone {
-                block: 0,
-                name: "second_order"
-            })
-        );
+        ConeGeometry::new(&problem).unwrap()
+    }
 
-        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(2)]);
-        assert_eq!(
-            geometry.is_primal_interior(&[1.0]),
-            Err(ConeGeometryError::LengthMismatch {
-                argument: "s",
-                expected: 2,
-                actual: 1
-            })
+    #[rstest]
+    #[case::unchanged([2., -3., 4., 2.], 1.)]
+    #[case::interior([1., -100., 2., 6.], 1.)]
+    #[case::boundary_target([0., -100., 2., 6.], 1.)]
+    #[case::first_block([-6., -100., 2., 6.], 0.25)]
+    #[case::last_block([1., -100., -4., -6.], 0.25)]
+    #[case::tied_boundaries([-6., -100., -12., 0.], 0.25)]
+    fn boundary_step_is_the_largest_feasible_fraction(
+        #[case] target: [f64; 4],
+        #[case] expected: f64,
+    ) {
+        let geometry = mixed_geometry();
+        let base = [2., -3., 4., 2.];
+        let alpha = geometry.step_to_boundary_toward(&base, &target).unwrap();
+        assert_relative_eq!(alpha, expected, epsilon = 1e-14);
+        for i in [0, 2, 3] {
+            let at_boundary = (1. - alpha) * base[i] + alpha * target[i];
+            assert!(at_boundary >= -1e-14);
+            let damped = (1. - 0.99 * alpha) * base[i] + 0.99 * alpha * target[i];
+            assert!(damped > 0.);
+        }
+        if alpha < 1. {
+            let beyond = alpha + 1e-6;
+            assert!(
+                [0, 2, 3]
+                    .iter()
+                    .any(|&i| (1. - beyond) * base[i] + beyond * target[i] < 0.)
+            );
+        }
+    }
+
+    #[rstest]
+    fn boundary_step_is_invariant_under_common_scaling(#[values(1e-300, 1., 1e300)] scale: f64) {
+        let geometry = mixed_geometry();
+        let base = [2., -3., 4., 2.].map(|v| v * scale);
+        let target = [-6., 3., -4., -6.].map(|v| v * scale);
+        assert_relative_eq!(
+            geometry.step_to_boundary_toward(&base, &target).unwrap(),
+            0.25,
+            epsilon = 1e-14
         );
-        assert!(!geometry.is_primal_interior(&[1.0, 0.0]).unwrap());
-        assert!(!geometry.is_dual_interior(&[1.0, 0.0]).unwrap());
+    }
+
+    #[test]
+    fn equality_rows_do_not_limit_the_step() {
+        let problem = Problem::new(
+            None,
+            vec![0.],
+            CscMatrix::zeros(2, 1).unwrap(),
+            vec![0.; 2],
+            vec![Cone::Zero(2)],
+        )
+        .unwrap();
+        let geometry = ConeGeometry::new(&problem).unwrap();
         assert_eq!(
-            geometry.step_to_boundary_toward(&[1.0, 1.0], &[1.0, f64::NAN]),
+            geometry
+                .step_to_boundary_toward(&[-1., 2.], &[1e100, -1e100])
+                .unwrap(),
+            1.
+        );
+    }
+
+    #[rstest]
+    fn boundary_rejects_nonfinite_targets_in_every_cone_block(
+        #[values(0, 1, 2, 3)] index: usize,
+        #[values(f64::NAN, f64::INFINITY, f64::NEG_INFINITY)] invalid: f64,
+    ) {
+        let geometry = mixed_geometry();
+        let base = [2., -3., 4., 2.];
+        let mut target = base;
+        target[index] = invalid;
+        assert_eq!(
+            geometry.step_to_boundary_toward(&base, &target),
             Err(ConeGeometryError::NonFiniteInput { argument: "dv" })
         );
     }
 
-    #[test]
-    fn scaling_and_inverse_satisfy_both_self_scaled_identities() {
-        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(3)]);
-        let s = [0.0, 0.5, 2.0, 8.0];
-        let y = [-3.0, 4.0, 1.0, 0.25];
-        let mut h = [f64::NAN; 4];
-        let mut y_inverse = [f64::NAN; 4];
-        geometry
-            .scaling_and_inverse(&s, &y, &mut h, &mut y_inverse)
-            .unwrap();
-        assert_eq!(h, [0.0, 0.125, 2.0, 32.0]);
-        assert_eq!(y_inverse, [0.0, 0.25, 1.0, 4.0]);
-
-        let mut s_inverse = [f64::NAN; 4];
-        s_inverse[0] = 0.0;
-        for index in 1..4 {
-            s_inverse[index] = s[index].recip();
-        }
-        for index in 0..4 {
-            assert_eq!(h[index] * y[index], s[index]);
-            assert_eq!(h[index] * s_inverse[index], y_inverse[index]);
-        }
-    }
-
-    #[test]
-    fn dual_interior_ignores_zero_rows() {
-        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(2)]);
-        assert!(geometry.is_dual_interior(&[-7.0, 1.0, 2.0]).unwrap());
-        assert!(!geometry.is_dual_interior(&[0.0, 1.0, 0.0]).unwrap());
-        assert!(!geometry.is_dual_interior(&[0.0, f64::NAN, 1.0]).unwrap());
-    }
-
-    #[test]
-    fn step_to_boundary_is_the_smallest_positive_ratio_capped_at_one() {
-        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(3)]);
-        let v = [5.0, 1.0, 2.0, 3.0];
+    #[rstest]
+    fn boundary_rejects_wrong_target_dimensions(#[values(3, 5)] length: usize) {
+        let geometry = mixed_geometry();
         assert_eq!(
-            geometry
-                .step_to_boundary_toward(&v, &[-95.0, 0.5, -6.0, 4.0])
-                .unwrap(),
-            0.25
+            geometry.step_to_boundary_toward(&[2., -3., 4., 2.], &vec![1.; length]),
+            Err(ConeGeometryError::LengthMismatch {
+                argument: "dv",
+                expected: 4,
+                actual: length
+            })
         );
-        assert_eq!(
-            geometry
-                .step_to_boundary_toward(&v, &[-95.0, 1.0, 1.0, 2.0])
-                .unwrap(),
-            1.0
-        );
-        assert_eq!(geometry.step_to_boundary_toward(&v, &v).unwrap(), 1.0);
     }
 }

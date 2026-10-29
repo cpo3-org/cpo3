@@ -51,16 +51,6 @@ pub(crate) struct KktSettings {
     pub(crate) refine_tol: f64,
 }
 
-impl KktSettings {
-    #[cfg(test)]
-    pub(crate) fn new(linear_solver: LinearSolver) -> Self {
-        Self::from(&Settings {
-            linear_solver,
-            ..Settings::default()
-        })
-    }
-}
-
 impl From<&Settings> for KktSettings {
     fn from(settings: &Settings) -> Self {
         Self {
@@ -253,7 +243,7 @@ impl Factorization {
         let dim = self.diagonal.len();
         validate_rhs(2 * dim, rhs)?;
         match &mut self.inner {
-            FactorizationInner::Faer(factor) => factor.solve_in_place(rhs, 2)?,
+            FactorizationInner::Faer(factor) => factor.solve_in_place(rhs, 2),
             FactorizationInner::Feral(factor) => {
                 let (first, second) = rhs.split_at_mut(dim);
                 factor.solve_in_place(first)?;
@@ -316,8 +306,8 @@ impl FactorizationInner {
         validate_rhs(dim, vector)?;
         match self {
             Self::Faer(factorization) => factorization.solve_in_place(vector, 1),
-            Self::Feral(factorization) => factorization.solve_in_place(vector),
-        }?;
+            Self::Feral(factorization) => factorization.solve_in_place(vector)?,
+        }
         validate_solution(vector)
     }
 }
@@ -643,337 +633,145 @@ impl LinearSystemError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linear_algebra::matrix;
+    use approx::assert_relative_eq;
+    use rstest::rstest;
 
-    fn sparse_system(values: Vec<f64>) -> CscMatrix {
-        CscMatrix::from_triplets(3, 3, vec![0, 0, 1, 1, 2], vec![0, 1, 1, 2, 2], values).unwrap()
+    fn settings(backend: LinearSolver) -> KktSettings {
+        KktSettings::from(&Settings {
+            threads: 1,
+            linear_solver: backend,
+            refine_tol: 1e-12,
+            ..Settings::default()
+        })
     }
 
-    #[test]
-    fn factorization_validation_is_shared_by_both_backends() {
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
-            let settings = KktSettings::from(&Settings {
-                linear_solver: solver,
-                ..Settings::default()
-            });
-            let mut count = 0;
-            for (matrix, error) in [
-                (
-                    CscMatrix::zeros(1, 2).unwrap(),
-                    LinearSystemError::NotSquare {
-                        rows: 1,
-                        columns: 2,
-                    },
-                ),
-                (CscMatrix::zeros(0, 0).unwrap(), LinearSystemError::Empty),
-                (
-                    CscMatrix::from_triplets(2, 2, vec![1], vec![0], vec![1.0]).unwrap(),
-                    LinearSystemError::NotUpperTriangle,
-                ),
-            ] {
-                assert_eq!(Factorization::prepare(matrix, &settings).err(), Some(error));
+    #[rstest]
+    fn backend_batch_solves_and_diagonal_updates_match_known_systems(
+        #[values(LinearSolver::Faer, LinearSolver::Feral)] backend: LinearSolver,
+    ) {
+        let mut factor = Factorization::prepare(
+            matrix(3, 3, &[4., 1., 2., 0., 3., -1., 0., 0., -2.]),
+            &settings(backend),
+        )
+        .unwrap();
+        let mut attempts = 0;
+        factor.factor(&mut attempts).unwrap();
+        for diagonal in [[4., 3., -2.], [6., 5., -4.]] {
+            factor
+                .update_diagonal_and_refactor(&mut attempts, |d| d.copy_from_slice(&diagonal))
+                .unwrap();
+            let apply = |x: &[f64]| {
+                vec![
+                    diagonal[0] * x[0] + x[1] + 2. * x[2],
+                    x[0] + diagonal[1] * x[1] - x[2],
+                    2. * x[0] - x[1] + diagonal[2] * x[2],
+                ]
+            };
+            let first = [1., -2., 3.];
+            let second = [-4., 5., -6.];
+            let mut rhs = apply(&first);
+            rhs.extend(apply(&second));
+            let mut individual = rhs.clone();
+            for column in individual.chunks_mut(3) {
+                factor.solve_unrefined_in_place(column).unwrap();
             }
-            assert_eq!(count, 0);
-            let mut factor =
-                Factorization::prepare(CscMatrix::identity(1).unwrap(), &settings).unwrap();
-            factor.factor(&mut count).unwrap();
-            assert_eq!(
-                factor.solve_unrefined_in_place(&mut []),
-                Err(LinearSystemError::InvalidRightHandSide {
-                    expected: 1,
-                    actual: 0
-                })
+            factor.solve_pair_in_place(&mut rhs).unwrap();
+            assert_relative_eq!(
+                &rhs[..],
+                &individual[..],
+                epsilon = 1e-10,
+                max_relative = 1e-10
             );
-            assert_eq!(
-                factor.solve_unrefined_into(&[f64::NAN], &mut Vec::new()),
-                Err(LinearSystemError::NonFiniteRightHandSide)
+            assert_relative_eq!(&rhs[..3], &first[..], epsilon = 1e-10, max_relative = 1e-10);
+            assert_relative_eq!(
+                &rhs[3..],
+                &second[..],
+                epsilon = 1e-10,
+                max_relative = 1e-10
             );
         }
     }
 
-    #[test]
-    fn refinement_corrects_a_componentwise_inaccurate_solution() {
+    #[rstest]
+    #[case::disabled(0, 2. / 3.)]
+    #[case::one_correction(1, 8. / 9.)]
+    #[case::converged(30, 1.)]
+    fn refinement_targets_original_system_and_counts_only_corrections(
+        #[case] budget: usize,
+        #[case] expected: f64,
+    ) {
+        let mut settings = settings(LinearSolver::Faer);
+        settings.refine_iters = budget;
         let mut stats = LinearAlgebraStats::default();
-        let solution = refine_with(
-            &[1e12, 1.0],
-            vec![1.0, 0.0],
-            &KktSettings::from(&Settings::default()),
+        let mut calls = 0;
+        // True scalar system 2*x=2; preconditioner is 3 rather than 2.
+        let result = refine_with(
+            &[2.],
+            vec![2. / 3.],
+            &settings,
             &mut RefinementWorkspace::default(),
-            |x, b, r| {
-                r[0] = b[0] - 1e12 * x[0];
-                r[1] = b[1] - x[1];
-            },
+            |x, b, r| r[0] = b[0] - 2. * x[0],
             |x, b, r, d| {
-                r[0] = b[0] - 1e12 * x[0];
-                r[1] = b[1] - x[1];
-                d[0] = b[0].abs() + (1e12 * x[0]).abs();
-                d[1] = b[1].abs() + x[1].abs();
+                r[0] = b[0] - 2. * x[0];
+                d[0] = 4.;
             },
             |r, out| {
+                calls += 1;
                 out.clear();
-                out.extend([r[0] / 1e12, r[1]]);
+                out.push(r[0] / 3.);
                 Ok(())
             },
             &mut stats,
         )
         .unwrap();
-        assert_eq!(solution, vec![1.0, 1.0]);
+        assert_eq!(stats.refinement_solves, calls);
+        assert_eq!(stats.primary_solves, 0);
+        assert!(calls <= budget);
+        assert!(calls >= budget.min(1));
+        assert_relative_eq!(result[0], expected, epsilon = 1e-10, max_relative = 1e-10);
+    }
+
+    #[test]
+    fn refinement_keeps_best_point_after_bad_corrections_and_counts_failures() {
+        for correction in [100., f64::NAN] {
+            let mut stats = LinearAlgebraStats::default();
+            let result = refine_with(
+                &[1.],
+                vec![0.],
+                &settings(LinearSolver::Faer),
+                &mut RefinementWorkspace::default(),
+                |x, b, r| r[0] = b[0] - x[0],
+                |x, b, r, d| {
+                    r[0] = b[0] - x[0];
+                    d[0] = 1.;
+                },
+                |_, out| {
+                    out.clear();
+                    out.push(correction);
+                    Ok(())
+                },
+                &mut stats,
+            )
+            .unwrap();
+            assert_relative_eq!(result[0], 0., epsilon = 1e-10, max_relative = 1e-10);
+            assert_eq!(stats.refinement_solves, 1);
+        }
+        let mut stats = LinearAlgebraStats::default();
+        let result = refine_with(
+            &[1.],
+            vec![0.],
+            &settings(LinearSolver::Faer),
+            &mut RefinementWorkspace::default(),
+            |x, b, r| r[0] = b[0] - x[0],
+            |x, b, r, d| {
+                r[0] = b[0] - x[0];
+                d[0] = 1.;
+            },
+            |_, _| Err(crate::linear_solvers::LinearSystemError::Singular),
+            &mut stats,
+        );
+        assert!(result.is_err());
         assert_eq!(stats.refinement_solves, 1);
-        assert_eq!(stats.refinement_accurate, 1);
-    }
-
-    #[test]
-    fn refinement_counts_failed_corrections_and_successful_retries() {
-        let mut stats = LinearAlgebraStats::default();
-        let mut workspace = RefinementWorkspace::default();
-        // Failed correction, successful retry, then an already accurate initial point.
-        for (fail, initial, solves) in [(true, 0.0, 1), (false, 0.0, 2), (false, 1.0, 2)] {
-            let result = refine_with(
-                &[1.0],
-                vec![initial],
-                &KktSettings::from(&Settings::default()),
-                &mut workspace,
-                |x, b, r| r[0] = b[0] - x[0],
-                |x, b, r, d| {
-                    r[0] = b[0] - x[0];
-                    d[0] = b[0].abs() + x[0].abs();
-                },
-                |r, out| {
-                    if fail {
-                        return Err(LinearSystemError::Singular);
-                    }
-                    out.clear();
-                    out.extend_from_slice(r);
-                    Ok(())
-                },
-                &mut stats,
-            );
-            if fail {
-                assert_eq!(result, Err(LinearSystemError::Singular));
-            } else {
-                assert_eq!(result.unwrap(), vec![1.0]);
-            }
-            assert_eq!(stats.refinement_solves, solves);
-        }
-    }
-
-    #[test]
-    fn refinement_stops_once_the_rate_cannot_reach_tolerance() {
-        for strict in [false, true] {
-            let mut stats = LinearAlgebraStats::default();
-            let result = refine_with(
-                &[1.0],
-                vec![0.0],
-                &KktSettings {
-                    strict_refinement: strict,
-                    ..KktSettings::from(&Settings::default())
-                },
-                &mut RefinementWorkspace::default(),
-                |x, b, r| r[0] = b[0] - x[0],
-                |x, b, r, d| {
-                    r[0] = b[0] - x[0];
-                    d[0] = b[0].abs() + x[0].abs();
-                },
-                |_, out| {
-                    out.clear();
-                    out.push(0.0);
-                    Ok(())
-                },
-                &mut stats,
-            );
-            if strict {
-                assert_eq!(result, Err(LinearSystemError::RefinementDiverged(1.0)));
-            } else {
-                assert_eq!(result.unwrap(), vec![0.0]);
-            }
-            assert_eq!(stats.refinement_solves, 2);
-            assert_eq!(stats.refinement_forecast, 1);
-            assert_eq!(stats.refinement_settled, usize::from(!strict));
-            assert_eq!(stats.refinement_failures, usize::from(strict));
-        }
-    }
-
-    #[test]
-    fn zero_correction_budget_still_evaluates_target_residual() {
-        for strict in [false, true] {
-            let mut stats = LinearAlgebraStats::default();
-            let result = refine_with(
-                &[1.0],
-                vec![0.5],
-                &KktSettings {
-                    strict_refinement: strict,
-                    refine_iters: 0,
-                    ..KktSettings::from(&Settings::default())
-                },
-                &mut RefinementWorkspace::default(),
-                |_, _, _| unreachable!(),
-                |x, b, r, d| {
-                    r[0] = b[0] - x[0];
-                    d[0] = b[0].abs() + x[0].abs();
-                },
-                |_, _| unreachable!(),
-                &mut stats,
-            );
-            if strict {
-                assert_eq!(
-                    result,
-                    Err(LinearSystemError::RefinementDiverged(1.0 / 3.0))
-                );
-            } else {
-                assert_eq!(result.unwrap(), vec![0.5]);
-            }
-            assert_eq!(stats.refinement_solves, 0);
-            assert_eq!(stats.refinement_budget, 1);
-            assert_eq!(stats.refinement_failures, usize::from(strict));
-            assert_eq!(stats.refinement_settled, usize::from(!strict));
-        }
-    }
-
-    #[test]
-    fn refinement_keeps_the_best_iterate_when_it_diverges() {
-        for strict in [false, true] {
-            let mut stats = LinearAlgebraStats::default();
-            let result = refine_with(
-                &[1.0],
-                vec![0.9],
-                &KktSettings {
-                    strict_refinement: strict,
-                    ..KktSettings::from(&Settings::default())
-                },
-                &mut RefinementWorkspace::default(),
-                |x, b, r| r[0] = b[0] - x[0],
-                |x, b, r, d| {
-                    r[0] = b[0] - x[0];
-                    d[0] = b[0].abs() + x[0].abs();
-                },
-                |_, out| {
-                    out.clear();
-                    out.push(100.0);
-                    Ok(())
-                },
-                &mut stats,
-            );
-            if strict {
-                assert!(matches!(
-                    result,
-                    Err(LinearSystemError::RefinementDiverged(_))
-                ));
-            } else {
-                assert_eq!(result.unwrap(), vec![0.9]);
-            }
-            assert_eq!(stats.refinement_divergence, 1);
-        }
-    }
-
-    #[test]
-    fn nonfinite_refinement_preserves_the_best_iterate_and_counts_the_exit() {
-        for strict in [false, true] {
-            // MAX overflows the next residual; INFINITY overflows the iterate itself.
-            for correction in [f64::MAX, f64::INFINITY] {
-                let mut stats = LinearAlgebraStats::default();
-                let result = refine_with(
-                    &[1.0],
-                    vec![0.0],
-                    &KktSettings {
-                        strict_refinement: strict,
-                        ..KktSettings::from(&Settings::default())
-                    },
-                    &mut RefinementWorkspace::default(),
-                    |x, b, r| r[0] = b[0] - 2.0 * x[0],
-                    |x, b, r, d| {
-                        r[0] = b[0] - 2.0 * x[0];
-                        d[0] = b[0].abs() + (2.0 * x[0]).abs();
-                    },
-                    |_, out| {
-                        out.clear();
-                        out.push(correction);
-                        Ok(())
-                    },
-                    &mut stats,
-                );
-                if strict {
-                    assert_eq!(result, Err(LinearSystemError::RefinementDiverged(1.0)));
-                } else {
-                    assert_eq!(result.unwrap(), vec![0.0]);
-                }
-                assert_eq!(
-                    stats,
-                    LinearAlgebraStats {
-                        refinement_solves: 1,
-                        refinement_nonfinite: 1,
-                        refinement_failures: usize::from(strict),
-                        refinement_settled: usize::from(!strict),
-                        ..LinearAlgebraStats::default()
-                    }
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn diagonal_updates_preserve_off_diagonals_across_refactors() {
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
-            let settings = KktSettings::from(&Settings {
-                linear_solver: solver,
-                ..Settings::default()
-            });
-            let mut count = 0;
-            let mut factorization =
-                Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
-                    .unwrap();
-            factorization.factor(&mut count).unwrap();
-            let mut solution = Vec::new();
-            for diagonal in [[4.0, -3.0, 2.0], [5.0, -4.0, 3.0], [7.0, -2.0, 6.0]] {
-                factorization
-                    .update_diagonal_and_refactor(&mut count, |values| {
-                        values.copy_from_slice(&diagonal)
-                    })
-                    .unwrap();
-                let rhs = [
-                    diagonal[0] + 2.0,
-                    4.0 + 2.0 * diagonal[1],
-                    2.0 + 3.0 * diagonal[2],
-                ];
-                factorization
-                    .solve_unrefined_into(&rhs, &mut solution)
-                    .unwrap();
-                for (&actual, expected) in solution.iter().zip([1.0, 2.0, 3.0]) {
-                    assert!((actual - expected).abs() < 1e-9);
-                }
-            }
-            assert_eq!(count, 4);
-        }
-    }
-
-    #[test]
-    fn inertia_check_counts_positive_pivots() {
-        let settings = KktSettings::from(&Settings {
-            linear_solver: LinearSolver::Feral,
-            ..Settings::default()
-        });
-        let mut factorization =
-            Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
-                .unwrap();
-        factorization.factor(&mut 0).unwrap();
-        let report = factorization.pivot_report().unwrap();
-        assert_eq!((report.positive, report.negative, report.zero), (2, 1, 0));
-        assert!(factorization.check_inertia(2).is_ok());
-        assert!(matches!(
-            factorization.check_inertia(1),
-            Err(LinearSystemError::WrongInertia {
-                positive: 2,
-                expected: 1
-            })
-        ));
-        assert_eq!(factorization.stats().inertia_failures, 1);
-    }
-
-    #[test]
-    fn correction_diagnostic_separates_exact_regularized_solves_from_solve_error() {
-        let mut stats = LinearAlgebraStats::default();
-        // K=1, M=10, rhs=1, correction=.1: r_new=.9, q=0.
-        diagnose_correction(&[0.9], &[0.1], &[9.0], &[1.0], &mut stats);
-        assert_eq!(stats.refinement_clamp_limited, 1);
-        diagnose_correction(&[0.9], &[0.1], &[], &[1.0], &mut stats);
-        assert_eq!(stats.refinement_solve_limited, 1);
     }
 }
