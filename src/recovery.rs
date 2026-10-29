@@ -321,20 +321,32 @@ impl<'a> Recovery<'a> {
     }
 
     pub(crate) fn update(&mut self, state: &State, sy: f64) -> &RecoveredSolution {
+        self.update_from_parts(state.x(), state.y(), state.s(), state.tau(), sy)
+    }
+
+    /// Recover a borrowed iterate; callers ensure its coordinates and tau are valid.
+    pub(crate) fn update_from_parts(
+        &mut self,
+        x: &[f64],
+        y: &[f64],
+        s: &[f64],
+        tau: f64,
+        sy: f64,
+    ) -> &RecoveredSolution {
         let point = &mut self.point;
         // Keep the original denominator evaluation order.
         point.ktratio = if self.nu == 0 {
             0.0
         } else {
-            sy / (self.nu as f64 * state.tau() * state.tau())
+            sy / (self.nu as f64 * tau * tau)
         };
-        let inverse_tau = state.tau().max(RECOVERY_EPS).recip();
+        let inverse_tau = tau.max(RECOVERY_EPS).recip();
         self.equilibrated
-            .unscale_x_into(state.x(), inverse_tau, &mut point.x);
+            .unscale_x_into(x, inverse_tau, &mut point.x);
         self.equilibrated
-            .unscale_y_into(state.y(), inverse_tau, &mut point.y);
+            .unscale_y_into(y, inverse_tau, &mut point.y);
         self.equilibrated
-            .unscale_s_into(state.s(), inverse_tau, &mut point.s);
+            .unscale_s_into(s, inverse_tau, &mut point.s);
 
         let (problem, x, y, s) = if let Some(presolve) = &mut self.presolve {
             let (x, y) =

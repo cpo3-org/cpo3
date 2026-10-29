@@ -285,29 +285,27 @@ def test_equality_only(presolve: bool, quadratic: bool) -> None:
     [
         pytest.param(False, 4.0, id="consistent-no_presolve"),
         pytest.param(True, 4.0, id="consistent-presolve"),
-        pytest.param(
-            False,
-            5.0,
-            id="inconsistent-no_presolve",
-            marks=pytest.mark.xfail(
-                reason="LSMR fails to certify infeasibility",
-                raises=RuntimeError,
-                strict=True,
-            ),
-        ),
+        pytest.param(False, 5.0, id="inconsistent-no_presolve"),
         pytest.param(True, 5.0, id="inconsistent-presolve"),
     ],
 )
-def test_redundant_constraints(presolve: bool, rhs: float) -> None:
-    # min x, subject to x = 2, 2x = rhs, and 0x = 0.
+@pytest.mark.parametrize("quadratic", [False, True], ids=["lp", "qp"])
+@pytest.mark.parametrize("ruiz_iters", [0, 10])
+def test_redundant_constraints(
+    presolve: bool, rhs: float, quadratic: bool, ruiz_iters: int
+) -> None:
+    # min x (LP) or x^2 + x (QP), subject to x = 2, 2x = rhs, and 0x = 0.
     problem = cpo3.Problem(
-        P=None,
+        P=sparse.csc_matrix([[2.0]]) if quadratic else None,
         c=[1.0],
         A=sparse.csc_matrix([[1.0], [2.0], [0.0]]),
         b=[2.0, rhs, 0.0],
         cones=[cpo3.ZeroCone(3)],
     )
-    solution = cpo3.solve(problem, settings=cpo3.Settings(threads=1, presolve=presolve))
+    solution = cpo3.solve(
+        problem,
+        settings=cpo3.Settings(threads=1, presolve=presolve, ruiz_iters=ruiz_iters),
+    )
     if rhs == 4.0:
         assert solution.status is cpo3.SolverStatus.SOLVED
         np.testing.assert_allclose(solution.x, [2.0], atol=1e-7, rtol=0)
@@ -366,3 +364,28 @@ def test_fixed_variable(presolve: bool) -> None:
     assert solution.status is cpo3.SolverStatus.SOLVED
     np.testing.assert_allclose(solution.x, [2.0], atol=1e-7, rtol=0)
     _check_kkt_residuals(problem, solution.x, solution.y, solution.s, tolerance=1e-7)
+
+
+@pytest.mark.parametrize("ruiz_iters", [0, 10])
+@pytest.mark.parametrize("slope", [0.0, -1.0], ids=["solved", "unbounded"])
+def test_singular_equality_qp(ruiz_iters: int, slope: float) -> None:
+    # min x1^2 + slope*x3, subject to x1 + x2 = 1; x3 is free.
+    problem = cpo3.Problem(
+        P=sparse.diags([2.0, 0.0, 0.0], format="csc"),
+        c=[0.0, 0.0, slope],
+        A=sparse.csc_matrix([[1.0, 1.0, 0.0]]),
+        b=[1.0],
+        cones=[cpo3.ZeroCone(1)],
+    )
+    solution = cpo3.solve(
+        problem,
+        settings=cpo3.Settings(threads=1, presolve=False, ruiz_iters=ruiz_iters),
+    )
+    if slope == 0.0:
+        assert solution.status is cpo3.SolverStatus.SOLVED
+        _check_kkt_residuals(
+            problem, solution.x, solution.y, solution.s, tolerance=1e-7
+        )
+    else:
+        assert solution.status is cpo3.SolverStatus.DUAL_INFEASIBLE
+        _check_dual_certificate(problem, solution.x, solution.s, tolerance=1e-7)
