@@ -2,7 +2,7 @@
 //! warm screening.
 
 use super::{
-    kkt::{KktCache, solve_shifted_systems},
+    kkt_solver::{KktCache, solve_shifted_systems},
     state::{State, StateError},
 };
 

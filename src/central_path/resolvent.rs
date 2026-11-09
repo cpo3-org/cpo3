@@ -7,7 +7,7 @@
 //! `eq:surrogate_rhs`. `solve_increment_rhs` evaluates the same equations in
 //! increments about the current iterate to avoid cancellation, solves the scalar
 //! quadratic for tau, and reconstructs x and y. Sparse assembly, elimination,
-//! and full-system refinement live in `kkt`.
+//! and full-system refinement live in `kkt_solver`.
 
 use std::cell::OnceCell;
 
@@ -15,7 +15,7 @@ use crate::linear_algebra::dot;
 use thiserror::Error;
 
 use super::{
-    kkt::{KktCache, KktError},
+    kkt_solver::{KktCache, KktError},
     state::{State, StateError},
 };
 

@@ -8,7 +8,7 @@
 use thiserror::Error;
 
 use super::{
-    kkt::KktCache,
+    kkt_solver::KktCache,
     resolvent::{Resolvent, ResolventError, ResolventSolution},
     state::{State, StateError},
 };
@@ -402,7 +402,7 @@ mod tests {
         ] {
             for wrapped in [
                 ResolventError::LinearSystem(error.clone()),
-                ResolventError::Kkt(crate::central_path::kkt::KktError::LinearSystem(
+                ResolventError::Kkt(crate::central_path::kkt_solver::KktError::LinearSystem(
                     error.clone(),
                 )),
             ] {
