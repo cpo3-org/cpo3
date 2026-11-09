@@ -96,7 +96,8 @@ class Settings:
     Parameters
     ----------
     max_iters : int, default=100
-        Maximum number of outer solver iterations. Must be positive.
+        Maximum number of interior-point iterations. Must be positive.
+        Unused for equality-only problems.
     time_limit : float or None, default=None
         Elapsed-time limit in seconds, including presolve. Must be nonnegative;
         None disables the limit. Checked between solver iterations.
@@ -163,13 +164,20 @@ class Settings:
         problems, which use fixed dynamic pivot regularization.
     refine_iters : int, default=30
         Maximum number of iterative refinement corrections per KKT solve.
-        Zero disables corrections and keeps the initial linear solve. Equality-only
-        problems instead use a fixed budget of ten corrections before LSMR.
+        Zero disables corrections and keeps the initial linear solve.
+        Equality-only problems use eq_refine_iters instead.
     refine_tol : float, default=1e-7
         Positive componentwise backward-error target for iterative refinement.
         Unused for equality-only problems, which check optimality directly.
         Refinement may stop before reaching this target if further corrections
         are unlikely to improve the solution or meet the target within budget.
+    eq_lsmr_iters : int or None, default=None
+        Maximum LSMR iterations for equality-only problems. None uses
+        max(4 * (m + n), 32), with dimensions measured after presolve.
+        Zero disables LSMR iterations, but still checks the initial point.
+    eq_refine_iters : int, default=10
+        Maximum refinement corrections before LSMR for equality-only problems.
+        Zero skips corrections and goes from the direct solve to LSMR if needed.
     step_fraction : float, default=0.999
         Fraction of the step to the cone boundary to take. Must be strictly
         between zero and one to retain an interior margin.
@@ -204,6 +212,9 @@ class Settings:
     refine_init_reg: float = 1e-12
     refine_iters: int = 30
     refine_tol: float = 1e-7
+
+    eq_lsmr_iters: int | None = None
+    eq_refine_iters: int = 10
 
     step_fraction: float = 0.999
 

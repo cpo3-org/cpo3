@@ -46,6 +46,9 @@ pub(super) fn from_python(values: &Bound<'_, PyAny>) -> PyResult<Settings> {
         refine_iters: values.getattr("refine_iters")?.extract()?,
         refine_tol: values.getattr("refine_tol")?.extract()?,
 
+        eq_lsmr_iters: values.getattr("eq_lsmr_iters")?.extract()?,
+        eq_refine_iters: values.getattr("eq_refine_iters")?.extract()?,
+
         step_fraction: values.getattr("step_fraction")?.extract()?,
     };
     Ok(settings)

@@ -7,6 +7,7 @@
 use crate::{
     CscMatrix, MatrixError, Problem,
     cone::{ConeBlock, ConeGeometry},
+    linear_algebra::KktOperator,
     linear_solvers::{
         Factorization, KktSettings, LinearAlgebraStats, LinearSystemError, RefinementWorkspace,
         refine_with, validate_rhs,
@@ -164,21 +165,26 @@ struct BoundRows {
 }
 
 impl BoundRows {
-    fn detect(problem: &Problem, geometry: &ConeGeometry, enabled: bool) -> Self {
+    fn keep_all(rows: usize) -> Self {
+        Self {
+            eliminated: Vec::new(),
+            kept: (0..rows).collect(),
+        }
+    }
+
+    fn detect(problem: &Problem, geometry: &ConeGeometry) -> Self {
         let m = problem.constraint_count();
         let mut singleton = vec![None; m];
         let mut counts = vec![0usize; m];
-        if enabled {
-            crate::linear_algebra::visit_entries(problem.a(), |row, column, value| {
-                if value != 0.0 {
-                    counts[row] += 1;
-                    singleton[row] = Some((column, value));
-                }
-            });
-            for block in geometry.blocks() {
-                if let ConeBlock::Zero(range) = block {
-                    counts[range.clone()].fill(0);
-                }
+        crate::linear_algebra::visit_entries(problem.a(), |row, column, value| {
+            if value != 0.0 {
+                counts[row] += 1;
+                singleton[row] = Some((column, value));
+            }
+        });
+        for block in geometry.blocks() {
+            if let ConeBlock::Zero(range) = block {
+                counts[range.clone()].fill(0);
             }
         }
         let mut eliminated = Vec::new();
@@ -421,7 +427,12 @@ fn assemble_preconditioner(
     // Assembly owns the only full CSC matrix; the cache retains just the
     // metadata needed for diagonal updates and bound-row reconstruction.
     // Numeric retries retain this layout and the prepared backend storage.
-    let (mut matrix, pattern) = build_pattern(problem, geometry, eliminate_bound_rows)?;
+    let bound_rows = if eliminate_bound_rows {
+        BoundRows::detect(problem, geometry)
+    } else {
+        BoundRows::keep_all(problem.constraint_count())
+    };
+    let (mut matrix, pattern) = build_pattern(problem, bound_rows)?;
     let values = matrix.values_mut();
     pattern.write_diagonal(
         values,
@@ -561,13 +572,8 @@ impl KktWorkspace {
                 debug_assert_eq!(y.len(), problem.constraint_count());
                 self.initial_residual.clear();
                 self.initial_residual.extend_from_slice(rhs);
-                apply_full_system(
-                    problem,
-                    shift,
-                    d_diagonal,
-                    (x, y),
-                    &mut self.initial_residual,
-                );
+                KktOperator::shifted(problem, shift, d_diagonal)
+                    .subtract((x, y), &mut self.initial_residual);
                 // z <- z + M^-1 (rhs - K z). Keeping z preserves components
                 // that the diagonally clamped preconditioner corrects slowly.
                 let mut solution = pattern.solve_preconditioner(
@@ -615,7 +621,8 @@ impl KktWorkspace {
         let first_correction = if let Some(seed) = first_seed {
             self.initial_residual.clear();
             self.initial_residual.extend_from_slice(first_rhs);
-            apply_full_system(problem, shift, d_diagonal, seed, &mut self.initial_residual);
+            KktOperator::shifted(problem, shift, d_diagonal)
+                .subtract(seed, &mut self.initial_residual);
             self.initial_residual.as_slice()
         } else {
             first_rhs
@@ -689,31 +696,15 @@ impl KktWorkspace {
             }
             self.perturbation_ready = true;
         }
+        let operator = KktOperator::shifted(problem, shift, d_diagonal);
         let result = refine_with(
             rhs,
             initial,
             &factorization.settings(),
             workspace,
-            |solution, rhs, out| {
-                out.copy_from_slice(rhs);
-                apply_full_system(
-                    problem,
-                    shift,
-                    d_diagonal,
-                    solution.split_at(problem.variable_count()),
-                    out,
-                );
-            },
+            |solution, rhs, out| operator.residual(rhs, solution, out),
             |solution, rhs, residual, denominator| {
-                full_residual_and_denominator(
-                    problem,
-                    shift,
-                    d_diagonal,
-                    solution,
-                    rhs,
-                    residual,
-                    denominator,
-                );
+                operator.residual_and_denominator(rhs, solution, residual, denominator);
             },
             |residual, out| {
                 pattern.solve_preconditioner_into(factorization, d_factor, residual, out, reduced)
@@ -725,12 +716,10 @@ impl KktWorkspace {
     }
 }
 
-/// Assemble the unregularized equality KKT matrix using the shared CSC layout.
-pub(crate) fn assemble_equality_kkt(
-    problem: &Problem,
-    geometry: &ConeGeometry,
-) -> Result<CscMatrix, KktError> {
-    let (mut matrix, pattern) = build_pattern(problem, geometry, false)?;
+/// Assemble [P, Aᵀ; A, 0] with every constraint row retained.
+pub(crate) fn assemble_unshifted_kkt(problem: &Problem) -> Result<CscMatrix, KktError> {
+    let (mut matrix, pattern) =
+        build_pattern(problem, BoundRows::keep_all(problem.constraint_count()))?;
     for (column, value) in pattern.p_diagonal.iter().enumerate() {
         matrix.values_mut()[pattern.diagonal_positions[column]] = *value;
     }
@@ -740,11 +729,9 @@ pub(crate) fn assemble_equality_kkt(
 /// Assemble fixed off-diagonal entries and retain zero-valued diagonal slots.
 fn build_pattern(
     problem: &Problem,
-    geometry: &ConeGeometry,
-    eliminate_bound_rows: bool,
+    bound_rows: BoundRows,
 ) -> Result<(CscMatrix, KktPattern), KktError> {
     let n = problem.variable_count();
-    let bound_rows = BoundRows::detect(problem, geometry, eliminate_bound_rows);
     let m = bound_rows.kept.len();
     let dim = n.checked_add(m).ok_or(MatrixError::DimensionOverflow)?;
     // Every column has a diagonal. Count the remaining upper-triangle entries
@@ -820,78 +807,6 @@ fn build_pattern(
             bound_rows,
         },
     ))
-}
-
-/// `out -= K u` for the full shifted matrix `K = [P + shift I, A^T; A, -diag(d)]`.
-pub(crate) fn apply_full_system(
-    problem: &Problem,
-    shift: f64,
-    d_diagonal: &[f64],
-    (x, y): (&[f64], &[f64]),
-    out: &mut [f64],
-) {
-    let n = problem.variable_count();
-    let (out_x, out_y) = out.split_at_mut(n);
-    if let Some(p) = problem.p() {
-        crate::linear_algebra::symmetric_accumulate(p, x, [out_x], |product| [-product]);
-    }
-    crate::linear_algebra::update(out_x, x, |out, x| out - shift * x);
-    crate::linear_algebra::constraint_accumulate(problem.a(), x, y, [out_x], [out_y], |product| {
-        [-product]
-    });
-    faer::zip!(
-        faer::ColMut::from_slice_mut(out_y),
-        faer::ColRef::from_slice(y),
-        faer::ColRef::from_slice(d_diagonal)
-    )
-    .for_each(|faer::unzip!(out, y, d)| *out += d * y);
-}
-
-/// Initialize the residual and its componentwise denominator in one sparse pass.
-/// Faer has no fused signed/absolute product, so keep this traversal allocation-free.
-pub(crate) fn full_residual_and_denominator(
-    problem: &Problem,
-    shift: f64,
-    d_diagonal: &[f64],
-    u: &[f64],
-    rhs: &[f64],
-    residual: &mut [f64],
-    denominator: &mut [f64],
-) {
-    residual.copy_from_slice(rhs);
-    for (out, rhs) in denominator.iter_mut().zip(rhs) {
-        *out = rhs.abs();
-    }
-    let n = problem.variable_count();
-    let (x, y) = u.split_at(n);
-    if let Some(p) = problem.p() {
-        crate::linear_algebra::symmetric_accumulate(
-            p,
-            x,
-            [&mut residual[..n], &mut denominator[..n]],
-            |product| [-product, product.abs()],
-        );
-    }
-    for (index, x) in x.iter().enumerate() {
-        let product = shift * x;
-        residual[index] += -product;
-        denominator[index] += product.abs();
-    }
-    let (residual_x, residual_y) = residual.split_at_mut(n);
-    let (denominator_x, denominator_y) = denominator.split_at_mut(n);
-    crate::linear_algebra::constraint_accumulate(
-        problem.a(),
-        x,
-        y,
-        [residual_x, denominator_x],
-        [residual_y, denominator_y],
-        |product| [-product, product.abs()],
-    );
-    for (index, (y, d)) in y.iter().zip(d_diagonal).enumerate() {
-        let product = -d * y;
-        residual[n + index] += -product;
-        denominator[n + index] += product.abs();
-    }
 }
 
 #[cfg(test)]

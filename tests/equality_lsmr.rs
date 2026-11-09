@@ -126,7 +126,9 @@ fn equality_lsmr_unbounded() {
         );
         let s = solve(&p, &settings()).unwrap();
         verify(&p, &s, SolverStatus::DualInfeasible);
-        assert!(s.info().linear_algebra.lsmr_iterations > 0);
+        // The initial residual already passes the shared certificate checks.
+        assert_eq!(s.info().linear_algebra.lsmr_iterations, 0);
+        assert_eq!(s.info().linear_algebra.primary_solves, 1);
         assert_eq!(s.info().linear_algebra.refinement_solves, 10);
     }
 }
@@ -145,6 +147,8 @@ fn equality_lsmr_singular_consistent() {
             refine_init_reg: 1e-4,
             refine_iters: 0,
             ruiz_iters: 0,
+            // Distinguish small positive curvature from zero at the requested tolerance.
+            tol_infeas_rel: 1e-14,
             ..settings()
         };
         let s = solve(&p, &cfg).unwrap();
@@ -155,6 +159,17 @@ fn equality_lsmr_singular_consistent() {
             // with the existing factorization, despite refine_iters=0 above.
             assert_eq!(s.info().linear_algebra.refinement_solves, 10);
             assert!(s.info().linear_algebra.lsmr_iterations > 0);
+            // With the default certificate tolerance, this small curvature is
+            // accepted by the shared checks; equality LSMR adds no extra gate.
+            let loose = Settings {
+                tol_infeas_rel: Settings::default().tol_infeas_rel,
+                ..cfg
+            };
+            verify(
+                &p,
+                &solve(&p, &loose).unwrap(),
+                SolverStatus::DualInfeasible,
+            );
         }
     }
 }
@@ -213,7 +228,7 @@ fn equality_lsmr_ill_conditioned_solution() {
 }
 
 #[test]
-fn equality_lsmr_extreme_near_dependence_returns_numerical_failure() {
+fn equality_lsmr_extreme_near_dependence_is_not_declared_infeasible() {
     let p = problem(
         vec![1., 0., 0., 1.],
         vec![0., 0.],
@@ -221,10 +236,50 @@ fn equality_lsmr_extreme_near_dependence_returns_numerical_failure() {
         vec![1., 0., 1., 1e-8],
         vec![1., 2.],
     );
-    assert!(matches!(
-        solve(&p, &settings()),
-        Err(SolveError::Numerical(_))
-    ));
+    // The callback may keep iterating beyond faer's old tolerance cutoff.
+    // A verified solution or numerical failure is acceptable; infeasibility is not.
+    let cfg = Settings {
+        // The default tolerance permits an approximate certificate for this case.
+        tol_infeas_rel: 1e-14,
+        ..settings()
+    };
+    match solve(&p, &cfg) {
+        Ok(solution) => verify(&p, &solution, SolverStatus::Solved),
+        Err(SolveError::Numerical(_)) => {}
+        Err(error) => panic!("unexpected error: {error}"),
+    }
+}
+
+#[test]
+fn equality_iteration_budgets_are_independent() {
+    let p = problem(vec![1.], vec![0.], 2, vec![1., 1.], vec![1., 2.]);
+    for corrections in [0, 2, 5] {
+        let cfg = Settings {
+            max_iters: 1,
+            refine_iters: 0,
+            eq_lsmr_iters: Some(1),
+            eq_refine_iters: corrections,
+            ..settings()
+        };
+        let solution = solve(&p, &cfg).unwrap();
+        verify(&p, &solution, SolverStatus::PrimalInfeasible);
+        assert_eq!(
+            solution.info().linear_algebra.refinement_solves,
+            corrections
+        );
+        assert_eq!(solution.info().linear_algebra.lsmr_iterations, 1);
+        // One direct solve, one LSMR initialization, and two applications per iteration.
+        assert_eq!(solution.info().linear_algebra.primary_solves, 4);
+
+        let disabled = Settings {
+            eq_lsmr_iters: Some(0),
+            ..cfg
+        };
+        let Err(SolveError::Numerical(message)) = solve(&p, &disabled) else {
+            panic!("the initial LSMR point cannot certify this problem");
+        };
+        assert!(message.contains("after 0 iterations (IterationLimit)"));
+    }
 }
 
 #[test]

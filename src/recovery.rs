@@ -4,7 +4,10 @@ use crate::{
     Problem, Settings, SolverStatus,
     central_path::state::State,
     cone::ConeGeometry,
-    linear_algebra::{dot, matrix_mul, matrix_products_into, matrix_transpose_mul},
+    linear_algebra::{
+        dot, matrix_mul_into, matrix_products_into, matrix_transpose_mul,
+        matrix_transpose_mul_into, symmetric_mul_into,
+    },
     presolve::{self, Presolved},
     ruiz::EquilibratedProblem,
 };
@@ -212,7 +215,7 @@ pub(crate) enum Certificate {
 }
 
 /// Homogeneous ray `(x, y, s)` in original units, with its objective slopes.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct Ray {
     pub(crate) x: Vec<f64>,
     pub(crate) y: Vec<f64>,
@@ -245,31 +248,81 @@ impl Ray {
         settings: &Settings,
         ktratio: f64,
     ) -> Option<Certificate> {
+        CertificateWorkspace {
+            ray: self,
+            ..Default::default()
+        }
+        .take_certificate(problem, settings, ktratio)
+    }
+}
+
+/// Reuse candidate coordinates and matrix products until a certificate is accepted.
+#[derive(Default)]
+pub(crate) struct CertificateWorkspace {
+    ray: Ray,
+    products: Products,
+}
+
+impl CertificateWorkspace {
+    /// Form and check the equality certificate candidate (r_x, -r_y, 0).
+    pub(crate) fn certificate_from_residual(
+        &mut self,
+        problem: &Problem,
+        equilibrated: &EquilibratedProblem<'_>,
+        settings: &Settings,
+        residual: &[f64],
+    ) -> Option<Certificate> {
+        let (rx, ry) = residual.split_at(problem.variable_count());
+        equilibrated.unscale_x_into(rx, 1.0, &mut self.ray.x);
+        equilibrated.unscale_y_into(ry, -1.0, &mut self.ray.y);
+        self.ray.s.resize(problem.constraint_count(), 0.0);
+        self.ray.s.fill(0.0);
+        self.ray.bty = dot(problem.b(), &self.ray.y);
+        self.ray.ctx = dot(problem.c(), &self.ray.x);
+        // The residual supplies a candidate directly, without a homogeneous ratio gate.
+        self.take_certificate(problem, settings, f64::INFINITY)
+    }
+
+    pub(crate) fn take_certificate(
+        &mut self,
+        problem: &Problem,
+        settings: &Settings,
+        ktratio: f64,
+    ) -> Option<Certificate> {
+        let ray = &self.ray;
         if ktratio <= settings.certificate_ktratio {
             return None;
         }
-        if self.bty < -settings.tol_infeas_abs {
-            let aty = matrix_transpose_mul(problem.a(), &self.y);
-            let pinfeas = two_norm(&aty) / self.bty.abs().max(two_norm(&self.y)).max(RECOVERY_EPS);
+        if ray.bty < -settings.tol_infeas_abs {
+            matrix_transpose_mul_into(problem.a(), &ray.y, &mut self.products.aty);
+            let aty = &self.products.aty;
+            let pinfeas = two_norm(aty) / ray.bty.abs().max(two_norm(&ray.y)).max(RECOVERY_EPS);
             if pinfeas < settings.tol_infeas_rel {
-                return Some(Certificate::Primal(self));
+                return Some(Certificate::Primal(std::mem::take(&mut self.ray)));
             }
         }
-        if self.ctx < -settings.tol_infeas_abs {
-            let mut ax = matrix_mul(problem.a(), &self.x);
-            let px = problem.p_mul(&self.x);
-            let norm_x = two_norm(&self.x);
-            crate::linear_algebra::add_assign(&mut ax, &self.s);
-            let violation = two_norm(&ax);
+        if ray.ctx < -settings.tol_infeas_abs {
+            matrix_mul_into(problem.a(), &ray.x, &mut self.products.ax);
+            if let Some(p) = problem.p() {
+                symmetric_mul_into(p, &ray.x, &mut self.products.px);
+            } else {
+                self.products.px.resize(problem.variable_count(), 0.0);
+                self.products.px.fill(0.0);
+            }
+            let ax = &mut self.products.ax;
+            let px = &self.products.px;
+            let norm_x = two_norm(&ray.x);
+            crate::linear_algebra::add_assign(ax, &ray.s);
+            let violation = two_norm(ax);
             let dinfeas = (violation
-                / self
+                / ray
                     .ctx
                     .abs()
-                    .max(norm_x + two_norm(&self.s))
+                    .max(norm_x + two_norm(&ray.s))
                     .max(RECOVERY_EPS))
-            .max(two_norm(&px) / self.ctx.abs().max(norm_x).max(RECOVERY_EPS));
+            .max(two_norm(px) / ray.ctx.abs().max(norm_x).max(RECOVERY_EPS));
             if dinfeas < settings.tol_infeas_rel {
-                return Some(Certificate::Dual(self));
+                return Some(Certificate::Dual(std::mem::take(&mut self.ray)));
             }
         }
         None
@@ -321,20 +374,32 @@ impl<'a> Recovery<'a> {
     }
 
     pub(crate) fn update(&mut self, state: &State, sy: f64) -> &RecoveredSolution {
+        self.update_coordinates(state.x(), state.y(), state.s(), state.tau(), sy)
+    }
+
+    /// Recover validated homogeneous coordinates without constructing an owned State.
+    pub(crate) fn update_coordinates(
+        &mut self,
+        x: &[f64],
+        y: &[f64],
+        s: &[f64],
+        tau: f64,
+        sy: f64,
+    ) -> &RecoveredSolution {
         let point = &mut self.point;
         // Keep the original denominator evaluation order.
         point.ktratio = if self.nu == 0 {
             0.0
         } else {
-            sy / (self.nu as f64 * state.tau() * state.tau())
+            sy / (self.nu as f64 * tau * tau)
         };
-        let inverse_tau = state.tau().max(RECOVERY_EPS).recip();
+        let inverse_tau = tau.max(RECOVERY_EPS).recip();
         self.equilibrated
-            .unscale_x_into(state.x(), inverse_tau, &mut point.x);
+            .unscale_x_into(x, inverse_tau, &mut point.x);
         self.equilibrated
-            .unscale_y_into(state.y(), inverse_tau, &mut point.y);
+            .unscale_y_into(y, inverse_tau, &mut point.y);
         self.equilibrated
-            .unscale_s_into(state.s(), inverse_tau, &mut point.s);
+            .unscale_s_into(s, inverse_tau, &mut point.s);
 
         let (problem, x, y, s) = match &mut self.presolve {
             Some(presolve) => {
@@ -383,6 +448,7 @@ fn two_norm(vector: &[f64]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::linear_algebra::matrix_mul;
     use crate::{Cone, CscMatrix, WarmStart, presolve::PresolveOutcome};
 
     fn lp(a: Vec<f64>, rows: usize, b: Vec<f64>, c: Vec<f64>) -> Problem {
@@ -563,6 +629,60 @@ mod tests {
         point.ktratio = 0.0;
         point.measures.dres = f64::NAN;
         assert!(!point.is_solved(&settings));
+    }
+
+    #[test]
+    fn certificate_workspace_overwrites_rejected_candidates_and_transfers_accepted_ray() {
+        let problem = Problem::new(
+            None,
+            vec![-2.0],
+            CscMatrix::zeros(1, 1).unwrap(),
+            vec![2.0],
+            vec![Cone::Zero(1)],
+        )
+        .unwrap();
+        for ruiz_iters in [0, 5] {
+            let settings = Settings {
+                ruiz_iters,
+                ..Settings::default()
+            };
+            let equilibrated = EquilibratedProblem::new(&problem, &settings).unwrap();
+            let mut workspace = CertificateWorkspace::default();
+            for residual in [[-1.0, -2.0], [-3.0, -1.0]] {
+                assert!(
+                    workspace
+                        .certificate_from_residual(&problem, &equilibrated, &settings, &residual)
+                        .is_none()
+                );
+            }
+            let Some(Certificate::Primal(primal)) = workspace.certificate_from_residual(
+                &problem,
+                &equilibrated,
+                &settings,
+                &[0.0, 1.0],
+            ) else {
+                panic!("expected a primal certificate");
+            };
+            let Some(Certificate::Dual(dual)) = workspace.certificate_from_residual(
+                &problem,
+                &equilibrated,
+                &settings,
+                &[1.0, 0.0],
+            ) else {
+                panic!("expected a dual certificate");
+            };
+            assert!(
+                workspace
+                    .certificate_from_residual(&problem, &equilibrated, &settings, &[-2.0, -3.0])
+                    .is_none()
+            );
+            assert_eq!(primal.y, equilibrated.unscale_y(&[-1.0]));
+            assert_eq!(dual.x, equilibrated.unscale_x(&[1.0]));
+            assert_eq!(primal.s, [0.0]);
+            assert_eq!(dual.s, [0.0]);
+            assert_eq!(primal.bty, 2.0 * primal.y[0]);
+            assert_eq!(dual.ctx, -2.0 * dual.x[0]);
+        }
     }
 
     #[test]

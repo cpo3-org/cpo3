@@ -213,7 +213,6 @@ fn solve_core(
         info.warm_start_used = warm_start.map(|_| false);
         let termination = crate::equality::solve(
             problem,
-            geometry,
             &equilibrated,
             &settings,
             &mut recovery,

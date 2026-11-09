@@ -6,6 +6,7 @@ use crate::{LinearSolver, SolveError};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
     // Run controls.
+    /// Maximum interior-point iterations; unused for equality-only problems.
     pub max_iters: usize,
     pub time_limit: Option<Duration>,
     pub verbose: bool,
@@ -68,11 +69,18 @@ pub struct Settings {
     /// Unused by the dedicated equality-only solver.
     pub refine_init_reg: f64,
     /// Additional correction solves per KKT solve; zero returns the initial solve without refinement.
-    /// Equality-only problems instead use ten corrections before falling back to LSMR.
+    /// Equality-only problems use eq_refine_iters instead.
     pub refine_iters: usize,
     /// Positive componentwise backward-error target for iterative refinement.
     /// Unused for equality-only problems, which check optimality directly.
     pub refine_tol: f64,
+
+    // Equality-only solves.
+    /// Maximum LSMR iterations. None uses max(4 * (m + n), 32) after presolve.
+    /// Zero disables LSMR iterations, but still checks the initial point.
+    pub eq_lsmr_iters: Option<usize>,
+    /// Maximum refinement corrections before LSMR. Zero skips corrections.
+    pub eq_refine_iters: usize,
 
     // Outer iterations.
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
@@ -107,6 +115,9 @@ impl Default for Settings {
             refine_init_reg: 1e-12,
             refine_iters: 30,
             refine_tol: 1e-7,
+
+            eq_lsmr_iters: None,
+            eq_refine_iters: 10,
 
             step_fraction: 0.999,
         }
