@@ -4,7 +4,9 @@ pub(crate) mod lsmr;
 
 pub use ::presolve::matrix::MatrixError;
 pub use csc::CscMatrix;
-pub(crate) use kkt::{KktOperator, KktPreconditioner};
+pub(crate) use kkt::{
+    KktLayout, KktOperator, KktPreconditioner, assemble_kkt_pattern, assemble_unshifted_kkt,
+};
 
 use faer::sparse::linalg::matmul::sparse_dense_matmul;
 use faer::{Accum, ColMut, ColRef, Conj, Par, RowRef};

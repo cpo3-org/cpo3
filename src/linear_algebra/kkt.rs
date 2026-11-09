@@ -1,6 +1,6 @@
-//! Matrix-free KKT products, residuals, and a regularized LDL preconditioner.
+//! Matrix-free KKT operators, sparse assembly, and a regularized LDL preconditioner.
 
-use crate::{CscMatrix, Problem, SolveError};
+use crate::{CscMatrix, MatrixError, Problem, linear_solvers::LinearSystemError};
 use faer::{
     Conj, MatMut, MatRef, Par, Side,
     dyn_stack::{MemBuffer, MemStack, StackReq},
@@ -192,6 +192,106 @@ impl BiLinOp<f64> for KktOperator<'_> {
     }
 }
 
+/// Diagonal metadata shared by full and reduced KKT assembly.
+pub(crate) struct KktLayout {
+    /// Position of each diagonal entry in the matrix's value storage.
+    pub(crate) diagonal_positions: Vec<usize>,
+    /// Original diagonal of P, before shifts or Schur-complement updates.
+    pub(crate) p_diagonal: Vec<f64>,
+}
+
+/// Assemble [P, Aᵀ; A, 0] with every constraint row retained.
+pub(crate) fn assemble_unshifted_kkt(problem: &Problem) -> Result<CscMatrix, MatrixError> {
+    let kept_rows: Vec<_> = (0..problem.constraint_count()).collect();
+    let (mut matrix, layout) = assemble_kkt_pattern(problem, &kept_rows)?;
+    for (column, value) in layout.p_diagonal.iter().enumerate() {
+        matrix.values_mut()[layout.diagonal_positions[column]] = *value;
+    }
+    Ok(matrix)
+}
+
+/// Assemble fixed off-diagonal entries and zero-valued diagonal slots.
+/// Constraint rows appear in `kept_rows` order; indices must be distinct and in bounds.
+pub(crate) fn assemble_kkt_pattern(
+    problem: &Problem,
+    kept_rows: &[usize],
+) -> Result<(CscMatrix, KktLayout), MatrixError> {
+    let n = problem.variable_count();
+    let m = kept_rows.len();
+    let dim = n.checked_add(m).ok_or(MatrixError::DimensionOverflow)?;
+    // Every column has a diagonal. Count the remaining upper-triangle entries
+    // before allocating CSC buffers, avoiding triplets and sorting temporaries.
+    let mut pointers = vec![1usize; dim + 1];
+    pointers[0] = 0;
+    if let Some(p) = problem.p() {
+        for column in 0..n {
+            for at in p.column_pointers()[column]..p.column_pointers()[column + 1] {
+                if p.row_indices()[at] != column && p.values()[at] != 0.0 {
+                    pointers[column + 1] += 1;
+                }
+            }
+        }
+    }
+    let mut reduced_rows = vec![usize::MAX; problem.constraint_count()];
+    for (row, &source) in kept_rows.iter().enumerate() {
+        reduced_rows[source] = n + row;
+    }
+    crate::linear_algebra::visit_entries(problem.a(), |source, _, value| {
+        let column = reduced_rows[source];
+        if column != usize::MAX && value != 0.0 {
+            pointers[column + 1] += 1;
+        }
+    });
+    for column in 0..dim {
+        pointers[column + 1] = pointers[column + 1]
+            .checked_add(pointers[column])
+            .ok_or(MatrixError::DimensionOverflow)?;
+    }
+    let mut rows = vec![0; pointers[dim]];
+    let mut values = vec![0.0; pointers[dim]];
+    let mut next = pointers[..dim].to_vec();
+    let mut diagonal_positions = vec![0; dim];
+    let mut p_diagonal = vec![0.0; n];
+    for column in 0..n {
+        if let Some(p) = problem.p() {
+            for at in p.column_pointers()[column]..p.column_pointers()[column + 1] {
+                let row = p.row_indices()[at];
+                let value = p.values()[at];
+                if row == column {
+                    p_diagonal[column] = value;
+                } else if value != 0.0 {
+                    rows[next[column]] = row;
+                    values[next[column]] = value;
+                    next[column] += 1;
+                }
+            }
+        }
+        rows[next[column]] = column;
+        diagonal_positions[column] = next[column];
+    }
+    // A is visited in primal-column order, so each column of A^T is sorted.
+    crate::linear_algebra::visit_entries(problem.a(), |source, row, value| {
+        let column = reduced_rows[source];
+        if column != usize::MAX && value != 0.0 {
+            rows[next[column]] = row;
+            values[next[column]] = value;
+            next[column] += 1;
+        }
+    });
+    for column in n..dim {
+        rows[next[column]] = column;
+        diagonal_positions[column] = next[column];
+    }
+    let matrix = CscMatrix::new(dim, dim, pointers, rows, values)?;
+    Ok((
+        matrix,
+        KktLayout {
+            diagonal_positions,
+            p_diagonal,
+        },
+    ))
+}
+
 /// A fixed inverse of Faer's dynamically regularized LDL factorization.
 /// Both the forward and transpose preconditioner use the same symmetric solve.
 #[derive(Debug)]
@@ -207,14 +307,14 @@ impl KktPreconditioner {
         matrix: &CscMatrix,
         primal_size: usize,
         threads: usize,
-    ) -> Result<Self, SolveError> {
+    ) -> Result<Self, LinearSystemError> {
         let symbolic = sparse_cholesky::factorize_symbolic_cholesky(
             matrix.as_faer().symbolic(),
             Side::Upper,
             sparse_cholesky::SymmetricOrdering::Amd,
             Default::default(),
         )
-        .map_err(|e| SolveError::Numerical(format!("equality LDL symbolic: {e:?}")))?;
+        .map_err(|e| LinearSystemError::Factorization(format!("Faer LDL symbolic: {e:?}")))?;
         let parallelism = match symbolic.raw() {
             sparse_cholesky::SymbolicCholeskyRaw::Simplicial(_) => Par::Seq,
             sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_) if threads == 1 => Par::Seq,
@@ -227,7 +327,9 @@ impl KktPreconditioner {
         let mut buffer = MemBuffer::try_new(
             symbolic.factorize_numeric_ldlt_scratch::<f64>(parallelism, Default::default()),
         )
-        .map_err(|_| SolveError::Numerical("equality LDL workspace allocation failed".into()))?;
+        .map_err(|_| {
+            LinearSystemError::Factorization("Faer LDL workspace allocation failed".into())
+        })?;
         symbolic
             .factorize_numeric_ldlt(
                 &mut values,
@@ -242,7 +344,7 @@ impl KktPreconditioner {
                 MemStack::new(&mut buffer),
                 Default::default(),
             )
-            .map_err(|e| SolveError::Numerical(format!("equality LDL numeric: {e:?}")))?;
+            .map_err(|e| LinearSystemError::Factorization(format!("Faer LDL numeric: {e:?}")))?;
         Ok(Self {
             symbolic,
             values,
@@ -369,8 +471,46 @@ impl BiPrecond<f64> for KktPreconditioner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Cone, CscMatrix, central_path::kkt::assemble_unshifted_kkt};
+    use crate::Cone;
     use faer::Mat;
+
+    #[test]
+    fn assembly_retains_selected_rows_and_diagonal_slots() {
+        let p = CscMatrix::from_triplets(2, 2, vec![0, 0], vec![0, 1], vec![2.0, 1.0]).unwrap();
+        let a =
+            crate::linear_algebra::test_matrix(3, 2, vec![1.0, 2.0, 3.0, 0.0, 4.0, -1.0]).unwrap();
+        let problem = Problem::from_upper_triangle(
+            Some(p),
+            vec![0.0; 2],
+            a,
+            vec![0.0; 3],
+            vec![Cone::Zero(3)],
+        )
+        .unwrap();
+        let (matrix, layout) = assemble_kkt_pattern(&problem, &[2, 0]).unwrap();
+        let expected = [
+            [0.0, 1.0, 4.0, 1.0],
+            [0.0, 0.0, -1.0, 2.0],
+            [0.0, 0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0, 0.0],
+        ];
+        assert_eq!(layout.p_diagonal, [2.0, 0.0]);
+        assert_eq!(matrix.rows(), 4);
+        assert_eq!(layout.diagonal_positions.len(), 4);
+        for (column, &position) in layout.diagonal_positions.iter().enumerate() {
+            assert!(
+                (matrix.column_pointers()[column]..matrix.column_pointers()[column + 1])
+                    .contains(&position)
+            );
+            assert_eq!(matrix.row_indices()[position], column);
+            assert_eq!(matrix.values()[position], 0.0);
+        }
+        for (i, row) in expected.iter().enumerate() {
+            for (j, &value) in row.iter().enumerate() {
+                assert_eq!(matrix.get(i, j).unwrap_or(0.0), value);
+            }
+        }
+    }
 
     #[test]
     fn shifted_products_and_residuals_match_dense_system() {

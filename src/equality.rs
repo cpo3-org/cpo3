@@ -4,9 +4,8 @@
 //! infeasibility candidate; minus its equality block is a primal certificate.
 use crate::{
     Problem, Settings, SolutionInfo, SolveError, SolverStatus,
-    central_path::kkt::assemble_unshifted_kkt,
     linear_algebra::{
-        KktOperator, KktPreconditioner,
+        KktOperator, KktPreconditioner, assemble_unshifted_kkt,
         lsmr::{LsmrStop, lsmr_scratch, lsmr_with_control},
     },
     linear_solvers::LinearAlgebraStats,
@@ -105,7 +104,8 @@ fn prepare_kkt<'a>(
         assemble_unshifted_kkt(problem).map_err(|e| SolveError::Numerical(e.to_string()))?;
     info.linear_algebra.factorizations += 1;
     info.iters = 1;
-    let preconditioner = KktPreconditioner::new(&matrix, problem.variable_count(), threads)?;
+    let preconditioner = KktPreconditioner::new(&matrix, problem.variable_count(), threads)
+        .map_err(|e| SolveError::Numerical(e.to_string()))?;
     Ok((KktOperator::new(problem), preconditioner))
 }
 

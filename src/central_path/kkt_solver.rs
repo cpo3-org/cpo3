@@ -7,7 +7,7 @@
 use crate::{
     CscMatrix, MatrixError, Problem,
     cone::{ConeBlock, ConeGeometry},
-    linear_algebra::KktOperator,
+    linear_algebra::{KktLayout, KktOperator, assemble_kkt_pattern},
     linear_solvers::{
         Factorization, KktSettings, LinearAlgebraStats, LinearSystemError, RefinementWorkspace,
         refine_with, validate_rhs,
@@ -129,10 +129,7 @@ impl ClampPolicy {
 /// complement, so the matrix has `n + kept` rows.
 struct KktPattern {
     variable_count: usize,
-    /// Position of each diagonal entry in the matrix's value storage.
-    diagonal_positions: Vec<usize>,
-    /// Diagonal of `P`.
-    p_diagonal: Vec<f64>,
+    layout: KktLayout,
     bound_rows: BoundRows,
 }
 
@@ -348,6 +345,7 @@ impl KktCache {
     pub(crate) fn nonbinding_floor_limit(&self, mu: f64) -> f64 {
         self.pattern.as_ref().map_or(0.0, |pattern| {
             pattern
+                .layout
                 .p_diagonal
                 .iter()
                 .fold(mu, |bound, p| bound.min(p + mu))
@@ -432,11 +430,16 @@ fn assemble_preconditioner(
     } else {
         BoundRows::keep_all(problem.constraint_count())
     };
-    let (mut matrix, pattern) = build_pattern(problem, bound_rows)?;
+    let (mut matrix, layout) = assemble_kkt_pattern(problem, &bound_rows.kept)?;
+    let pattern = KktPattern {
+        variable_count: problem.variable_count(),
+        layout,
+        bound_rows,
+    };
     let values = matrix.values_mut();
     pattern.write_diagonal(
         values,
-        |index| pattern.diagonal_positions[index],
+        |index| pattern.layout.diagonal_positions[index],
         shift,
         d_diagonal,
         diagonal_floor,
@@ -456,9 +459,9 @@ impl KktPattern {
         delta: f64,
     ) {
         let n = self.variable_count;
-        for index in 0..self.diagonal_positions.len() {
+        for index in 0..self.layout.diagonal_positions.len() {
             values[position(index)] = if index < n {
-                (self.p_diagonal[index] + shift).max(delta)
+                (self.layout.p_diagonal[index] + shift).max(delta)
             } else {
                 -d_diagonal[self.bound_rows.kept[index - n]]
             };
@@ -683,6 +686,7 @@ impl KktWorkspace {
             if floor > shift {
                 workspace.perturbation.extend(
                     pattern
+                        .layout
                         .p_diagonal
                         .iter()
                         .map(|p| (floor - (p + shift)).max(0.0)),
@@ -714,99 +718,6 @@ impl KktWorkspace {
         factorization.stats_mut().absorb(stats);
         result
     }
-}
-
-/// Assemble [P, Aᵀ; A, 0] with every constraint row retained.
-pub(crate) fn assemble_unshifted_kkt(problem: &Problem) -> Result<CscMatrix, KktError> {
-    let (mut matrix, pattern) =
-        build_pattern(problem, BoundRows::keep_all(problem.constraint_count()))?;
-    for (column, value) in pattern.p_diagonal.iter().enumerate() {
-        matrix.values_mut()[pattern.diagonal_positions[column]] = *value;
-    }
-    Ok(matrix)
-}
-
-/// Assemble fixed off-diagonal entries and retain zero-valued diagonal slots.
-fn build_pattern(
-    problem: &Problem,
-    bound_rows: BoundRows,
-) -> Result<(CscMatrix, KktPattern), KktError> {
-    let n = problem.variable_count();
-    let m = bound_rows.kept.len();
-    let dim = n.checked_add(m).ok_or(MatrixError::DimensionOverflow)?;
-    // Every column has a diagonal. Count the remaining upper-triangle entries
-    // before allocating CSC buffers, avoiding triplets and sorting temporaries.
-    let mut pointers = vec![1usize; dim + 1];
-    pointers[0] = 0;
-    if let Some(p) = problem.p() {
-        for column in 0..n {
-            for at in p.column_pointers()[column]..p.column_pointers()[column + 1] {
-                if p.row_indices()[at] != column && p.values()[at] != 0.0 {
-                    pointers[column + 1] += 1;
-                }
-            }
-        }
-    }
-    let mut reduced_rows = vec![usize::MAX; problem.constraint_count()];
-    for (row, &source) in bound_rows.kept.iter().enumerate() {
-        reduced_rows[source] = n + row;
-    }
-    crate::linear_algebra::visit_entries(problem.a(), |source, _, value| {
-        let column = reduced_rows[source];
-        if column != usize::MAX && value != 0.0 {
-            pointers[column + 1] += 1;
-        }
-    });
-    for column in 0..dim {
-        pointers[column + 1] = pointers[column + 1]
-            .checked_add(pointers[column])
-            .ok_or(MatrixError::DimensionOverflow)?;
-    }
-    let mut rows = vec![0; pointers[dim]];
-    let mut values = vec![0.0; pointers[dim]];
-    let mut next = pointers[..dim].to_vec();
-    let mut diagonal_positions = vec![0; dim];
-    let mut p_diagonal = vec![0.0; n];
-    for column in 0..n {
-        if let Some(p) = problem.p() {
-            for at in p.column_pointers()[column]..p.column_pointers()[column + 1] {
-                let row = p.row_indices()[at];
-                let value = p.values()[at];
-                if row == column {
-                    p_diagonal[column] = value;
-                } else if value != 0.0 {
-                    rows[next[column]] = row;
-                    values[next[column]] = value;
-                    next[column] += 1;
-                }
-            }
-        }
-        rows[next[column]] = column;
-        diagonal_positions[column] = next[column];
-    }
-    // A is visited in primal-column order, so each column of A^T is sorted.
-    crate::linear_algebra::visit_entries(problem.a(), |source, row, value| {
-        let column = reduced_rows[source];
-        if column != usize::MAX && value != 0.0 {
-            rows[next[column]] = row;
-            values[next[column]] = value;
-            next[column] += 1;
-        }
-    });
-    for column in n..dim {
-        rows[next[column]] = column;
-        diagonal_positions[column] = next[column];
-    }
-    let matrix = CscMatrix::new(dim, dim, pointers, rows, values)?;
-    Ok((
-        matrix,
-        KktPattern {
-            variable_count: n,
-            diagonal_positions,
-            p_diagonal,
-            bound_rows,
-        },
-    ))
 }
 
 #[cfg(test)]

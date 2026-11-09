@@ -7,7 +7,7 @@ use crate::{
     Problem, Settings, Solution, SolutionInfo, SolverStatus,
     central_path::{
         init::{self, WarmStart},
-        kkt::KktCache,
+        kkt_solver::KktCache,
         mehrotra::{self, MehrotraError},
         state::{State, StateError},
     },
