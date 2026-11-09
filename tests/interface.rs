@@ -14,6 +14,8 @@ fn settings_use_short_names() {
     let settings = Settings::default();
 
     assert_eq!(settings.max_iters, 100);
+    assert_eq!(settings.eq_lsmr_iters, None);
+    assert_eq!(settings.eq_refine_iters, 10);
     assert_eq!(settings.tol_gap_abs, 1e-8);
     assert_eq!(settings.tol_gap_rel, 1e-8);
     assert_eq!(settings.linear_solver, LinearSolver::Faer);
