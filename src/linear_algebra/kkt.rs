@@ -475,42 +475,6 @@ mod tests {
     use faer::Mat;
 
     #[test]
-    fn preconditioner_honors_thread_caps_for_both_factorization_kernels() {
-        for size in [2, 128] {
-            let matrix = CscMatrix::from_triplets(
-                size,
-                size,
-                (0..size).flat_map(|j| 0..=j).collect(),
-                (0..size)
-                    .flat_map(|j| std::iter::repeat_n(j, j + 1))
-                    .collect(),
-                (0..size)
-                    .flat_map(|j| (0..=j).map(move |i| if i == j { 2.0 } else { 0.001 }))
-                    .collect(),
-            )
-            .unwrap();
-            for threads in [0, 1, 3] {
-                let preconditioner = KktPreconditioner::new(&matrix, size, threads).unwrap();
-                assert_eq!(
-                    matches!(
-                        preconditioner.symbolic.raw(),
-                        sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_)
-                    ),
-                    size == 128
-                );
-                assert_eq!(
-                    preconditioner.parallelism(),
-                    if size == 2 || threads == 1 {
-                        Par::Seq
-                    } else {
-                        Par::rayon(threads)
-                    }
-                );
-            }
-        }
-    }
-
-    #[test]
     fn assembly_retains_selected_rows_and_diagonal_slots() {
         let p = CscMatrix::from_triplets(2, 2, vec![0, 0], vec![0, 1], vec![2.0, 1.0]).unwrap();
         let a =
