@@ -4,7 +4,26 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if CHOLMOD_MAIN_VERSION != 5 || CHOLMOD_SUB_VERSION < 2 || CHOLMOD_SUB_VERSION > 3
+#error "The runtime adapter supports CHOLMOD 5.2.x and 5.3.x layouts only"
+#endif
+
+// Must match Api in cholmod.rs. All symbols come from the runtime library;
+// this shim deliberately has no direct references to CHOLMOD functions.
 typedef struct {
+    int (*start)(cholmod_common *);
+    int (*finish)(cholmod_common *);
+    cholmod_factor *(*analyze)(cholmod_sparse *, cholmod_common *);
+    int (*factorize)(cholmod_sparse *, cholmod_factor *, cholmod_common *);
+    int (*solve2)(int, cholmod_factor *, cholmod_dense *, cholmod_sparse *,
+                  cholmod_dense **, cholmod_sparse **, cholmod_dense **,
+                  cholmod_dense **, cholmod_common *);
+    int (*free_dense)(cholmod_dense **, cholmod_common *);
+    int (*free_factor)(cholmod_factor **, cholmod_common *);
+} Cpo3CholmodApi;
+
+typedef struct {
+    const Cpo3CholmodApi *api;
     cholmod_common common;
     cholmod_sparse matrix;
     cholmod_factor *factor;
@@ -15,19 +34,21 @@ typedef struct {
 
 void cpo3_cholmod_free(Cpo3Cholmod *solver) {
     if (!solver) return;
-    cholmod_l_free_dense(&solver->solution, &solver->common);
-    cholmod_l_free_dense(&solver->workspace, &solver->common);
-    cholmod_l_free_dense(&solver->extra_workspace, &solver->common);
-    cholmod_l_free_factor(&solver->factor, &solver->common);
-    cholmod_l_finish(&solver->common);
+    solver->api->free_dense(&solver->solution, &solver->common);
+    solver->api->free_dense(&solver->workspace, &solver->common);
+    solver->api->free_dense(&solver->extra_workspace, &solver->common);
+    solver->api->free_factor(&solver->factor, &solver->common);
+    solver->api->finish(&solver->common);
     free(solver);
 }
 
-Cpo3Cholmod *cpo3_cholmod_new(size_t n, int64_t *columns, int64_t *rows,
-                            double *values, int threads, int *status) {
+Cpo3Cholmod *cpo3_cholmod_new(const Cpo3CholmodApi *api, size_t n,
+                            int64_t *columns, int64_t *rows, double *values,
+                            int threads, int *status) {
     Cpo3Cholmod *solver = calloc(1, sizeof(*solver));
     if (!solver) { *status = CHOLMOD_OUT_OF_MEMORY; return NULL; }
-    if (!cholmod_l_start(&solver->common)) {
+    solver->api = api;
+    if (!api->start(&solver->common)) {
         *status = CHOLMOD_INVALID;
         free(solver);
         return NULL;
@@ -49,14 +70,14 @@ Cpo3Cholmod *cpo3_cholmod_new(size_t n, int64_t *columns, int64_t *rows,
         .stype = 1, .itype = CHOLMOD_LONG, .xtype = CHOLMOD_REAL,
         .dtype = CHOLMOD_DOUBLE, .sorted = 1, .packed = 1
     };
-    solver->factor = cholmod_l_analyze(&solver->matrix, common);
+    solver->factor = api->analyze(&solver->matrix, common);
     *status = common->status;
     if (!solver->factor) { cpo3_cholmod_free(solver); return NULL; }
     return solver;
 }
 
 int cpo3_cholmod_factor(Cpo3Cholmod *solver, size_t *positive, size_t *negative) {
-    if (!cholmod_l_factorize(&solver->matrix, solver->factor, &solver->common)) {
+    if (!solver->api->factorize(&solver->matrix, solver->factor, &solver->common)) {
         return solver->common.status;
     }
     if (solver->common.status != CHOLMOD_OK) return solver->common.status;
@@ -82,9 +103,9 @@ int cpo3_cholmod_solve(Cpo3Cholmod *solver, size_t columns, double *rhs) {
         .nrow = n, .ncol = columns, .nzmax = n * columns, .d = n,
         .x = rhs, .xtype = CHOLMOD_REAL, .dtype = CHOLMOD_DOUBLE
     };
-    if (!cholmod_l_solve2(CHOLMOD_A, solver->factor, &matrix, NULL,
-                         &solver->solution, NULL, &solver->workspace,
-                         &solver->extra_workspace, &solver->common)) {
+    if (!solver->api->solve2(CHOLMOD_A, solver->factor, &matrix, NULL,
+                            &solver->solution, NULL, &solver->workspace,
+                            &solver->extra_workspace, &solver->common)) {
         return solver->common.status;
     }
     for (size_t column = 0; column < columns; ++column) {

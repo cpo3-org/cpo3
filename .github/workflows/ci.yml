@@ -59,5 +59,13 @@ jobs:
           echo "CPO3_MKL_RT=$PWD/.venv/lib/libmkl_rt.so.2" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$PWD/.venv/lib" >> "$GITHUB_ENV"
       - run: .venv/bin/python -c "import cpo3; assert cpo3.LinearSolver('${{ matrix.backend }}').is_available()"
+      - if: matrix.backend == 'cholmod'
+        run: |
+          .venv/bin/python - <<'PY'
+          import subprocess
+          from cpo3 import bindings
+          dependencies = subprocess.check_output(["ldd", bindings.__file__], text=True)
+          assert "cholmod" not in dependencies.lower(), dependencies
+          PY
       - run: cargo test --locked --features mps,${{ matrix.backend }}
       - run: .venv/bin/python -m pytest

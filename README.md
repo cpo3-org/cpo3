@@ -76,18 +76,30 @@ applications can enable the corresponding features in their Cargo dependency.
   rejected: Apple's sparse solver has no per-solve threading control. Its
   process-wide `VECLIB_MAXIMUM_THREADS` setting must be configured before startup
   if needed; cpo3 never modifies it.
-- **CHOLMOD:** requires SuiteSparse with CHOLMOD 5.2 or later, including headers
-  and `pkg-config` metadata at build time and shared libraries at runtime.
-  Install with `brew install suite-sparse pkg-config` on macOS or
-  `sudo apt-get install libsuitesparse-dev pkg-config` on Ubuntu 24.04 or later.
-  Set `PKG_CONFIG_PATH` to the directory containing `cholmod.pc` or `CHOLMOD.pc`
-  if needed.
+- **CHOLMOD:** loads a separately installed SuiteSparse runtime when first
+  requested. With a wheel that includes the `cholmod` feature, install the
+  runtime with `brew install suite-sparse` on macOS,
+  `sudo apt-get install libcholmod5` on Ubuntu 24.04, or
+  `conda install -c conda-forge suitesparse` in a Conda environment.
+  No rebuild is needed. The loader searches the system library path, standard
+  Homebrew/MacPorts locations, and the active `CONDA_PREFIX`.
+  Set `CPO3_CHOLMOD` to the full shared-library path before starting Python to
+  override discovery; the library's dependencies must also be discoverable by
+  the operating system. Availability is cached for the process lifetime.
+  Supported CHOLMOD versions are 5.2.x and 5.3.x; other versions are rejected
+  before accessing version-dependent structs. A missing or incompatible runtime
+  disables only CHOLMOD, so importing cpo3 and using Faer still works.
   Select `LinearSolver.CHOLMOD`. The adapter uses simplicial LDLᵀ, since CHOLMOD's
   supernodal LLᵀ cannot factor our indefinite KKT systems. It does not pivot;
   failed factorizations and incorrect inertia use cpo3's existing recovery path.
   Positive `threads` settings cap CHOLMOD's per-instance OpenMP work; the
   simplicial factorization itself is sequential. No process-wide thread settings
   are changed.
+  Building cpo3 from source with this feature still requires compatible headers
+  and `pkg-config` metadata: install `suite-sparse pkg-config` with Homebrew or
+  `libsuitesparse-dev pkg-config` with apt. Set `PKG_CONFIG_PATH` to the directory
+  containing `cholmod.pc` or `CHOLMOD.pc` if needed. The build uses the headers
+  only; it neither links nor bundles SuiteSparse libraries.
 - **PARDISO:** requires a compatible Intel oneMKL shared runtime installed
   separately. Select `LinearSolver.PARDISO`. Set `CPO3_MKL_RT` to the runtime's
   full path before starting Python if it is not on the system library path.

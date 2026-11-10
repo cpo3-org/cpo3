@@ -35,7 +35,10 @@ impl LinearSolver {
     pub fn is_available(self) -> bool {
         match self {
             Self::Faer => true,
-            Self::Cholmod => cfg!(feature = "cholmod"),
+            #[cfg(feature = "cholmod")]
+            Self::Cholmod => cholmod::available(),
+            #[cfg(not(feature = "cholmod"))]
+            Self::Cholmod => false,
             #[cfg(all(feature = "accelerate", target_os = "macos"))]
             Self::Accelerate => accelerate::available(),
             #[cfg(not(all(feature = "accelerate", target_os = "macos")))]

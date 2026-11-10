@@ -26,7 +26,7 @@ crate-type = ["cdylib", "rlib"]
 default = []
 mps = ["dep:mps"]
 accelerate = ["dep:cc"]
-cholmod = ["dep:cc", "dep:pkg-config"]
+cholmod = ["dep:cc", "dep:pkg-config", "dep:libloading"]
 pardiso = ["dep:libloading"]
 python = [
     "dep:numpy",

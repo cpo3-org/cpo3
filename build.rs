@@ -11,11 +11,14 @@ fn main() {
     #[cfg(feature = "cholmod")]
     {
         println!("cargo:rerun-if-changed=src/linear_solvers/cholmod.c");
-        let library = pkg_config::Config::new()
-            .atleast_version("5.2")
+        // Only use the headers; emitting link metadata would make CHOLMOD
+        // mandatory when loading cpo3, even if another backend is selected.
+        let mut config = pkg_config::Config::new();
+        config.cargo_metadata(false).range_version("5.2".."5.4");
+        let library = config
             .probe("cholmod")
-            .or_else(|_| pkg_config::Config::new().atleast_version("5.2").probe("CHOLMOD"))
-            .expect("the cholmod feature requires CHOLMOD >= 5.2; set PKG_CONFIG_PATH to its pkgconfig directory");
+            .or_else(|_| config.probe("CHOLMOD"))
+            .expect("the cholmod feature requires CHOLMOD 5.2.x or 5.3.x headers; set PKG_CONFIG_PATH to its pkgconfig directory");
         cc::Build::new()
             .file("src/linear_solvers/cholmod.c")
             .includes(library.include_paths)
