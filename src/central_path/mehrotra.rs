@@ -768,7 +768,5 @@ mod tests {
             .unwrap();
         }
         assert_eq!(cache.clamp.floor(), 1e-20);
-        assert_eq!(cache.stats().clamp_increases, 0);
-        assert!(cache.stats().clamp_decreases >= 8);
     }
 }

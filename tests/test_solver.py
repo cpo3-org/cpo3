@@ -203,7 +203,6 @@ def test_bound_elimination(
     )
     assert_solution(coupled_qp, solution)
     assert solution.info.linear_solver is backend
-    assert solution.info.eliminate_bounds is eliminate_bounds
     assert solution.info.factorizations > 0
     assert solution.info.primary_solves > 0
 
@@ -241,7 +240,6 @@ def test_presolve_solves_without_factorization(
     assert solution.info.factorizations == 0
     assert solution.info.primary_solves == 0
     assert solution.info.cvxopt_init_used is None
-    assert solution.info.presolve_parallel_comparisons is None
     assert solution.info.solve_time >= solution.info.presolve_time
 
 
@@ -292,26 +290,22 @@ def test_warm_start_screening_and_forcing() -> None:
     settings = cpo3.Settings(presolve=False, threads=1)
     cold = cpo3.solve(p, settings=settings)
     assert cold.info.warm_start_used is None
-    assert cold.info.warm_start_score is None
     assert cold.info.cvxopt_init_used is False
     again = cpo3.solve(p, settings=settings, warm_start=(cold.x, cold.y, cold.s))
     assert again.status is cpo3.SolverStatus.SOLVED
     assert again.info.warm_start_used is True
-    assert np.isfinite(again.info.warm_start_score)
     assert again.info.cvxopt_init_used is None
 
     junk = (np.array([1e6, -1e6]), np.array([-1, 1e-9, 5e3]), np.array([1e3, -7, 1e-9]))
     rejected = cpo3.solve(p, settings=settings, warm_start=junk)
     assert rejected.status is cpo3.SolverStatus.SOLVED
     assert rejected.info.warm_start_used is False
-    assert np.isfinite(rejected.info.warm_start_score)
     assert rejected.info.cvxopt_init_used is False
 
     forced = cpo3.Settings(presolve=False, threads=1, force_warm_start=True)
     used = cpo3.solve(p, settings=forced, warm_start=junk)
     assert used.status is cpo3.SolverStatus.SOLVED
     assert used.info.warm_start_used is True
-    assert used.info.warm_start_score == rejected.info.warm_start_score
     assert used.info.cvxopt_init_used is None
     without_warm = cpo3.solve(p, settings=forced)
     assert without_warm.status is cpo3.SolverStatus.SOLVED

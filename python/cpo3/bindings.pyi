@@ -65,9 +65,6 @@ class SolutionInfo:
     def comp(self) -> float: ...
 
     @property
-    def warm_start_score(self) -> float | None: ...
-
-    @property
     def warm_start_used(self) -> bool | None: ...
 
     @property
@@ -83,49 +80,13 @@ class SolutionInfo:
     def presolve_time(self) -> float: ...
 
     @property
-    def presolve_parallel_comparisons(self) -> int | None: ...
-
-    @property
     def primary_solves(self) -> int: ...
-
-    @property
-    def refinement_accurate(self) -> int: ...
-
-    @property
-    def refinement_forecast(self) -> int: ...
-
-    @property
-    def refinement_divergence(self) -> int: ...
-
-    @property
-    def refinement_budget(self) -> int: ...
-
-    @property
-    def refinement_nonfinite(self) -> int: ...
-
-    @property
-    def clamp_increases(self) -> int: ...
-
-    @property
-    def clamp_decreases(self) -> int: ...
-
-    @property
-    def refinement_clamp_limited(self) -> int: ...
-
-    @property
-    def refinement_solve_limited(self) -> int: ...
-
-    @property
-    def refinement_ambiguous(self) -> int: ...
 
     @property
     def refinement_solves(self) -> int: ...
 
     @property
     def lsmr_iterations(self) -> int: ...
-
-    @property
-    def refinement_settled(self) -> int: ...
 
     @property
     def refinement_failures(self) -> int: ...
@@ -138,9 +99,6 @@ class SolutionInfo:
 
     @property
     def linear_solver(self) -> LinearSolver: ...
-
-    @property
-    def eliminate_bounds(self) -> bool: ...
 
 
 class Solution:
@@ -175,7 +133,8 @@ def _solve(
     problem: _Problem,
     settings: Settings,
     *,
-    warm_x: npt.NDArray[np.float64] | None = ...,
-    warm_y: npt.NDArray[np.float64] | None = ...,
-    warm_s: npt.NDArray[np.float64] | None = ...,
+    warm_start: tuple[
+        npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]
+    ]
+    | None = ...,
 ) -> Solution: ...

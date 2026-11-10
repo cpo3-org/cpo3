@@ -25,6 +25,12 @@ type PyCscParts<'py> = (
     PyReadonlyArray1<'py, f64>,
 );
 
+type PyWarmStart<'py> = (
+    PyReadonlyArray1<'py, f64>,
+    PyReadonlyArray1<'py, f64>,
+    PyReadonlyArray1<'py, f64>,
+);
+
 /// Copy borrowed NumPy buffers directly into the final Rust-owned matrix.
 fn matrix_from_parts(parts: PyCscParts<'_>) -> PyResult<CscMatrix> {
     let (rows, columns, pointers, indices, values) = parts;
@@ -191,11 +197,6 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn warm_start_score(&self) -> Option<f64> {
-        self.inner.warm_start_score
-    }
-
-    #[getter]
     fn warm_start_used(&self) -> Option<bool> {
         self.inner.warm_start_used
     }
@@ -225,11 +226,6 @@ impl PySolutionInfo {
         self.inner.presolve_time.as_secs_f64()
     }
 
-    #[getter]
-    fn presolve_parallel_comparisons(&self) -> Option<usize> {
-        self.inner.presolve_parallel_comparisons
-    }
-
     /// Initial linear solves attempted for KKT right-hand sides.
     ///
     /// Includes initialization, internal retries, and equality-only LSMR
@@ -237,56 +233,6 @@ impl PySolutionInfo {
     #[getter]
     fn primary_solves(&self) -> usize {
         self.inner.linear_algebra.primary_solves
-    }
-
-    #[getter]
-    fn refinement_accurate(&self) -> usize {
-        self.inner.linear_algebra.refinement_accurate
-    }
-
-    #[getter]
-    fn refinement_forecast(&self) -> usize {
-        self.inner.linear_algebra.refinement_forecast
-    }
-
-    #[getter]
-    fn refinement_divergence(&self) -> usize {
-        self.inner.linear_algebra.refinement_divergence
-    }
-
-    #[getter]
-    fn refinement_budget(&self) -> usize {
-        self.inner.linear_algebra.refinement_budget
-    }
-
-    #[getter]
-    fn refinement_nonfinite(&self) -> usize {
-        self.inner.linear_algebra.refinement_nonfinite
-    }
-
-    #[getter]
-    fn clamp_increases(&self) -> usize {
-        self.inner.linear_algebra.clamp_increases
-    }
-
-    #[getter]
-    fn clamp_decreases(&self) -> usize {
-        self.inner.linear_algebra.clamp_decreases
-    }
-
-    #[getter]
-    fn refinement_clamp_limited(&self) -> usize {
-        self.inner.linear_algebra.refinement_clamp_limited
-    }
-
-    #[getter]
-    fn refinement_solve_limited(&self) -> usize {
-        self.inner.linear_algebra.refinement_solve_limited
-    }
-
-    #[getter]
-    fn refinement_ambiguous(&self) -> usize {
-        self.inner.linear_algebra.refinement_ambiguous
     }
 
     /// Iterations of the equality-only LSMR fallback.
@@ -301,11 +247,6 @@ impl PySolutionInfo {
     #[getter]
     fn refinement_solves(&self) -> usize {
         self.inner.linear_algebra.refinement_solves
-    }
-
-    #[getter]
-    fn refinement_settled(&self) -> usize {
-        self.inner.linear_algebra.refinement_settled
     }
 
     #[getter]
@@ -328,11 +269,6 @@ impl PySolutionInfo {
         py.import("cpo3.settings")?
             .getattr("LinearSolver")?
             .call1((self.inner.linear_solver.as_str(),))
-    }
-
-    #[getter]
-    fn eliminate_bounds(&self) -> bool {
-        self.inner.eliminate_bounds
     }
 }
 
@@ -375,30 +311,23 @@ impl PySolution {
 }
 
 #[pyfunction(name = "_solve")]
-#[pyo3(signature = (problem, settings, *, warm_x = None, warm_y = None, warm_s = None))]
+#[pyo3(signature = (problem, settings, *, warm_start = None))]
 fn solve_py(
     py: Python<'_>,
     problem: &PyProblem,
     settings: &Bound<'_, PyAny>,
-    warm_x: Option<PyReadonlyArray1<'_, f64>>,
-    warm_y: Option<PyReadonlyArray1<'_, f64>>,
-    warm_s: Option<PyReadonlyArray1<'_, f64>>,
+    warm_start: Option<PyWarmStart<'_>>,
 ) -> PyResult<PySolution> {
     let settings = settings::from_python(settings)?;
     // The frozen Python problem stays borrowed for this synchronous detach.
     let problem = &problem.inner;
-    let warm = match (warm_x, warm_y, warm_s) {
-        (Some(x), Some(y), Some(s)) => Some(WarmStart {
+    let warm = match warm_start {
+        Some((x, y, s)) => Some(WarmStart {
             x: array_slice(&x, "warm_start x")?.to_vec(),
             y: array_slice(&y, "warm_start y")?.to_vec(),
             s: array_slice(&s, "warm_start s")?.to_vec(),
         }),
-        (None, None, None) => None,
-        _ => {
-            return Err(PyValueError::new_err(
-                "warm_start requires all of x, y, and s",
-            ));
-        }
+        None => None,
     };
 
     match py.detach(move || solve_from(problem, &settings, warm.as_ref())) {

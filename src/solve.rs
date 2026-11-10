@@ -96,9 +96,9 @@ pub fn solve_from(
             Some((problem.constraint_count(), problem.variable_count())),
         );
         reporter.finish(status, 0, elapsed, solution.info.pobj);
-        (solution, None)
+        solution
     };
-    let (mut solution, comparisons) = match outcome {
+    let mut solution = match outcome {
         PresolveOutcome::Solved(x, y) => {
             let ax = matrix_mul(problem.a(), &x);
             let mut s = Vec::new();
@@ -120,18 +120,15 @@ pub fn solve_from(
                 (x, vec![f64::NAN; problem.constraint_count()], s),
             )
         }
-        PresolveOutcome::Unchanged(comparisons) => (
-            solve_core(
-                problem,
-                &geometry,
-                settings,
-                warm_start,
-                Some((0, 0)),
-                None,
-                started,
-            )?,
-            Some(comparisons),
-        ),
+        PresolveOutcome::Unchanged => solve_core(
+            problem,
+            &geometry,
+            settings,
+            warm_start,
+            Some((0, 0)),
+            None,
+            started,
+        )?,
         PresolveOutcome::Reduced(presolved) => {
             if presolved.problem().variable_count() == 0 {
                 let (x, y) = presolved.expand_point(&[], &[]);
@@ -151,15 +148,11 @@ pub fn solve_from(
                     Some((problem, &presolved, &geometry)),
                     started,
                 )?;
-                (
-                    expand_solution(problem, &geometry, &presolved, reduced),
-                    Some(presolved.parallel_comparisons),
-                )
+                expand_solution(problem, &geometry, &presolved, reduced)
             }
         }
     };
     solution.info.presolve_time = presolve_time;
-    solution.info.presolve_parallel_comparisons = comparisons;
     solution.info.solve_time = started.elapsed();
     Ok(solution)
 }

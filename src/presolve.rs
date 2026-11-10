@@ -9,7 +9,7 @@ use std::time::Duration;
 pub(crate) enum PresolveOutcome {
     Reduced(Box<Presolved>),
     Solved(Vec<f64>, Vec<f64>),
-    Unchanged(usize),
+    Unchanged,
     PrimalInfeasible(Vec<f64>),
     DualInfeasible(Vec<f64>),
 }
@@ -19,7 +19,6 @@ pub(crate) struct Presolved {
     map: native::problem::ConicMap,
     original_rows: usize,
     original_columns: usize,
-    pub(crate) parallel_comparisons: usize,
 }
 /// Reusable native mapping and postsolve buffers for iteration recovery.
 pub(crate) struct RecoveryWorkspace {
@@ -159,9 +158,7 @@ pub(crate) fn presolve(
     }
     let result = native::Presolver::new(settings)?.presolve(original.into());
     Ok(match result.outcome {
-        native::Outcome::Unchanged(_) => {
-            PresolveOutcome::Unchanged(result.stats.parallel_comparisons)
-        }
+        native::Outcome::Unchanged(_) => PresolveOutcome::Unchanged,
         native::Outcome::Solved(p) => {
             PresolveOutcome::Solved(p.x, original_dual(original, &p.y, &p.conic_dual))
         }
@@ -198,7 +195,6 @@ pub(crate) fn presolve(
                 postsolve: r.postsolve,
                 original_rows: original.constraint_count(),
                 original_columns: original.variable_count(),
-                parallel_comparisons: result.stats.parallel_comparisons,
             }))
         }
     })

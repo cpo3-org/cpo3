@@ -25,7 +25,6 @@ def test_metadata_and_original_coordinates(fixed_variable: bool) -> None:
     )
     assert s.info.presolve_rows_removed == int(fixed_variable)
     assert s.info.presolve_columns_removed == int(fixed_variable)
-    assert s.info.presolve_parallel_comparisons is not None
     assert s.info.factorizations > 0
     assert s.info.solve_time >= s.info.presolve_time
 
@@ -45,7 +44,6 @@ def test_infeasibility_certificates(presolve: bool, primal: bool) -> None:
     assert (s.info.factorizations == 0) == presolve
     assert s.info.cvxopt_init_used is (None if presolve else False)
     assert np.isnan(s.info.pobj) and np.isnan(s.info.dobj)
-    assert s.info.presolve_parallel_comparisons is None
     assert s.info.solve_time >= s.info.presolve_time
     if primal:
         assert s.status is cpo3.SolverStatus.PRIMAL_INFEASIBLE

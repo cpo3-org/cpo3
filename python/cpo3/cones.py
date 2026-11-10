@@ -50,6 +50,7 @@ class SecondOrderCone(Cone):
     dim: int
 
     def __post_init__(self) -> None:
+        _validate_positive(self.dim, "second-order-cone dim")
         if self.dim < 2:
             raise ValueError("second-order-cone dim must be at least two")
 

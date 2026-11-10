@@ -65,8 +65,6 @@ pub(crate) struct KktCache {
 #[derive(Default)]
 pub(crate) struct ClampPolicy {
     floor: Option<f64>,
-    increases: usize,
-    decreases: usize,
 }
 
 impl ClampPolicy {
@@ -86,7 +84,6 @@ impl ClampPolicy {
     fn increase(&mut self) -> f64 {
         let floor = self.floor();
         let next = (floor * 10.0).min(Self::MAXIMUM);
-        self.increases += usize::from(next > floor);
         self.floor = Some(next);
         next
     }
@@ -119,7 +116,6 @@ impl ClampPolicy {
             // A retry prevents immediate relaxation after an accepted step.
             let floor = self.floor();
             let next = (floor / 10.0).max(Self::MINIMUM);
-            self.decreases += usize::from(next < floor);
             self.floor = Some(next);
         }
     }
@@ -358,8 +354,6 @@ impl KktCache {
             .as_ref()
             .map_or_else(LinearAlgebraStats::default, Factorization::stats);
         stats.factorizations = self.factorizations;
-        stats.clamp_increases = self.clamp.increases;
-        stats.clamp_decreases = self.clamp.decreases;
         stats
     }
 }
@@ -776,12 +770,12 @@ mod cache_tests {
             refinement_settled: 5,
             ..LinearAlgebraStats::default()
         };
-        for (clamp, solve, settled, factor, increases, decreases) in [
-            (0, 0, 0, 0.1, 0, 1),
-            (0, 0, 1, 1.0, 0, 0),
-            (1, 0, 1, 0.1, 0, 1),
-            (0, 1, 1, 10.0, 1, 0),
-            (1, 1, 1, 1.0, 0, 0),
+        for (clamp, solve, settled, factor) in [
+            (0, 0, 0, 0.1),
+            (0, 0, 1, 1.0),
+            (1, 0, 1, 0.1),
+            (0, 1, 1, 10.0),
+            (1, 1, 1, 1.0),
         ] {
             let mut policy = ClampPolicy::default();
             let start = policy.start_step(1e-8);
@@ -793,7 +787,6 @@ mod cache_tests {
             };
             policy.accepted_step(start, before, after);
             assert!((policy.floor() / start - factor).abs() < 1e-14);
-            assert_eq!((policy.increases, policy.decreases), (increases, decreases));
         }
     }
 
@@ -961,7 +954,6 @@ mod cache_tests {
         assert!((solution[0] - 1.0).abs() < 1e-10);
         assert!((solution[1] - 2.0).abs() < 1e-10);
         assert!(cache.stats().refinement_solves > 0);
-        assert_eq!(cache.stats().refinement_accurate, 1);
     }
 
     #[test]

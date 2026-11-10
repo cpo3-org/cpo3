@@ -29,13 +29,11 @@ pub(crate) enum InitialStart {
     Warm,
 }
 
-/// The selected start and the separate warm-screening results.
+/// The selected start and whether a warm start was supplied.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InitReport {
     pub(crate) start: InitialStart,
     pub(crate) warm_start_supplied: bool,
-    /// Local-norm score used to accept or reject the best warm candidate.
-    pub(crate) warm_start_score: Option<f64>,
 }
 
 const WARM_FLOORS: [f64; 3] = [1e-12, 1e-6, 1e-3];
@@ -352,17 +350,14 @@ pub(crate) fn initial_state(
 ) -> Result<(State, InitReport), StateError> {
     debug_assert!(geometry.barrier_parameter() > 0);
     let problem = equilibrated.problem();
-    let mut warm_start_score = None;
     if let Some(warm) = warm {
         if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm) {
-            warm_start_score = Some(score);
             if settings.force_warm_start || score <= WARM_THRESHOLD {
                 return Ok((
                     candidate,
                     InitReport {
                         start: InitialStart::Warm,
                         warm_start_supplied: true,
-                        warm_start_score,
                     },
                 ));
             }
@@ -379,7 +374,6 @@ pub(crate) fn initial_state(
         InitReport {
             start,
             warm_start_supplied: warm.is_some(),
-            warm_start_score,
         },
     ))
 }

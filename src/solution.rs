@@ -46,11 +46,8 @@ pub struct SolutionInfo {
     pub dres: f64,
     pub comp: f64,
     pub linear_solver: LinearSolver,
-    pub eliminate_bounds: bool,
     /// Whether a supplied warm start was used; `None` when none was supplied.
     pub warm_start_used: Option<bool>,
-    /// Score used to screen the best warm candidate; `None` without one.
-    pub warm_start_score: Option<f64>,
     /// `Some(true)` when the CVXOPT-style point started the solve and
     /// `Some(false)` for the canonical point, including after a fallback;
     /// `None` when an accepted warm start was used or no interior-point
@@ -61,26 +58,23 @@ pub struct SolutionInfo {
     pub presolve_columns_removed: usize,
     /// Presolve duration, excluding core solve and postsolve.
     pub presolve_time: Duration,
-    /// None when presolve is disabled or returns a direct solution or certificate.
-    pub presolve_parallel_comparisons: Option<usize>,
     /// Linear-algebra counters over the solve.
     pub linear_algebra: LinearAlgebraStats,
 }
 
 impl SolutionInfo {
     pub(crate) fn new(settings: &Settings, init_report: Option<init::InitReport>) -> Self {
-        let (warm_start_used, warm_start_score, cvxopt_init_used) = match init_report {
+        let (warm_start_used, cvxopt_init_used) = match init_report {
             Some(init) => (
                 init.warm_start_supplied
                     .then_some(init.start == init::InitialStart::Warm),
-                init.warm_start_score,
                 match init.start {
                     init::InitialStart::Canonical => Some(false),
                     init::InitialStart::Cvxopt => Some(true),
                     init::InitialStart::Warm => None,
                 },
             ),
-            None => (None, None, None),
+            None => (None, None),
         };
         Self {
             iters: 0,
@@ -91,14 +85,11 @@ impl SolutionInfo {
             dres: f64::NAN,
             comp: f64::NAN,
             linear_solver: settings.linear_solver,
-            eliminate_bounds: settings.eliminate_bounds,
             warm_start_used,
-            warm_start_score,
             cvxopt_init_used,
             presolve_rows_removed: 0,
             presolve_columns_removed: 0,
             presolve_time: Duration::ZERO,
-            presolve_parallel_comparisons: None,
             linear_algebra: LinearAlgebraStats::default(),
         }
     }

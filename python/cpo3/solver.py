@@ -42,17 +42,12 @@ def solve(
         settings = Settings()
     elif not isinstance(settings, Settings):
         raise TypeError("settings must be a cpo3.Settings")
-    warm_x = warm_y = warm_s = None
     if warm_start is not None:
-        warm_x, warm_y, warm_s = warm_start
-        warm_x = np.ascontiguousarray(warm_x, dtype=np.float64).ravel()
-        warm_y = np.ascontiguousarray(warm_y, dtype=np.float64).ravel()
-        warm_s = np.ascontiguousarray(warm_s, dtype=np.float64).ravel()
+        x, y, s = warm_start
+        warm_start = (
+            np.ascontiguousarray(x, dtype=np.float64).ravel(),
+            np.ascontiguousarray(y, dtype=np.float64).ravel(),
+            np.ascontiguousarray(s, dtype=np.float64).ravel(),
+        )
 
-    return bindings._solve(
-        problem._native,
-        settings,
-        warm_x=warm_x,
-        warm_y=warm_y,
-        warm_s=warm_s,
-    )
+    return bindings._solve(problem._native, settings, warm_start=warm_start)
