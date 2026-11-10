@@ -36,11 +36,11 @@ struct Mkl {
 impl Mkl {
     fn load() -> Result<Self, String> {
         let names: &[&str] = if cfg!(target_os = "windows") {
-            &["mkl_rt.2.dll", "mkl_rt.dll"]
+            &["mkl_rt.3.dll", "mkl_rt.2.dll", "mkl_rt.dll"]
         } else if cfg!(target_os = "macos") {
             &["libmkl_rt.2.dylib", "libmkl_rt.dylib"]
         } else {
-            &["libmkl_rt.so.2", "libmkl_rt.so"]
+            &["libmkl_rt.so.3", "libmkl_rt.so.2", "libmkl_rt.so"]
         };
         let paths = if let Some(path) = std::env::var_os("CPO3_MKL_RT") {
             vec![PathBuf::from(path)]
