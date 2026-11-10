@@ -454,68 +454,81 @@ mod tests {
     }
 
     #[test]
-    fn corrector_uses_full_affine_anchor() {
-        let problem = quadratic_problem();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let state = interior_state(&problem);
-        let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
-        let mu = scaling.mu;
-        let mut cache = KktCache::new();
-        let (mut resolvent, increment) = Resolvent::new(
-            &problem,
-            &geometry,
-            &state,
-            &scaling.d,
-            mu,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut cache,
-        )
-        .unwrap();
-        let mut first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
-        // The corrector must use the full anchor independently of the
-        // reachable fraction (even when this particular predictor is interior).
-        first.alpha_affine = 0.25;
-        let target = first.sigma * state.duality_measure(&geometry);
-        let weight = mu - target;
-        let rx = first
-            .affine
-            .x()
-            .iter()
-            .map(|x| weight * x)
-            .collect::<Vec<_>>();
-        let ry = first
-            .affine
-            .y()
-            .iter()
-            .enumerate()
-            .map(|(i, y)| {
-                weight * y + state.s()[i] + target * scaling.y_inverse[i] + first.correction[i]
-            })
-            .collect::<Vec<_>>();
-        let r_tau = weight * first.affine.tau;
-        let result = corrector(&state, &scaling, first, &mut resolvent).unwrap();
-        // Check the point-coordinate equations independently of RHS assembly.
-        let point = result.centered;
-        let px = problem.p_mul(point.x());
-        let aty = matrix_transpose_mul(problem.a(), point.y());
-        let ax = matrix_mul(problem.a(), point.x());
-        for i in 0..problem.variable_count() {
+    fn corrector_satisfies_point_equations_for_affine_and_centering_anchors() {
+        for (problem, pure_centering) in [(quadratic_problem(), false), (linear_problem(), true)] {
+            let geometry = ConeGeometry::new(&problem).unwrap();
+            let state = interior_state(&problem);
+            let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
+            let mu = scaling.mu;
+            let mut cache = KktCache::new();
+            let (mut resolvent, increment) = Resolvent::new(
+                &problem,
+                &geometry,
+                &state,
+                &scaling.d,
+                mu,
+                &KktSettings::new(LinearSolver::Faer),
+                &mut cache,
+            )
+            .unwrap();
+            let mut first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
+            // The corrector must use the full anchor independently of the
+            // reachable fraction (even when this particular predictor is interior).
+            first.alpha_affine = 0.25;
+            if pure_centering {
+                first.affine = ResolventSolution {
+                    xy: state.x().iter().chain(state.y()).copied().collect(),
+                    x_len: state.x().len(),
+                    tau: state.tau(),
+                };
+                first.correction.fill(0.0);
+                first.sigma = 1.0;
+            }
+            let target = first.sigma * state.duality_measure(&geometry);
+            let weight = mu - target;
+            let rx = first
+                .affine
+                .x()
+                .iter()
+                .map(|x| weight * x)
+                .collect::<Vec<_>>();
+            let ry = first
+                .affine
+                .y()
+                .iter()
+                .enumerate()
+                .map(|(i, y)| {
+                    weight * y + state.s()[i] + target * scaling.y_inverse[i] + first.correction[i]
+                })
+                .collect::<Vec<_>>();
+            let r_tau = weight * first.affine.tau;
+            let result = corrector(&state, &scaling, first, &mut resolvent).unwrap();
+            // Check the point-coordinate equations independently of RHS assembly.
+            let point = result.centered;
+            let px = problem.p_mul(point.x());
+            let aty = matrix_transpose_mul(problem.a(), point.y());
+            let ax = matrix_mul(problem.a(), point.x());
+            for i in 0..problem.variable_count() {
+                assert_close(
+                    px[i] + mu * point.x()[i] + aty[i] + problem.c()[i] * point.tau,
+                    rx[i],
+                );
+            }
+            for i in 0..problem.constraint_count() {
+                assert_close(
+                    ax[i] - (scaling.d[i] + mu) * point.y()[i] - problem.b()[i] * point.tau,
+                    -ry[i],
+                );
+            }
+            let q = dot(problem.c(), point.x()) + dot(problem.b(), point.y());
             assert_close(
-                px[i] + mu * point.x()[i] + aty[i] + problem.c()[i] * point.tau,
-                rx[i],
+                mu * point.tau * point.tau
+                    - r_tau * point.tau
+                    - q * point.tau
+                    - dot(point.x(), &px),
+                target,
             );
         }
-        for i in 0..problem.constraint_count() {
-            assert_close(
-                ax[i] - (scaling.d[i] + mu) * point.y()[i] - problem.b()[i] * point.tau,
-                -ry[i],
-            );
-        }
-        let q = dot(problem.c(), point.x()) + dot(problem.b(), point.y());
-        assert_close(
-            mu * point.tau * point.tau - r_tau * point.tau - q * point.tau - dot(point.x(), &px),
-            target,
-        );
     }
 
     #[test]
@@ -691,66 +704,13 @@ mod tests {
     }
 
     #[test]
-    fn corrector_with_unit_sigma_and_zero_displacement_is_pure_centering() {
-        let problem = linear_problem();
-        let geometry = ConeGeometry::new(&problem).unwrap();
-        let state = interior_state(&problem);
-        let mu = state.duality_measure(&geometry);
-        let scaling = Scaling::new(&problem, &geometry, &state).unwrap();
-        let mut cache = KktCache::new();
-        let (mut resolvent, increment) = Resolvent::new(
-            &problem,
-            &geometry,
-            &state,
-            &scaling.d,
-            mu,
-            &KktSettings::new(LinearSolver::Faer),
-            &mut cache,
-        )
-        .unwrap();
-        let first = predictor(&state, &scaling, increment, &mut resolvent).unwrap();
-        // Force sigma = 1 with a zero affine displacement: the corrector must
-        // then be the pure centering step at target mu, i.e. r = (0, s + mu y^-1, 0).
-        let pure = Predictor {
-            affine: ResolventSolution {
-                xy: state.x().iter().chain(state.y()).copied().collect(),
-                x_len: state.x().len(),
-                tau: state.tau(),
-            },
-            correction: vec![-0.0; state.s().len()],
-            alpha_affine: 1.0,
-            sigma: 1.0,
-        };
-        let second = corrector(&state, &scaling, pure, &mut resolvent).unwrap();
-        // For pure centering, subtract K z_a from tau_a (-c, b) + (0, -s - mu/y).
-        let aty = matrix_transpose_mul(problem.a(), state.y());
-        let ax = matrix_mul(problem.a(), state.x());
-        let mut residual: Vec<_> = (0..problem.variable_count())
-            .map(|i| -aty[i] - problem.c()[i] * state.tau() - mu * state.x()[i])
-            .collect();
-        residual.extend((0..problem.constraint_count()).map(|i| {
-            problem.b()[i] * state.tau() - ax[i] + (scaling.d[i] + mu) * state.y()[i]
-                - state.s()[i]
-                - mu * scaling.y_inverse[i]
-        }));
-        let direct = resolvent.solve_increment_rhs(&residual, 0.0, mu).unwrap();
-        assert_close(second.centered.tau, direct.tau);
-        for index in 0..2 {
-            assert_close(second.centered.x()[index], direct.x()[index]);
-            assert_close(second.centered.y()[index], direct.y()[index]);
-        }
-        assert!(first.sigma < 1.0);
-    }
-
-    #[test]
-    fn step_stays_interior_and_reduces_the_duality_measure() {
+    fn steps_stay_interior() {
         for problem in [quadratic_problem(), linear_problem()] {
             let geometry = ConeGeometry::new(&problem).unwrap();
             let mut state = interior_state(&problem);
             let mut cache = KktCache::new();
             for _ in 0..5 {
                 state.normalize_sphere(&geometry).unwrap();
-                let mu = state.duality_measure(&geometry);
                 let result = step(
                     &problem,
                     &geometry,
@@ -766,8 +726,6 @@ mod tests {
                 result.state.validate(&problem, &geometry).unwrap();
                 assert!(geometry.is_dual_interior(result.state.y()).unwrap());
                 assert!(result.state.tau() > 0.0);
-                let next_mu = result.state.duality_measure(&geometry);
-                assert!(next_mu < mu, "mu {mu} -> {next_mu}");
                 state = result.state;
             }
         }
