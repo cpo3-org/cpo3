@@ -1,9 +1,8 @@
-"""Problem data, sparse-array conversion, and MPS/QPS loading."""
+"""Problem data and sparse-array conversion."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from os import PathLike
 from typing import Any
 
 import numpy as np
@@ -42,7 +41,7 @@ class Problem:
         )
 
     @classmethod
-    def _from_native(cls, native: bindings._Problem) -> Problem:
+    def wrap(cls, native: bindings._Problem) -> Problem:
         problem = cls.__new__(cls)
         problem._native = native
         return problem
@@ -86,18 +85,6 @@ class Problem:
     @property
     def constraint_count(self) -> int:
         return self._native.constraint_count
-
-
-def read_mps(path: str | PathLike[str], *, first_named_set: bool = False) -> Problem:
-    """Read an MPS or QPS file into a sparse problem.
-
-    Files with several named RHS, RANGES, or BOUNDS sets are rejected unless
-    ``first_named_set`` keeps the first set of each section.
-    """
-
-    return Problem._from_native(
-        bindings._read_mps(path, first_named_set=first_named_set)
-    )
 
 
 def _matrix_from_parts(parts: tuple[Any, ...]) -> sparse.csc_matrix:

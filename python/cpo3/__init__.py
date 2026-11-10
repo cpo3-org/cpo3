@@ -1,5 +1,6 @@
 """Python interface for cpo3."""
 
+from . import io
 from .cones import (
     Cone,
     NonnegativeCone,
@@ -7,7 +8,7 @@ from .cones import (
     SecondOrderCone,
     ZeroCone,
 )
-from .problem import Problem, read_mps
+from .problem import Problem
 from .settings import LinearSolver, Settings
 from .solver import Solution, SolutionInfo, SolverStatus, solve
 
@@ -23,6 +24,6 @@ __all__ = [
     "SolutionInfo",
     "SolverStatus",
     "ZeroCone",
-    "read_mps",
+    "io",
     "solve",
 ]

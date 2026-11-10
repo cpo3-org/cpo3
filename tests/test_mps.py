@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 @pytest.mark.parametrize("suffix,n,m", [("mps", 6, 11), ("qps", 2, 3)])
 def test_read_mps(suffix: str, n: int, m: int) -> None:
-    problem = cpo3.read_mps(FIXTURES / f"problem_data.{suffix}")
+    problem = cpo3.io.read_mps(FIXTURES / f"problem_data.{suffix}")
 
     assert isinstance(problem, cpo3.Problem)
     match suffix:
@@ -30,13 +30,13 @@ ROW_MODEL = "NAME ROWS\nROWS\n N COST\n N UNUSED\n L R\nCOLUMNS\n X COST 1 R 1\n
 def read_model(tmp_path: Path, source: str, **kwargs) -> cpo3.Problem:
     path = tmp_path / "model.mps"
     path.write_text(source)
-    return cpo3.read_mps(path, **kwargs)
+    return cpo3.io.read_mps(path, **kwargs)
 
 
 def test_missing_file_reports_path(tmp_path: Path) -> None:
     path = tmp_path / "does_not_exist.mps"
     with pytest.raises(OSError, match=re.escape(str(path))):
-        cpo3.read_mps(path)
+        cpo3.io.read_mps(path)
 
 
 def test_discrete_bounds_are_rejected(tmp_path: Path) -> None:

@@ -97,7 +97,7 @@ automatic thread selection. See the
 
 For a related problem, pass `warm_start=(solution.x, solution.y, solution.s)`
 to `solve`. The solver screens the point before deciding whether to use it.
-Load a problem from disk with `cpo3.read_mps("problem.mps")`.
+Load a problem from disk with `cpo3.io.read_mps("problem.mps")`.
 
 ## Rust quick start
 
