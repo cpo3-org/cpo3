@@ -7,65 +7,43 @@ permissions:
   contents: read
 
 jobs:
-  rust:
-    runs-on: ubuntu-latest
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -leo pipefail {0}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      - run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev pkg-config
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test
-
-  python:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --locked
-      - run: uv run ruff check .
-      - run: uv run ruff format --check .
-      - run: uv run ty check
-      - run: uv run pytest
-      - run: uv build --wheel
-
-  native-backends:
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            backend: accelerate
-          - os: ubuntu-latest
-            backend: pardiso
-          - os: ubuntu-latest
-            backend: cholmod
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: astral-sh/setup-uv@v7
-      - if: matrix.backend == 'cholmod'
-        run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev pkg-config
-      - run: uv sync --locked --config-setting "build-args=--features=python,mps,${{ matrix.backend }}"
-      - if: matrix.backend == 'pardiso'
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: native
+          create-args: >-
+            libcholmod>=5.2,<5.4
+            pkg-config
+            ${{ runner.os != 'macOS' && 'mkl' || '' }}
+          cache-environment: true
+      - name: Configure native library paths
         run: |
-          uv pip install mkl
-          test -f "$PWD/.venv/lib/libmkl_rt.so.2"
-          echo "CPO3_MKL_RT=$PWD/.venv/lib/libmkl_rt.so.2" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$PWD/.venv/lib" >> "$GITHUB_ENV"
-      - run: .venv/bin/python -c "import cpo3; assert cpo3.LinearSolver('${{ matrix.backend }}').is_available()"
-      - if: matrix.backend == 'cholmod'
-        run: |
-          .venv/bin/python - <<'PY'
-          import subprocess
-          from cpo3 import bindings
-          dependencies = subprocess.check_output(["ldd", bindings.__file__], text=True)
-          assert "cholmod" not in dependencies.lower(), dependencies
-          PY
-      - run: cargo test --locked --features mps,${{ matrix.backend }}
-      - run: .venv/bin/python -m pytest
+          native_prefix="$CONDA_PREFIX${{ runner.os == 'Windows' && '/Library' || '' }}"
+          echo "PKG_CONFIG_PATH=$native_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "MKLROOT=$native_prefix" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$native_prefix/lib" >> "$GITHUB_ENV"
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --features mps,accelerate,cholmod,pardiso
+      - run: uv sync --locked --config-setting "build-args=--features=python,mps,accelerate,cholmod,pardiso"
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ty check
+      - run: uv run --no-sync pytest -ra
+      - run: uv build --wheel --config-setting "build-args=--features=python,mps,accelerate,cholmod,pardiso"

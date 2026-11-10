@@ -123,12 +123,12 @@ def equality_qp() -> Case:
     )
 
 
-@pytest.fixture(
-    params=[solver for solver in cpo3.LinearSolver if solver.is_available()],
-    ids=lambda solver: solver.value,
-)
-def backend(request: pytest.FixtureRequest) -> cpo3.LinearSolver:
-    return request.param
+@pytest.fixture(params=list(cpo3.LinearSolver), ids=lambda solver: solver.value)
+def linear_solver(request: pytest.FixtureRequest) -> cpo3.LinearSolver:
+    solver = request.param
+    if not solver.is_available():
+        pytest.skip(f"{solver.value} is not available")
+    return solver
 
 
 def assert_solution(case: Case, solution: cpo3.Solution) -> None:
@@ -166,7 +166,7 @@ def assert_solution(case: Case, solution: cpo3.Solution) -> None:
 def test_numerical_solve(
     request: pytest.FixtureRequest,
     name: str,
-    backend: cpo3.LinearSolver,
+    linear_solver: cpo3.LinearSolver,
     cvxopt_init: bool,
 ) -> None:
     case = request.getfixturevalue(name)
@@ -174,13 +174,13 @@ def test_numerical_solve(
         case.problem,
         settings=cpo3.Settings(
             presolve=False,
-            threads=0 if backend is cpo3.LinearSolver.ACCELERATE else 1,
-            linear_solver=backend,
+            threads=0 if linear_solver is cpo3.LinearSolver.ACCELERATE else 1,
+            linear_solver=linear_solver,
             cvxopt_init=cvxopt_init,
         ),
     )
     assert_solution(case, solution)
-    assert solution.info.linear_solver is backend
+    assert solution.info.linear_solver is linear_solver
     assert solution.info.factorizations > 0
     assert solution.info.primary_solves > 0
     assert solution.info.iters > 0
@@ -191,7 +191,7 @@ def test_numerical_solve(
 @pytest.mark.parametrize("eliminate_bounds", [False, True])
 def test_bound_elimination(
     coupled_qp: Case,
-    backend: cpo3.LinearSolver,
+    linear_solver: cpo3.LinearSolver,
     presolve: bool,
     eliminate_bounds: bool,
 ) -> None:
@@ -200,12 +200,12 @@ def test_bound_elimination(
         settings=cpo3.Settings(
             presolve=presolve,
             eliminate_bounds=eliminate_bounds,
-            threads=0 if backend is cpo3.LinearSolver.ACCELERATE else 1,
-            linear_solver=backend,
+            threads=0 if linear_solver is cpo3.LinearSolver.ACCELERATE else 1,
+            linear_solver=linear_solver,
         ),
     )
     assert_solution(coupled_qp, solution)
-    assert solution.info.linear_solver is backend
+    assert solution.info.linear_solver is linear_solver
     assert solution.info.factorizations > 0
     assert solution.info.primary_solves > 0
 
@@ -282,7 +282,7 @@ def test_initial_optimality_takes_precedence_over_timeout() -> None:
     np.testing.assert_array_equal(s.x, [0.0])
 
 
-def test_warm_start_screening_and_forcing() -> None:
+def test_warm_start_screening_and_forcing(linear_solver: cpo3.LinearSolver) -> None:
     p = cpo3.Problem(
         P=None,
         c=[1, 1],
@@ -290,7 +290,11 @@ def test_warm_start_screening_and_forcing() -> None:
         b=[-1, 0, 0],
         cones=[cpo3.NonnegativeCone(3)],
     )
-    settings = cpo3.Settings(presolve=False, threads=1)
+    settings = cpo3.Settings(
+        presolve=False,
+        threads=0 if linear_solver is cpo3.LinearSolver.ACCELERATE else 1,
+        linear_solver=linear_solver,
+    )
     cold = cpo3.solve(p, settings=settings)
     assert cold.info.warm_start_used is None
     assert cold.info.cvxopt_init_used is False
@@ -305,7 +309,12 @@ def test_warm_start_screening_and_forcing() -> None:
     assert rejected.info.warm_start_used is False
     assert rejected.info.cvxopt_init_used is False
 
-    forced = cpo3.Settings(presolve=False, threads=1, force_warm_start=True)
+    forced = cpo3.Settings(
+        presolve=False,
+        threads=settings.threads,
+        linear_solver=linear_solver,
+        force_warm_start=True,
+    )
     used = cpo3.solve(p, settings=forced, warm_start=junk)
     assert used.status is cpo3.SolverStatus.SOLVED
     assert used.info.warm_start_used is True

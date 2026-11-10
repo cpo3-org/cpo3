@@ -4,7 +4,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         cc::Build::new()
             .file("src/linear_solvers/accelerate.c")
-            .flag("-std=c11")
+            .std("c11")
             .compile("cpo3_accelerate");
         println!("cargo:rustc-link-lib=framework=Accelerate");
     }
@@ -22,7 +22,7 @@ fn main() {
         cc::Build::new()
             .file("src/linear_solvers/cholmod.c")
             .includes(library.include_paths)
-            .flag("-std=c11")
+            .std("c11")
             .compile("cpo3_cholmod");
     }
 }
