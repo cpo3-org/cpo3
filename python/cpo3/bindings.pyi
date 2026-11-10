@@ -4,7 +4,8 @@ from typing import Any, TypeAlias
 import numpy as np
 import numpy.typing as npt
 
-from .settings import Settings
+from .settings import LinearSolver, Settings
+from .solver import SolverStatus
 
 _CscParts: TypeAlias = tuple[
     int, int, npt.NDArray[np.uintp], npt.NDArray[np.uintp], npt.NDArray[np.float64]
@@ -41,7 +42,7 @@ class _Problem:
     def constraint_count(self) -> int: ...
 
 
-class _SolutionInfo:
+class SolutionInfo:
     @property
     def iters(self) -> int: ...
 
@@ -88,6 +89,36 @@ class _SolutionInfo:
     def primary_solves(self) -> int: ...
 
     @property
+    def refinement_accurate(self) -> int: ...
+
+    @property
+    def refinement_forecast(self) -> int: ...
+
+    @property
+    def refinement_divergence(self) -> int: ...
+
+    @property
+    def refinement_budget(self) -> int: ...
+
+    @property
+    def refinement_nonfinite(self) -> int: ...
+
+    @property
+    def clamp_increases(self) -> int: ...
+
+    @property
+    def clamp_decreases(self) -> int: ...
+
+    @property
+    def refinement_clamp_limited(self) -> int: ...
+
+    @property
+    def refinement_solve_limited(self) -> int: ...
+
+    @property
+    def refinement_ambiguous(self) -> int: ...
+
+    @property
     def refinement_solves(self) -> int: ...
 
     @property
@@ -106,15 +137,15 @@ class _SolutionInfo:
     def inertia_failures(self) -> int: ...
 
     @property
-    def linear_solver(self) -> str: ...
+    def linear_solver(self) -> LinearSolver: ...
 
     @property
     def eliminate_bounds(self) -> bool: ...
 
 
-class _Solution:
+class Solution:
     @property
-    def status(self) -> str: ...
+    def status(self) -> SolverStatus: ...
 
     @property
     def x(self) -> npt.NDArray[np.float64]: ...
@@ -126,7 +157,7 @@ class _Solution:
     def s(self) -> npt.NDArray[np.float64]: ...
 
     @property
-    def info(self) -> _SolutionInfo: ...
+    def info(self) -> SolutionInfo: ...
 
 
 def _read_mps(
@@ -147,4 +178,4 @@ def _solve(
     warm_x: npt.NDArray[np.float64] | None = ...,
     warm_y: npt.NDArray[np.float64] | None = ...,
     warm_s: npt.NDArray[np.float64] | None = ...,
-) -> _Solution: ...
+) -> Solution: ...

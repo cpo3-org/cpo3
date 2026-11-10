@@ -1,6 +1,7 @@
 """Python interface for cpo3."""
 
 from . import io
+from .bindings import Solution, SolutionInfo
 from .cones import (
     Cone,
     NonnegativeCone,
@@ -10,7 +11,7 @@ from .cones import (
 )
 from .problem import Problem
 from .settings import LinearSolver, Settings
-from .solver import Solution, SolutionInfo, SolverStatus, solve
+from .solver import SolverStatus, solve
 
 __all__ = [
     "Cone",

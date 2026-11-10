@@ -147,7 +147,8 @@ fn parse_cone(name: &str, parameter: usize) -> PyResult<Cone> {
     }
 }
 
-#[pyclass(name = "_SolutionInfo", module = "cpo3.bindings", frozen)]
+/// Summary information for a completed solve.
+#[pyclass(name = "SolutionInfo", module = "cpo3.bindings", frozen)]
 struct PySolutionInfo {
     inner: SolutionInfo,
 }
@@ -199,6 +200,11 @@ impl PySolutionInfo {
         self.inner.warm_start_used
     }
 
+    /// Whether the CVXOPT-style point started the solve.
+    ///
+    /// ``False`` covers the canonical point, including after a fallback;
+    /// ``None`` when an accepted warm start was used or no interior-point
+    /// iterate was formed.
     #[getter]
     fn cvxopt_init_used(&self) -> Option<bool> {
         self.inner.cvxopt_init_used
@@ -224,6 +230,10 @@ impl PySolutionInfo {
         self.inner.presolve_parallel_comparisons
     }
 
+    /// Initial linear solves attempted for KKT right-hand sides.
+    ///
+    /// Includes initialization, internal retries, and equality-only LSMR
+    /// preconditioner applications, but excludes refinement.
     #[getter]
     fn primary_solves(&self) -> usize {
         self.inner.linear_algebra.primary_solves
@@ -279,11 +289,15 @@ impl PySolutionInfo {
         self.inner.linear_algebra.refinement_ambiguous
     }
 
+    /// Iterations of the equality-only LSMR fallback.
     #[getter]
     fn lsmr_iterations(&self) -> usize {
         self.inner.linear_algebra.lsmr_iterations
     }
 
+    /// Correction linear solves attempted, including internally failed attempts.
+    ///
+    /// Excludes the initial solve for each right-hand side and residual checks.
     #[getter]
     fn refinement_solves(&self) -> usize {
         self.inner.linear_algebra.refinement_solves
@@ -310,8 +324,10 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn linear_solver(&self) -> &'static str {
-        self.inner.linear_solver.as_str()
+    fn linear_solver<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        py.import("cpo3.settings")?
+            .getattr("LinearSolver")?
+            .call1((self.inner.linear_solver.as_str(),))
     }
 
     #[getter]
@@ -320,7 +336,8 @@ impl PySolutionInfo {
     }
 }
 
-#[pyclass(name = "_Solution", module = "cpo3.bindings", frozen)]
+/// Solver result vectors and termination information.
+#[pyclass(name = "Solution", module = "cpo3.bindings", frozen)]
 struct PySolution {
     inner: Solution,
 }
@@ -328,8 +345,10 @@ struct PySolution {
 #[pymethods]
 impl PySolution {
     #[getter]
-    fn status(&self) -> &'static str {
-        self.inner.status().as_str()
+    fn status<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        py.import("cpo3.solver")?
+            .getattr("SolverStatus")?
+            .call1((self.inner.status().as_str(),))
     }
 
     #[getter]
