@@ -77,7 +77,7 @@ impl FaerFactorization {
             scratch,
             parallelism,
         };
-        let values = factorization.permute_input(values);
+        let values = factorization.permute_input(&values);
         factorization.values = values;
         Ok(factorization)
     }
@@ -109,7 +109,7 @@ impl FaerFactorization {
 
     /// Cache the input layout expected by Faer's numeric kernel. Preserve the
     /// entry order of its unsorted permutation to preserve floating-point sums.
-    fn permute_input(&mut self, values: Vec<f64>) -> Vec<f64> {
+    fn permute_input(&mut self, values: &[f64]) -> Vec<f64> {
         let perm = self.symbolic.perm().expect("AMD supplies a permutation");
         let (_forward, inverse) = perm.arrays();
         let upper = matches!(

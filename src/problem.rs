@@ -195,3 +195,30 @@ impl From<Problem> for ::presolve::Problem {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn owned_conversion_moves_cpo3_matrix_and_vector_buffers() {
+        let p =
+            CscMatrix::new(2, 2, vec![0, 2, 4], vec![0, 1, 0, 1], vec![2., 1., 1., 3.]).unwrap();
+        let problem = Problem::new(
+            Some(p),
+            vec![1., 2.],
+            CscMatrix::identity(2).unwrap(),
+            vec![3., 4.],
+            vec![Cone::Nonnegative(2)],
+        )
+        .unwrap();
+        let a = problem.a().values().as_ptr();
+        let c = problem.c().as_ptr();
+        let p = problem.p().unwrap().values().as_ptr();
+        let native: ::presolve::Problem = problem.into();
+        assert_eq!(native.a.values().as_ptr(), a);
+        assert_eq!(native.c.as_ptr(), c);
+        assert_eq!(native.p.as_ref().unwrap().values().as_ptr(), p);
+        assert_eq!(native.p.unwrap().values(), [2., 1., 3.]);
+    }
+}

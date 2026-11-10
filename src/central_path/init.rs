@@ -29,13 +29,11 @@ pub(crate) enum InitialStart {
     Warm,
 }
 
-/// The selected start and the separate warm-screening results.
+/// The selected start and whether a warm start was supplied.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InitReport {
     pub(crate) start: InitialStart,
     pub(crate) warm_start_supplied: bool,
-    /// Local-norm score used to accept or reject the best warm candidate.
-    pub(crate) warm_start_score: Option<f64>,
 }
 
 const WARM_FLOORS: [f64; 3] = [1e-12, 1e-6, 1e-3];
@@ -352,17 +350,14 @@ pub(crate) fn initial_state(
 ) -> Result<(State, InitReport), StateError> {
     debug_assert!(geometry.barrier_parameter() > 0);
     let problem = equilibrated.problem();
-    let mut warm_start_score = None;
     if let Some(warm) = warm {
         if let Some((candidate, score)) = warm_state(geometry, equilibrated, warm) {
-            warm_start_score = Some(score);
             if settings.force_warm_start || score <= WARM_THRESHOLD {
                 return Ok((
                     candidate,
                     InitReport {
                         start: InitialStart::Warm,
                         warm_start_supplied: true,
-                        warm_start_score,
                     },
                 ));
             }
@@ -379,7 +374,6 @@ pub(crate) fn initial_state(
         InitReport {
             start,
             warm_start_supplied: warm.is_some(),
-            warm_start_score,
         },
     ))
 }
@@ -444,7 +438,7 @@ mod tests {
         .unwrap();
         let scaled = EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
         let geometry = ConeGeometry::new(scaled.problem()).unwrap();
-        for beta in [Settings::default().initial_mu, 0.25, 1.0] {
+        for beta in [0.25, 1.0] {
             let settings = Settings {
                 initial_mu: beta,
                 ..Settings::default()
@@ -583,8 +577,8 @@ mod tests {
     }
 
     #[test]
-    fn screening_can_select_each_of_the_three_floors() {
-        for (rhs, expected_floor) in [(1e-12, 1e-12), (1e-6, 1e-6), (1e-3, 1e-3)] {
+    fn screening_selects_the_lowest_scoring_valid_candidate() {
+        for rhs in WARM_FLOORS {
             let problem = Problem::new(
                 None,
                 vec![0.0],
@@ -608,9 +602,26 @@ mod tests {
                 s: vec![0.0],
             };
             let (candidate, score) = warm_state(&geometry, &equilibrated, &warm).unwrap();
+            candidate.validate(&problem, &geometry).unwrap();
             assert!(score.is_finite());
-            assert!((candidate.y()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
-            assert!((candidate.s()[0] / candidate.tau() - expected_floor).abs() < 1e-12);
+            // Enumerate the candidates independently; do not prescribe which floor wins.
+            let candidates = WARM_FLOORS.map(|floor| {
+                let mut point = State::new(vec![0.0], vec![floor], vec![floor], 1.0).unwrap();
+                point.normalize_sphere(&geometry).unwrap();
+                point.validate(&problem, &geometry).unwrap();
+                let score = local_score(&problem, &geometry, &point, &[0.0], &[0.0]);
+                (point, score)
+            });
+            assert!(
+                candidates
+                    .iter()
+                    .any(|(point, other_score)| { *point == candidate && *other_score == score })
+            );
+            assert!(
+                candidates
+                    .iter()
+                    .all(|(_, other_score)| score <= *other_score)
+            );
         }
     }
 

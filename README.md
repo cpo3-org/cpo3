@@ -93,11 +93,11 @@ solution = cpo3.solve(problem, settings=settings)
 `verbose=True` prints progress and a termination summary. `threads=1` selects
 sequential factorization and solves; the default, `threads=0`, uses the backend's
 automatic thread selection. See the
-[`Settings` docstring](python/cpo3/_api.py) for the available controls.
+[`Settings` docstring](python/cpo3/settings.py) for the available controls.
 
 For a related problem, pass `warm_start=(solution.x, solution.y, solution.s)`
 to `solve`. The solver screens the point before deciding whether to use it.
-Load a problem from disk with `cpo3.read_mps("problem.mps")`.
+Load a problem from disk with `cpo3.io.read_mps("problem.mps")`.
 
 ## Rust quick start
 

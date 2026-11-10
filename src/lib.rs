@@ -33,7 +33,7 @@ use pyo3::prelude::*;
 
 #[cfg(feature = "python")]
 #[pymodule]
-#[pyo3(name = "_core")]
+#[pyo3(name = "bindings")]
 fn python_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     python::register(module)
 }

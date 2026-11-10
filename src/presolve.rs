@@ -9,7 +9,7 @@ use std::time::Duration;
 pub(crate) enum PresolveOutcome {
     Reduced(Box<Presolved>),
     Solved(Vec<f64>, Vec<f64>),
-    Unchanged(usize),
+    Unchanged,
     PrimalInfeasible(Vec<f64>),
     DualInfeasible(Vec<f64>),
 }
@@ -19,7 +19,6 @@ pub(crate) struct Presolved {
     map: native::problem::ConicMap,
     original_rows: usize,
     original_columns: usize,
-    pub(crate) parallel_comparisons: usize,
 }
 /// Reusable native mapping and postsolve buffers for iteration recovery.
 pub(crate) struct RecoveryWorkspace {
@@ -159,9 +158,7 @@ pub(crate) fn presolve(
     }
     let result = native::Presolver::new(settings)?.presolve(original.into());
     Ok(match result.outcome {
-        native::Outcome::Unchanged(_) => {
-            PresolveOutcome::Unchanged(result.stats.parallel_comparisons)
-        }
+        native::Outcome::Unchanged(_) => PresolveOutcome::Unchanged,
         native::Outcome::Solved(p) => {
             PresolveOutcome::Solved(p.x, original_dual(original, &p.y, &p.conic_dual))
         }
@@ -198,7 +195,6 @@ pub(crate) fn presolve(
                 postsolve: r.postsolve,
                 original_rows: original.constraint_count(),
                 original_columns: original.variable_count(),
-                parallel_comparisons: result.stats.parallel_comparisons,
             }))
         }
     })
@@ -353,5 +349,48 @@ impl Presolved {
             }
         }
         WarmStart { x: p.x, y, s }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Cone, CscMatrix, Problem};
+
+    #[test]
+    fn native_presolve_converts_cpo3_cones_and_recovers_original_coordinates() {
+        let cases = [
+            (
+                Cone::SecondOrder(3),
+                vec![0],
+                vec![-1.0],
+                vec![0., 1., 0.],
+                1.0,
+            ),
+            (
+                Cone::PositiveSemidefinite(2),
+                vec![0],
+                vec![-1.0],
+                vec![0., 0., 1.],
+                0.0,
+            ),
+            (
+                Cone::PositiveSemidefinite(2),
+                vec![1],
+                vec![-1.0],
+                vec![0., 0., 0.],
+                0.0,
+            ),
+        ];
+        for (cone, rows, values, b, expected) in cases {
+            let a = CscMatrix::new(3, 1, vec![0, values.len()], rows, values).unwrap();
+            let p = Problem::new(None, vec![1.0], a, b, vec![cone]).unwrap();
+            let result = ::presolve::Presolver::default().presolve((&p).into());
+            let ::presolve::Outcome::Solved(s) = result.outcome else {
+                panic!("expected presolve solution")
+            };
+            assert!((s.x[0] - expected).abs() < 1e-7);
+            assert_eq!(s.conic_dual.len(), 3);
+            assert_eq!(s.conic_slack.len(), 3);
+        }
     }
 }
