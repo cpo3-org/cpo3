@@ -58,8 +58,9 @@ pub struct Settings {
     /// problems always use Faer with dynamically regularized LDL and LSMR.
     pub linear_solver: LinearSolver,
     /// Maximum parallelism for factorization and solves. Zero uses the
-    /// backend default; one runs sequentially. Feral currently runs sequentially
-    /// for every positive cap because it cannot configure its private pool size.
+    /// backend default; one runs sequentially. Accelerate supports only zero;
+    /// PARDISO uses MKL's thread-local limit.
+    /// CHOLMOD caps its OpenMP work; simplicial LDL factorization is sequential.
     pub threads: usize,
     /// Eliminate singleton nonnegative-cone rows from the KKT factorization.
     pub eliminate_bounds: bool,

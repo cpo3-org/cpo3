@@ -14,6 +14,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      - run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev pkg-config
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
@@ -32,3 +33,31 @@ jobs:
       - run: uv run ty check
       - run: uv run pytest
       - run: uv build --wheel
+
+  native-backends:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            backend: accelerate
+          - os: ubuntu-latest
+            backend: pardiso
+          - os: ubuntu-latest
+            backend: cholmod
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v7
+      - if: matrix.backend == 'cholmod'
+        run: sudo apt-get update && sudo apt-get install -y libsuitesparse-dev pkg-config
+      - run: uv sync --locked --config-setting "build-args=--features=python,mps,${{ matrix.backend }}"
+      - if: matrix.backend == 'pardiso'
+        run: |
+          uv pip install mkl
+          test -f "$PWD/.venv/lib/libmkl_rt.so.2"
+          echo "CPO3_MKL_RT=$PWD/.venv/lib/libmkl_rt.so.2" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$PWD/.venv/lib" >> "$GITHUB_ENV"
+      - run: .venv/bin/python -c "import cpo3; assert cpo3.LinearSolver('${{ matrix.backend }}').is_available()"
+      - run: cargo test --locked --features mps,${{ matrix.backend }}
+      - run: .venv/bin/python -m pytest

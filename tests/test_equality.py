@@ -163,7 +163,7 @@ def test_presolve_recovers_points_and_bypasses_initialization(presolve: bool) ->
             presolve=presolve,
             cvxopt_init=True,
             force_warm_start=True,
-            linear_solver=cpo3.LinearSolver.FERAL,
+            linear_solver=cpo3.LinearSolver.PARDISO,
         ),
         warm_start=(np.full(n, 7.0), np.full(2, 2.0), np.zeros(2)),
     )

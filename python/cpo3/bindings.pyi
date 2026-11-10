@@ -138,3 +138,6 @@ def _solve(
     ]
     | None = ...,
 ) -> Solution: ...
+
+
+def _linear_solver_available(name: str) -> bool: ...

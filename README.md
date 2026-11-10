@@ -16,7 +16,7 @@ additional constraint rows.
 - **Solutions and certificates:** recover primal and dual solutions or
   certificates of primal or dual infeasibility.
 - **Warm starts:** supply a previous solution when solving related problems.
-- **Sparse linear algebra:** Faer and Feral factorization backends, with
+- **Sparse linear algebra:** Faer, Apple Accelerate, SuiteSparse CHOLMOD, and Intel MKL PARDISO backends, with
   presolve and Ruiz equilibration.
 - **File loading:** read continuous LPs and QPs from MPS and QPS files.
 
@@ -53,6 +53,66 @@ For a Rust application, add the Git dependency to `Cargo.toml`:
 [dependencies]
 cpo3 = { git = "https://github.com/cpo3-org/cpo3.git" }
 ```
+
+## Optional factorization backends
+
+Faer is the default and requires no external numerical runtime. The `accelerate`,
+`cholmod`, and `pardiso` Cargo features enable additional backends. All retain symbolic
+analysis across diagonal updates and solve paired right-hand sides together.
+Equality-only problems continue to use Faer for their LDL/LSMR path.
+
+For example, build a Python wheel with Accelerate using:
+
+```sh
+uv build --wheel --config-setting "build-args=--features=python,mps,accelerate"
+```
+
+Use `python,mps,cholmod` for CHOLMOD or `python,mps,pardiso` for PARDISO, or combine
+the features. Rust
+applications can enable the corresponding features in their Cargo dependency.
+
+- **Accelerate:** requires macOS 13 or later and the Apple SDK at build time.
+  Select `LinearSolver.ACCELERATE` with `threads=0`. Positive thread caps are
+  rejected: Apple's sparse solver has no per-solve threading control. Its
+  process-wide `VECLIB_MAXIMUM_THREADS` setting must be configured before startup
+  if needed; cpo3 never modifies it.
+- **CHOLMOD:** requires SuiteSparse with CHOLMOD 5.2 or later, including headers
+  and `pkg-config` metadata at build time and shared libraries at runtime.
+  Install with `brew install suite-sparse pkg-config` on macOS or
+  `sudo apt-get install libsuitesparse-dev pkg-config` on Ubuntu 24.04 or later.
+  Set `PKG_CONFIG_PATH` to the directory containing `cholmod.pc` or `CHOLMOD.pc`
+  if needed.
+  Select `LinearSolver.CHOLMOD`. The adapter uses simplicial LDLᵀ, since CHOLMOD's
+  supernodal LLᵀ cannot factor our indefinite KKT systems. It does not pivot;
+  failed factorizations and incorrect inertia use cpo3's existing recovery path.
+  Positive `threads` settings cap CHOLMOD's per-instance OpenMP work; the
+  simplicial factorization itself is sequential. No process-wide thread settings
+  are changed.
+- **PARDISO:** requires a compatible Intel oneMKL shared runtime installed
+  separately. Select `LinearSolver.PARDISO`. Set `CPO3_MKL_RT` to the runtime's
+  full path before starting Python if it is not on the system library path.
+  The loader also searches `MKLROOT/lib`, `MKLROOT/lib/intel64`, and the
+  corresponding `bin` directories. MKL's dependent libraries must also be on the
+  loader path (for example, source Intel's `setvars.sh` on Linux). Explicit
+  thread caps use MKL's thread-local setting and restore it after every call.
+  The adapter uses `pardiso_64`, independently of `MKL_INTERFACE_LAYER`, and
+  disables MKL's internal refinement so cpo3 owns correction counting.
+
+Check availability before selecting a backend:
+
+```python
+cpo3.LinearSolver.ACCELERATE.is_available()
+cpo3.LinearSolver.CHOLMOD.is_available()
+cpo3.LinearSolver.PARDISO.is_available()
+```
+
+Availability is also exposed as `LinearSolver::is_available()` in Rust. A missing
+feature or runtime produces an error when that backend is needed; it does not
+silently fall back to Faer. Feral is no longer supported.
+
+Backend references: [Apple Sparse Solvers](https://developer.apple.com/documentation/accelerate/sparse-solvers-library),
+[CHOLMOD guide](https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Doc/CHOLMOD_UserGuide.tex),
+[Intel PARDISO controls](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2026-0/pardiso-iparm-parameter.html).
 
 ## Python quick start
 

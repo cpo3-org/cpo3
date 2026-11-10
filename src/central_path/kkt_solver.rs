@@ -730,7 +730,15 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
             for eliminate_bound_rows in [false, true] {
                 let settings = KktSettings {
                     eliminate_bound_rows,
@@ -801,7 +809,15 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
             let settings = KktSettings {
                 diagonal_floor: 0.0,
                 ..KktSettings::new(solver)
@@ -874,7 +890,15 @@ mod cache_tests {
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
         let rhs = [1.0, -2.0, 3.0, -4.0, 5.0];
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
             for eliminate_bound_rows in [false, true] {
                 let settings = KktSettings {
                     eliminate_bound_rows,

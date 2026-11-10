@@ -25,6 +25,9 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 mps = ["dep:mps"]
+accelerate = ["dep:cc"]
+cholmod = ["dep:cc", "dep:pkg-config"]
+pardiso = ["dep:libloading"]
 python = [
     "dep:numpy",
     "dep:pyo3",
@@ -35,13 +38,17 @@ python = [
 [dependencies]
 presolve = { git = "https://github.com/matteosantama/presolve.git", rev = "22f8b675f96c0d4a057d95445e80b4be2bb77c27" }
 faer = { version = "0.24.4", default-features = false, features = ["linalg", "sparse", "rayon", "std"] }
-feral = "0.21.0"
+libloading = { version = "0.8.9", optional = true }
 mps = { version = "1.0.1", optional = true }
 numpy = { version = "0.30.0", optional = true }
 pulp = { version = "0.22.3", default-features = false, features = ["std", "x86-v3"] }
 pyo3 = { version = "0.30.1", optional = true }
 tabled = { version = "0.22", default-features = false, features = ["std"] }
 thiserror = "2"
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+pkg-config = { version = "0.3", optional = true }
 
 [profile.release]
 codegen-units = 1

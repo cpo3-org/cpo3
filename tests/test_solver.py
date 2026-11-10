@@ -123,7 +123,10 @@ def equality_qp() -> Case:
     )
 
 
-@pytest.fixture(params=list(cpo3.LinearSolver), ids=lambda solver: solver.value)
+@pytest.fixture(
+    params=[solver for solver in cpo3.LinearSolver if solver.is_available()],
+    ids=lambda solver: solver.value,
+)
 def backend(request: pytest.FixtureRequest) -> cpo3.LinearSolver:
     return request.param
 
@@ -171,7 +174,7 @@ def test_numerical_solve(
         case.problem,
         settings=cpo3.Settings(
             presolve=False,
-            threads=1,
+            threads=0 if backend is cpo3.LinearSolver.ACCELERATE else 1,
             linear_solver=backend,
             cvxopt_init=cvxopt_init,
         ),
@@ -197,7 +200,7 @@ def test_bound_elimination(
         settings=cpo3.Settings(
             presolve=presolve,
             eliminate_bounds=eliminate_bounds,
-            threads=1,
+            threads=0 if backend is cpo3.LinearSolver.ACCELERATE else 1,
             linear_solver=backend,
         ),
     )
@@ -213,7 +216,7 @@ def test_equality_solver_bypasses_initialization(equality_qp: Case) -> None:
         settings=cpo3.Settings(
             presolve=False,
             threads=1,
-            linear_solver=cpo3.LinearSolver.FERAL,
+            linear_solver=cpo3.LinearSolver.PARDISO,
             cvxopt_init=True,
         ),
     )

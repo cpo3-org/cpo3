@@ -136,11 +136,18 @@ impl PyProblem {
 fn parse_linear_solver(value: &str) -> PyResult<LinearSolver> {
     match value {
         "faer" => Ok(LinearSolver::Faer),
-        "feral" => Ok(LinearSolver::Feral),
+        "accelerate" => Ok(LinearSolver::Accelerate),
+        "cholmod" => Ok(LinearSolver::Cholmod),
+        "pardiso" => Ok(LinearSolver::Pardiso),
         _ => Err(PyValueError::new_err(format!(
             "unknown linear solver {value:?}"
         ))),
     }
+}
+
+#[pyfunction(name = "_linear_solver_available")]
+fn linear_solver_available(name: &str) -> PyResult<bool> {
+    Ok(parse_linear_solver(name)?.is_available())
 }
 
 fn parse_cone(name: &str, parameter: usize) -> PyResult<Cone> {
@@ -354,6 +361,7 @@ fn read_mps_py(py: Python<'_>, path: PathBuf, first_named_set: bool) -> PyResult
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     settings::register(module)?;
+    module.add_function(wrap_pyfunction!(linear_solver_available, module)?)?;
     module.add_class::<PyProblem>()?;
     module.add_class::<PySolution>()?;
     module.add_class::<PySolutionInfo>()?;
