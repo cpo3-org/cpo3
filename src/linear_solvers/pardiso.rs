@@ -4,7 +4,7 @@ use std::{ffi::c_void, path::PathBuf, sync::OnceLock};
 
 use libloading::Library;
 
-use super::{LinearSystemError, PivotReport, TriangleSource};
+use super::{LinearSystemError, PivotReport, TriangleSource, library_error};
 use crate::CscMatrix;
 
 type Pardiso = unsafe extern "C" fn(
@@ -78,7 +78,7 @@ impl Mkl {
             };
             match loaded {
                 Ok(mkl) => return Ok(mkl),
-                Err(error) => last_error = format!("{}: {error}", path.display()),
+                Err(error) => last_error = format!("{}: {}", path.display(), library_error(error)),
             }
         }
         Err(format!(

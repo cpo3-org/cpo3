@@ -20,6 +20,12 @@ use thiserror::Error;
 
 use crate::{CscMatrix, Settings};
 
+#[cfg(any(feature = "cholmod", feature = "pardiso"))]
+fn library_error(error: libloading::Error) -> String {
+    use std::error::Error;
+    error.source().unwrap_or(&error).to_string()
+}
+
 /// Linear-system implementation used by the numerical solver.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LinearSolver {

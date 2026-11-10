@@ -4,7 +4,7 @@ use std::{ffi::c_void, path::PathBuf, ptr::NonNull, sync::OnceLock};
 
 use libloading::Library;
 
-use super::{LinearSystemError, PivotReport, TriangleSource};
+use super::{LinearSystemError, PivotReport, TriangleSource, library_error};
 use crate::CscMatrix;
 
 // Must match Cpo3CholmodApi in cholmod.c. CHOLMOD structs stay opaque to Rust.
@@ -80,7 +80,7 @@ impl Cholmod {
             let library = match unsafe { Library::new(&path) } {
                 Ok(library) => library,
                 Err(error) => {
-                    load_error = format!("{}: {error}", path.display());
+                    load_error = format!("{}: {}", path.display(), library_error(error));
                     continue;
                 }
             };
@@ -103,7 +103,7 @@ impl Cholmod {
         unsafe {
             let version = library
                 .get::<unsafe extern "C" fn(*mut i32) -> i32>(b"cholmod_version\0")
-                .map_err(|error| error.to_string())?;
+                .map_err(library_error)?;
             let mut runtime = [0; 3];
             version(runtime.as_mut_ptr());
             if !matches!(runtime, [5, 2..=3, _]) {
@@ -123,7 +123,7 @@ impl Cholmod {
                     free_factor: *library.get(b"cholmod_l_free_factor\0")?,
                 })
             })()
-            .map_err(|error| error.to_string())?;
+            .map_err(library_error)?;
             Ok(Self {
                 _library: library,
                 api,
