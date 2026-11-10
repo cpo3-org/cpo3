@@ -66,9 +66,9 @@ impl Mkl {
             let loaded = unsafe {
                 Library::new(&path).and_then(|library| {
                     let pardiso = *library.get::<Pardiso>(b"pardiso_64\0")?;
-                    let set_threads = *library
-                        .get::<SetThreads>(b"mkl_set_num_threads_local\0")
-                        .or_else(|_| library.get::<SetThreads>(b"MKL_Set_Num_Threads_Local\0"))?;
+                    // The lowercase header name is a macro for this C symbol;
+                    // the exported lowercase symbol uses Fortran's pointer ABI.
+                    let set_threads = *library.get::<SetThreads>(b"MKL_Set_Num_Threads_Local\0")?;
                     Ok(Self {
                         _library: library,
                         pardiso,

@@ -95,11 +95,13 @@ applications can enable the corresponding features in their Cargo dependency.
   Positive `threads` settings cap CHOLMOD's per-instance OpenMP work; the
   simplicial factorization itself is sequential. No process-wide thread settings
   are changed.
-  Building cpo3 from source with this feature still requires compatible headers
-  and `pkg-config` metadata: install `suite-sparse pkg-config` with Homebrew or
+  Building cpo3 from source with this feature still requires compatible headers.
+  Set `CHOLMOD_INCLUDE_DIR` to the directory containing `cholmod.h`, or use
+  `pkg-config` discovery: install `suite-sparse pkg-config` with Homebrew or
   `libsuitesparse-dev pkg-config` with apt. Set `PKG_CONFIG_PATH` to the directory
-  containing `cholmod.pc` or `CHOLMOD.pc` if needed. The build uses the headers
-  only; it neither links nor bundles SuiteSparse libraries.
+  containing `cholmod.pc` or `CHOLMOD.pc` if needed. Conda's Windows package has
+  no pkg-config metadata; use `%CONDA_PREFIX%\Library\include\suitesparse` as
+  `CHOLMOD_INCLUDE_DIR`. The build neither links nor bundles SuiteSparse libraries.
 - **PARDISO:** requires a compatible Intel oneMKL shared runtime installed
   separately. Select `LinearSolver.PARDISO`. Set `CPO3_MKL_RT` to the runtime's
   full path before starting Python if it is not on the system library path.

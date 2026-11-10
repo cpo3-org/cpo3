@@ -27,24 +27,18 @@ jobs:
           environment-name: native
           create-args: >-
             libcholmod>=5.2,<5.4
-            pkg-config
             ${{ runner.os != 'macOS' && 'mkl' || '' }}
           cache-environment: true
       - name: Configure native library paths
         run: |
           native_prefix="$CONDA_PREFIX${{ runner.os == 'Windows' && '/Library' || '' }}"
-          echo "HOST_PKG_CONFIG_PATH=$native_prefix/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "CHOLMOD_INCLUDE_DIR=$native_prefix/include/suitesparse" >> "$GITHUB_ENV"
           if [[ "$RUNNER_OS" == Linux ]]; then
             echo "LD_LIBRARY_PATH=$native_prefix/lib" >> "$GITHUB_ENV"
           fi
       - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --features mps,accelerate,cholmod,pardiso
-      - name: Diagnose Linux test crash
-        if: failure() && runner.os == 'Linux'
-        run: |
-          test_binary=$(find target/debug/deps -maxdepth 1 -type f -name 'cpo3-*' -executable | head -n 1)
-          gdb --batch -ex run -ex 'thread apply all bt' --args "$test_binary" --test-threads=1
       - run: uv sync --locked --config-setting "build-args=--features=python,mps,accelerate,cholmod,pardiso"
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
