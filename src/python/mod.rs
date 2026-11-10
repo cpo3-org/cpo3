@@ -109,11 +109,11 @@ impl PyProblem {
     }
 
     /// `(rows, columns, pointers, indices, values)` for a CSC matrix.
-    fn _a_parts<'py>(&self, py: Python<'py>) -> PyResult<Py<PyAny>> {
+    fn _a_parts(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         matrix_parts(py, self.inner.a())
     }
 
-    fn _p_parts<'py>(&self, py: Python<'py>) -> PyResult<Option<Py<PyAny>>> {
+    fn _p_parts(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.inner.p().map(|p| matrix_parts(py, p)).transpose()
     }
 

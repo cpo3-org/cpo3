@@ -580,7 +580,7 @@ fn collect_quadratic_objective(
                     reverse: pair.reverse,
                 });
             }
-            0.5 * (pair.forward + pair.reverse)
+            pair.forward.midpoint(pair.reverse)
         } * objective_sign;
         rows.push(first);
         columns.push(second);
