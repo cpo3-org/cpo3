@@ -4,21 +4,27 @@ from typing import Any, TypeAlias
 import numpy as np
 import numpy.typing as npt
 
-from ._api import Settings
+from .settings import Settings
 
 _CscParts: TypeAlias = tuple[
     int, int, npt.NDArray[np.uintp], npt.NDArray[np.uintp], npt.NDArray[np.float64]
 ]
 
+
 class _Problem:
     @property
     def cones(self) -> list[tuple[str, int]]: ...
+
     @property
     def b(self) -> npt.NDArray[np.float64]: ...
+
     @property
     def c(self) -> npt.NDArray[np.float64]: ...
+
     def _a_parts(self) -> tuple[Any, ...]: ...
+
     def _p_parts(self) -> tuple[Any, ...] | None: ...
+
     def __init__(
         self,
         p: _CscParts | None,
@@ -27,76 +33,113 @@ class _Problem:
         b: npt.NDArray[np.float64],
         cones: list[tuple[str, int]],
     ) -> None: ...
+
     @property
     def variable_count(self) -> int: ...
+
     @property
     def constraint_count(self) -> int: ...
+
 
 class _SolutionInfo:
     @property
     def iters(self) -> int: ...
+
     @property
     def solve_time(self) -> float: ...
+
     @property
     def pobj(self) -> float: ...
+
     @property
     def dobj(self) -> float: ...
+
     @property
     def pres(self) -> float: ...
+
     @property
     def dres(self) -> float: ...
+
     @property
     def comp(self) -> float: ...
+
     @property
     def warm_start_score(self) -> float | None: ...
+
     @property
     def warm_start_used(self) -> bool | None: ...
+
     @property
     def cvxopt_init_used(self) -> bool | None: ...
+
     @property
     def presolve_rows_removed(self) -> int: ...
+
     @property
     def presolve_columns_removed(self) -> int: ...
+
     @property
     def presolve_time(self) -> float: ...
+
     @property
     def presolve_parallel_comparisons(self) -> int | None: ...
+
     @property
     def primary_solves(self) -> int: ...
+
     @property
     def refinement_solves(self) -> int: ...
+
     @property
     def lsmr_iterations(self) -> int: ...
+
     @property
     def refinement_settled(self) -> int: ...
+
     @property
     def refinement_failures(self) -> int: ...
+
     @property
     def factorizations(self) -> int: ...
+
     @property
     def inertia_failures(self) -> int: ...
+
     @property
     def linear_solver(self) -> str: ...
+
     @property
     def eliminate_bounds(self) -> bool: ...
+
 
 class _Solution:
     @property
     def status(self) -> str: ...
+
     @property
     def x(self) -> npt.NDArray[np.float64]: ...
+
     @property
     def y(self) -> npt.NDArray[np.float64]: ...
+
     @property
     def s(self) -> npt.NDArray[np.float64]: ...
+
     @property
     def info(self) -> _SolutionInfo: ...
+
 
 def _read_mps(
     path: str | PathLike[str], *, first_named_set: bool = ...
 ) -> _Problem: ...
+
+
 def _default_settings_match(settings: Settings) -> bool: ...
+
+
 def _validate_settings(settings: Settings) -> None: ...
+
+
 def _solve(
     problem: _Problem,
     settings: Settings,

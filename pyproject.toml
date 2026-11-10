@@ -34,7 +34,7 @@ build-backend = "maturin"
 
 [tool.maturin]
 features = ["python", "mps"]
-module-name = "cpo3._core"
+module-name = "cpo3.bindings"
 python-source = "python"
 
 [tool.pytest.ini_options]
@@ -43,6 +43,10 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py310"
+
+[tool.ruff.format]
+# Preserve blank lines between declarations in the bindings stub.
+exclude = ["python/cpo3/bindings.pyi"]
 
 [tool.uv]
 cache-keys = [

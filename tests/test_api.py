@@ -1,7 +1,7 @@
 import cpo3
 import pytest
 import scipy.sparse
-from cpo3 import _core
+from cpo3 import bindings
 
 
 def test_sparse_formats_are_canonicalized() -> None:
@@ -42,7 +42,7 @@ def test_invalid_problem(p, cones, message: str) -> None:
 
 def test_default_settings_match_in_rust_and_python() -> None:
     py_settings = cpo3.Settings()
-    assert _core._default_settings_match(py_settings)
+    assert bindings._default_settings_match(py_settings)
 
 
 def test_negative_threads_rejected() -> None:

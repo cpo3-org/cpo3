@@ -59,7 +59,7 @@ fn array_slice<'a, T: numpy::Element>(
         .map_err(|_| PyValueError::new_err(format!("{name} must be contiguous")))
 }
 
-#[pyclass(name = "_Problem", module = "cpo3._core", frozen)]
+#[pyclass(name = "_Problem", module = "cpo3.bindings", frozen)]
 pub(crate) struct PyProblem {
     inner: Problem,
 }
@@ -147,7 +147,7 @@ fn parse_cone(name: &str, parameter: usize) -> PyResult<Cone> {
     }
 }
 
-#[pyclass(name = "_SolutionInfo", module = "cpo3._core", frozen)]
+#[pyclass(name = "_SolutionInfo", module = "cpo3.bindings", frozen)]
 struct PySolutionInfo {
     inner: SolutionInfo,
 }
@@ -320,7 +320,7 @@ impl PySolutionInfo {
     }
 }
 
-#[pyclass(name = "_Solution", module = "cpo3._core", frozen)]
+#[pyclass(name = "_Solution", module = "cpo3.bindings", frozen)]
 struct PySolution {
     inner: Solution,
 }
