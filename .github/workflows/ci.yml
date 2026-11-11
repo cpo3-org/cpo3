@@ -38,6 +38,15 @@ jobs:
         shell: bash -leo pipefail {0}
     steps:
       - uses: actions/checkout@v4
+      - name: Diagnose Accelerate runtime inertia
+        if: runner.os == 'macOS'
+        run: |
+          sw_vers
+          uname -m
+          clang -std=c11 -Wall -Wextra -Werror -mmacosx-version-min=13.0 \
+            -framework Accelerate .github/scripts/diagnose_accelerate_inertia.c \
+            -o "$RUNNER_TEMP/accelerate-inertia"
+          "$RUNNER_TEMP/accelerate-inertia"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
