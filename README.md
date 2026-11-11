@@ -239,8 +239,9 @@ uv run --no-sync ty check
 ```
 
 Python tests exercise all available backends and skip unavailable ones. The release
-workflow builds wheels from the sdist and runs these tests against installed
-wheels outside the checkout, with and without optional native runtimes.
+workflow builds wheels from the sdist on version tags and manual runs, then tests
+them outside the checkout with and without optional native runtimes. Pull requests
+run linting and Rust and Python tests from source.
 
 See the [changelog](https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md).
 

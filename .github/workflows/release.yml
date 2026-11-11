@@ -1,7 +1,6 @@
 name: Release packages
 
 on:
-  pull_request:
   push:
     tags: ["v*"]
   # Manual runs only build and test. Publishing requires a version tag push.
