@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.0.1 — unreleased
+## 0.0.1 — 2026-11-11
 
 Initial experimental release. APIs and numerical behavior may change between
 releases.

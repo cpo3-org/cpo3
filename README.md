@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-    <img src="assets/logo-light.png" alt="cpo³ — sparse optimization solver" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cpo3-org/cpo3/main/assets/logo-dark.png">
+    <img src="https://raw.githubusercontent.com/cpo3-org/cpo3/main/assets/logo-light.png" alt="cpo³ — sparse optimization solver" width="320">
   </picture>
 </p>
 
@@ -10,14 +10,14 @@
 cpo3 is a sparse interior-point solver for convex linear and quadratic programs,
 written in Rust with a Python interface. It solves
 
-$$
-\min_{x,s} \tfrac12 x^\top P x + c^\top x
-\quad\text{subject to}\quad Ax+s=b,\quad s\in\mathcal K,
-$$
+```text
+minimize over x, s    ½ xᵀ P x + cᵀ x
+subject to           Ax + s = b,  s ∈ K
+```
 
-where $P$ is symmetric positive semidefinite. The supported cone blocks are
+where `P` is symmetric positive semidefinite. The supported cone blocks are
 zero cones for equalities and nonnegative cones for inequalities. Thus,
-nonnegative-cone rows represent $Ax\le b$; variable bounds can be written as
+nonnegative-cone rows represent `Ax ≤ b`; variable bounds can be written as
 additional constraint rows.
 
 - **Solutions and certificates:** recover primal and dual solutions or
@@ -76,8 +76,8 @@ cpo3 = { git = "https://github.com/cpo3-org/cpo3.git" }
 
 ## Python quick start
 
-This problem minimizes $\tfrac12(x_1^2+x_2^2)-x_1-2x_2$ subject to
-$x_1\le3$ and $x_2\le4$. The solution is $x=(1,2)$, with objective $-2.5$.
+This problem minimizes `½(x₁² + x₂²) − x₁ − 2x₂` subject to
+`x₁ ≤ 3` and `x₂ ≤ 4`. The solution is `x = (1, 2)`, with objective `−2.5`.
 
 ```python
 import cpo3
