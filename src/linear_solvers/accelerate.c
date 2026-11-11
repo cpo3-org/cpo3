@@ -73,13 +73,6 @@ int cpo3_accelerate_factor(Cpo3Accelerate *factor, double *values) {
     return factor->numeric.status;
 }
 
-int cpo3_accelerate_inertia(Cpo3Accelerate *factor, int *positive, int *zero, int *negative) {
-    if (__builtin_available(macOS 13.0, *)) {
-        return SparseGetInertia(factor->numeric, positive, zero, negative);
-    }
-    return -1;
-}
-
 int cpo3_accelerate_solve(Cpo3Accelerate *factor, int columns, double *rhs) {
     size_t size = factor->numeric.solveWorkspaceRequiredStatic
         + (size_t)columns * factor->numeric.solveWorkspaceRequiredPerRHS;

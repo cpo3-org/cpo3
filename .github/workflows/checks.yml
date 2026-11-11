@@ -1,0 +1,87 @@
+name: Checks
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+      - run: cargo fmt --check
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ty check
+
+  rust:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        toolchain: ["1.91", stable]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - run: cargo test --locked
+      - run: cargo test --locked --features mps
+      - run: cargo doc --locked --no-deps --features mps
+        if: matrix.toolchain == 'stable'
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            packages: libcholmod>=5.2,<5.4 mkl
+            library-prefix: ""
+          - os: windows-2022
+            packages: libcholmod>=5.2,<5.4 mkl
+            library-prefix: /Library
+          - os: macos-15
+            packages: libcholmod>=5.2,<5.4
+            library-prefix: ""
+          - os: macos-15-intel
+            packages: libcholmod>=5.2,<5.4
+            library-prefix: ""
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -leo pipefail {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: native
+          create-args: ${{ matrix.packages }}
+          cache-environment: true
+      - name: Configure native library paths
+        run: |
+          native_prefix="$CONDA_PREFIX${{ matrix.library-prefix }}"
+          echo "CHOLMOD_INCLUDE_DIR=$native_prefix/include/suitesparse" >> "$GITHUB_ENV"
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            echo "LD_LIBRARY_PATH=$native_prefix/lib" >> "$GITHUB_ENV"
+          fi
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --features mps,accelerate,cholmod,pardiso

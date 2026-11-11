@@ -95,9 +95,6 @@ class SolutionInfo:
     def factorizations(self) -> int: ...
 
     @property
-    def inertia_failures(self) -> int: ...
-
-    @property
     def linear_solver(self) -> LinearSolver: ...
 
 

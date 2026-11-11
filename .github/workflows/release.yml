@@ -1,0 +1,188 @@
+name: Release packages
+
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+  # Manual runs only build and test. Publishing requires a version tag push.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
+
+  source:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Check version and release tag
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          if os.environ["IS_TAG"] == "true":
+              assert os.environ["REF_NAME"] == f"v{version}", "tag must match Cargo.toml"
+          PY
+      - run: cargo publish --dry-run --locked
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  wheels:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            features: python,mps,cholmod,pardiso
+            packages: libcholmod>=5.2,<5.4 mkl
+            interpreter: python3.10
+            python-path: bin/python
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            features: python,mps,cholmod,pardiso
+            packages: libcholmod>=5.2,<5.4 mkl
+            interpreter: python
+            python-path: Scripts/python.exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            features: python,mps,accelerate,cholmod
+            packages: libcholmod>=5.2,<5.4
+            interpreter: python
+            python-path: bin/python
+          - os: macos-15
+            target: aarch64-apple-darwin
+            features: python,mps,accelerate,cholmod
+            packages: libcholmod>=5.2,<5.4
+            interpreter: python
+            python-path: bin/python
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -leo pipefail {0}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      # Relative to the extracted source, also valid inside manylinux's container.
+      CHOLMOD_INCLUDE_DIR: target/headers/CHOLMOD/Include
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Extract the source distribution
+        run: |
+          mkdir -p target/wheel-source
+          tar -xzf dist/*.tar.gz --strip-components=1 -C target/wheel-source
+      - name: Fetch CHOLMOD 5.3.1 headers only
+        uses: actions/checkout@v4
+        with:
+          repository: DrTimothyAldenDavis/SuiteSparse
+          ref: v7.10.1
+          path: target/wheel-source/target/headers
+          sparse-checkout: |
+            CHOLMOD/Include
+            SuiteSparse_config
+      - name: Prepare the header search directory
+        run: >-
+          cp target/wheel-source/target/headers/SuiteSparse_config/SuiteSparse_config.h
+          target/wheel-source/target/headers/CHOLMOD/Include/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: target/wheel-source
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          docker-options: -e CHOLMOD_INCLUDE_DIR
+          args: >-
+            --release --locked --out ../../dist
+            --interpreter ${{ matrix.interpreter }}
+            --features ${{ matrix.features }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Test installed wheel without optional runtimes
+        env:
+          CPO3_CHOLMOD: /cpo3-missing-runtime/cholmod
+          CPO3_MKL_RT: /cpo3-missing-runtime/mkl
+        run: |
+          cp -R tests "$RUNNER_TEMP/wheel-tests"
+          cd "$RUNNER_TEMP"
+          for version in 3.10 3.15; do
+            env_dir="$RUNNER_TEMP/wheel-python-$version"
+            uv venv --python "$version" "$env_dir"
+            python_bin="$env_dir/${{ matrix.python-path }}"
+            uv pip install --python "$python_bin" "$GITHUB_WORKSPACE"/dist/*.whl pytest
+            "$python_bin" -m pytest -ra wheel-tests/test_solver.py::test_numerical_solve -k "faer or accelerate"
+          done
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: native
+          create-args: ${{ matrix.packages }}
+          cache-environment: true
+      - name: Test installed wheel with optional runtimes
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          cd "$RUNNER_TEMP"
+          for version in 3.10 3.15; do
+            python_bin="$RUNNER_TEMP/wheel-python-$version/${{ matrix.python-path }}"
+            "$python_bin" -m pytest -ra wheel-tests
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish-pypi:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [checks, source, wheels]
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-crates:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [checks, source, wheels]
+    runs-on: ubuntu-24.04
+    environment: crates-io
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

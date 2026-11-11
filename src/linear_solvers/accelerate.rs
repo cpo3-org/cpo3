@@ -2,7 +2,7 @@
 
 use std::{ffi::c_void, ptr::NonNull};
 
-use super::{LinearSystemError, PivotReport, TriangleSource};
+use super::{LinearSystemError, TriangleSource};
 use crate::CscMatrix;
 
 unsafe extern "C" {
@@ -15,12 +15,6 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn cpo3_accelerate_free(factor: *mut c_void);
     fn cpo3_accelerate_factor(factor: *mut c_void, values: *mut f64) -> i32;
-    fn cpo3_accelerate_inertia(
-        factor: *mut c_void,
-        positive: *mut i32,
-        zero: *mut i32,
-        negative: *mut i32,
-    ) -> i32;
     fn cpo3_accelerate_solve(factor: *mut c_void, columns: i32, rhs: *mut f64) -> i32;
 }
 
@@ -37,7 +31,6 @@ pub(super) struct AccelerateFactorization {
     values: Vec<f64>,
     source: TriangleSource,
     dim: usize,
-    inertia: Option<PivotReport>,
 }
 
 impl AccelerateFactorization {
@@ -82,7 +75,6 @@ impl AccelerateFactorization {
             values,
             source,
             dim,
-            inertia: None,
         })
     }
 
@@ -92,25 +84,8 @@ impl AccelerateFactorization {
 
     pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         *factorizations += 1;
-        self.inertia = None;
         // SAFETY: The live handle and its fixed CSC buffers remain owned by self.
-        check(unsafe { cpo3_accelerate_factor(self.handle.as_ptr(), self.values.as_mut_ptr()) })?;
-        let (mut positive, mut zero, mut negative) = (0, 0, 0);
-        // SAFETY: The successful LDLᵀ factor is live and output pointers are valid.
-        check(unsafe {
-            cpo3_accelerate_inertia(
-                self.handle.as_ptr(),
-                &mut positive,
-                &mut zero,
-                &mut negative,
-            )
-        })?;
-        self.inertia = Some(PivotReport {
-            positive: positive as usize,
-            zero: zero as usize,
-            negative: negative as usize,
-        });
-        Ok(())
+        check(unsafe { cpo3_accelerate_factor(self.handle.as_ptr(), self.values.as_mut_ptr()) })
     }
 
     pub(super) fn refactor_diagonal(
@@ -120,10 +95,6 @@ impl AccelerateFactorization {
     ) -> Result<(), LinearSystemError> {
         self.source.gather_diagonal(diagonal, &mut self.values);
         self.factor(factorizations)
-    }
-
-    pub(super) fn pivot_report(&self) -> Option<PivotReport> {
-        self.inertia
     }
 
     pub(super) fn solve_in_place(
@@ -154,5 +125,72 @@ fn check(status: i32) -> Result<(), LinearSystemError> {
         Ok(())
     } else {
         Err(error(status))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_refactors_solve_after_diagonal_sign_changes() {
+        if !available() {
+            return;
+        }
+        // Include scalar factors (bound elimination can leave a 1x1 KKT matrix)
+        // and sign changes on a retained symbolic factorization.
+        for dim in [1, 2, 3] {
+            let mut factor =
+                AccelerateFactorization::new(CscMatrix::identity(dim).unwrap(), 0).unwrap();
+            let mut count = 0;
+            factor.factor(&mut count).unwrap();
+            for pass in 0..6 {
+                let diagonal: Vec<_> = (0..dim)
+                    .map(|i| if (i + pass) % 2 == 0 { 2.0 } else { -3.0 })
+                    .collect();
+                factor.refactor_diagonal(&diagonal, &mut count).unwrap();
+                let mut rhs = diagonal;
+                factor.solve_in_place(&mut rhs, 1).unwrap();
+                for x in rhs {
+                    assert!((x - 1.0).abs() < 1e-12);
+                }
+            }
+            assert_eq!(count, 7);
+        }
+    }
+
+    #[test]
+    fn repeated_refactors_solve_with_one_and_two_by_two_pivots() {
+        if !available() {
+            return;
+        }
+        // Tiny diagonals force a 2x2 pivot; later updates exercise both
+        // positive and negative definite matrices with the same sparsity.
+        let matrix =
+            CscMatrix::new(2, 2, vec![0, 1, 3], vec![0, 0, 1], vec![1e-12, 1.0, -1e-12]).unwrap();
+        let mut factor = AccelerateFactorization::new(matrix, 0).unwrap();
+        let mut count = 0;
+        factor.factor(&mut count).unwrap();
+        for diagonal in [
+            [1e-12, -1e-12],
+            [3.0, -2.0],
+            [-1e-12, 1e-12],
+            [-2.0, -3.0],
+            [4.0, 2.0],
+            [1e-12, -1e-12],
+        ] {
+            factor.refactor_diagonal(&diagonal, &mut count).unwrap();
+            let mut rhs = [
+                diagonal[0] + 2.0,
+                1.0 + 2.0 * diagonal[1],
+                3.0 * diagonal[0] - 1.0,
+                3.0 - diagonal[1],
+            ];
+            factor.solve_in_place(&mut rhs, 2).unwrap();
+            for (x, expected) in rhs.into_iter().zip([1.0, 2.0, 3.0, -1.0]) {
+                assert!((x - expected).abs() < 1e-12);
+            }
+        }
+        assert_eq!(count, 7);
     }
 }

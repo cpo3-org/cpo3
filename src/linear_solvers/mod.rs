@@ -131,22 +131,11 @@ pub struct LinearAlgebraStats {
     pub lsmr_iterations: usize,
     /// Refinements that failed (strict stall/divergence, or singular).
     pub refinement_failures: usize,
-    /// Factorizations rejected before any solve because their inertia
-    /// was not that of a quasi-definite matrix.
-    pub inertia_failures: usize,
     /// Internal diagnostics used to adjust the diagonal clamp between steps.
     pub(crate) refinement_clamp_limited: usize,
     pub(crate) refinement_solve_limited: usize,
     /// Refinements that returned their best iterate after stalling or diverging.
     pub(crate) refinement_settled: usize,
-}
-
-/// Inertia of the most recent factorization.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct PivotReport {
-    pub(crate) positive: usize,
-    pub(crate) negative: usize,
-    pub(crate) zero: usize,
 }
 
 impl LinearAlgebraStats {
@@ -156,7 +145,6 @@ impl LinearAlgebraStats {
         self.refinement_solves += other.refinement_solves;
         self.lsmr_iterations += other.lsmr_iterations;
         self.refinement_failures += other.refinement_failures;
-        self.inertia_failures += other.inertia_failures;
         self.refinement_clamp_limited += other.refinement_clamp_limited;
         self.refinement_solve_limited += other.refinement_solve_limited;
         self.refinement_settled += other.refinement_settled;
@@ -240,32 +228,6 @@ impl Factorization {
 
     pub(crate) fn stats(&self) -> LinearAlgebraStats {
         self.stats
-    }
-
-    /// Inertia of the current factor, when the backend exposes it.
-    fn pivot_report(&self) -> Option<PivotReport> {
-        self.inner.pivot_report()
-    }
-
-    /// Reject a factor whose inertia is not `(expected_positive, rest)`:
-    /// a quasi-definite matrix has exactly one positive pivot per
-    /// variable, so anything else is a rounding casualty that no
-    /// refinement can repair.
-    pub(crate) fn check_inertia(
-        &mut self,
-        expected_positive: usize,
-    ) -> Result<(), LinearSystemError> {
-        let Some(report) = self.pivot_report() else {
-            return Ok(());
-        };
-        if report.positive != expected_positive || report.zero != 0 {
-            self.stats.inertia_failures += 1;
-            return Err(LinearSystemError::WrongInertia {
-                positive: report.positive,
-                expected: expected_positive,
-            });
-        }
-        Ok(())
     }
 
     pub(crate) fn stats_mut(&mut self) -> &mut LinearAlgebraStats {
@@ -369,18 +331,6 @@ fn solve_into(
 }
 
 impl FactorizationInner {
-    fn pivot_report(&self) -> Option<PivotReport> {
-        match self {
-            Self::Faer(_) => None,
-            #[cfg(all(feature = "accelerate", target_os = "macos"))]
-            Self::Accelerate(factorization) => factorization.pivot_report(),
-            #[cfg(feature = "cholmod")]
-            Self::Cholmod(factorization) => factorization.pivot_report(),
-            #[cfg(feature = "pardiso")]
-            Self::Pardiso(factorization) => factorization.pivot_report(),
-        }
-    }
-
     fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
         let dim = match self {
             Self::Faer(factorization) => factorization.dim(),
@@ -680,8 +630,6 @@ pub(crate) enum LinearSystemError {
     NotUpperTriangle,
     #[error("linear-system matrix is singular")]
     Singular,
-    #[error("factorization has {positive} positive pivots, expected {expected}")]
-    WrongInertia { positive: usize, expected: usize },
     #[error("iterative refinement diverged (best backward error {0:.1e})")]
     RefinementDiverged(f64),
     #[error("linear-system factorization failed: {0}")]
@@ -699,7 +647,6 @@ impl LinearSystemError {
     pub(crate) fn is_numerical(&self) -> bool {
         match self {
             Self::Singular
-            | Self::WrongInertia { .. }
             | Self::RefinementDiverged(_)
             | Self::Factorization(_)
             | Self::NonFiniteRightHandSide => true,
@@ -1025,35 +972,6 @@ mod tests {
                 }
             }
             assert_eq!(count, 4);
-        }
-    }
-
-    #[test]
-    fn inertia_check_counts_positive_pivots() {
-        for solver in [
-            LinearSolver::Accelerate,
-            LinearSolver::Cholmod,
-            LinearSolver::Pardiso,
-        ]
-        .into_iter()
-        .filter(|solver| solver.is_available())
-        {
-            let settings = KktSettings::new(solver);
-            let mut factorization =
-                Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
-                    .unwrap();
-            factorization.factor(&mut 0).unwrap();
-            let report = factorization.pivot_report().unwrap();
-            assert_eq!((report.positive, report.negative, report.zero), (2, 1, 0));
-            assert!(factorization.check_inertia(2).is_ok());
-            assert!(matches!(
-                factorization.check_inertia(1),
-                Err(LinearSystemError::WrongInertia {
-                    positive: 2,
-                    expected: 1
-                })
-            ));
-            assert_eq!(factorization.stats().inertia_failures, 1);
         }
     }
 

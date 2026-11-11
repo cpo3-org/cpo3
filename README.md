@@ -1,16 +1,23 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cpo3-org/.github/main/assets/logo-dark.png">
+    <img src="https://raw.githubusercontent.com/cpo3-org/.github/main/assets/logo-light.png" alt="cpo³ — sparse optimization solver" width="320">
+  </picture>
+</p>
+
 # cpo3
 
 cpo3 is a sparse interior-point solver for convex linear and quadratic programs,
 written in Rust with a Python interface. It solves
 
-$$
-\min_{x,s} \tfrac12 x^\top P x + c^\top x
-\quad\text{subject to}\quad Ax+s=b,\quad s\in\mathcal K,
-$$
+```text
+minimize over x, s    ½ xᵀ P x + cᵀ x
+subject to           Ax + s = b,  s ∈ K
+```
 
-where $P$ is symmetric positive semidefinite. The supported cone blocks are
+where `P` is symmetric positive semidefinite. The supported cone blocks are
 zero cones for equalities and nonnegative cones for inequalities. Thus,
-nonnegative-cone rows represent $Ax\le b$; variable bounds can be written as
+nonnegative-cone rows represent `Ax ≤ b`; variable bounds can be written as
 additional constraint rows.
 
 - **Solutions and certificates:** recover primal and dual solutions or
@@ -33,8 +40,21 @@ releases.
 
 ## Installation
 
-cpo3 is not yet published on PyPI or crates.io. Install it from source using
-the instructions below.
+The release packages can be installed with:
+
+```sh
+python -m pip install cpo3==0.0.1
+```
+
+```toml
+[dependencies]
+cpo3 = "0.0.1"
+```
+
+Requires Python 3.10 or later.
+
+For an unreleased checkout, or to customize the build, use the source
+installation below.
 
 To build the Python interface from source, install Rust 1.91 or later,
 Python 3.10 or later, and [uv](https://docs.astral.sh/uv/), then run:
@@ -47,7 +67,7 @@ uv sync
 
 Use `uv run python` from this checkout to run Python with the built package.
 
-For a Rust application, add the Git dependency to `Cargo.toml`:
+To use an unreleased checkout in a Rust application:
 
 ```toml
 [dependencies]
@@ -56,8 +76,8 @@ cpo3 = { git = "https://github.com/cpo3-org/cpo3.git" }
 
 ## Python quick start
 
-This problem minimizes $\tfrac12(x_1^2+x_2^2)-x_1-2x_2$ subject to
-$x_1\le3$ and $x_2\le4$. The solution is $x=(1,2)$, with objective $-2.5$.
+This problem minimizes `½(x₁² + x₂²) − x₁ − 2x₂` subject to
+`x₁ ≤ 3` and `x₂ ≤ 4`. The solution is `x = (1, 2)`, with objective `−2.5`.
 
 ```python
 import cpo3
@@ -93,7 +113,7 @@ solution = cpo3.solve(problem, settings=settings)
 `verbose=True` prints progress and a termination summary. `threads=1` selects
 sequential factorization and solves; the default, `threads=0`, uses the backend's
 automatic thread selection. See the
-[`Settings` docstring](python/cpo3/settings.py) for the available controls.
+[`Settings` docstring](https://github.com/cpo3-org/cpo3/blob/main/python/cpo3/settings.py) for the available controls.
 
 For a related problem, pass `warm_start=(solution.x, solution.y, solution.s)`
 to `solve`. The solver screens the point before deciding whether to use it.
@@ -130,16 +150,29 @@ starting point for a related problem.
 
 ## Optional factorization backends
 
-Faer is included by default. To use another backend, install its requirements
-and enable it when building cpo3:
+Faer is always included and needs no external numerical runtime. The published
+wheel builds include the following integrations:
+
+| Wheel platform | Included backend integrations |
+| --- | --- |
+| Linux x86-64 and Windows x86-64 | Faer, CHOLMOD, PARDISO |
+| macOS Intel and Apple Silicon | Faer, Accelerate, CHOLMOD |
+
+Accelerate uses the macOS system framework. CHOLMOD and MKL are **not bundled**;
+install compatible shared runtimes separately before selecting those backends.
+Importing cpo3 and using Faer work without either runtime. Check availability
+with `cpo3.LinearSolver.CHOLMOD.is_available()` (or another enum member).
+
+Source builds, including installation from the sdist, default to Faer. Python
+source builds also enable MPS/QPS loading. Enable other backends explicitly:
 
 | Backend | Build feature | Requirements |
 | --- | --- | --- |
 | Apple Accelerate | `accelerate` | macOS 13 or later; `threads=0` required |
-| SuiteSparse CHOLMOD | `cholmod` | CHOLMOD 5.2.x or 5.3.x, including development headers |
+| SuiteSparse CHOLMOD | `cholmod` | CHOLMOD 5.2.x or 5.3.x, development headers for source builds only |
 | Intel MKL PARDISO | `pardiso` | Intel oneMKL shared runtime |
 
-For example, enable Accelerate and start Python:
+For example, build from a checkout with Accelerate and start Python:
 
 ```sh
 uv sync --config-setting "build-args=--features=python,mps,accelerate"
@@ -205,12 +238,16 @@ uv run --no-sync ruff format --check .
 uv run --no-sync ty check
 ```
 
-Python tests exercise all available backends and skip unavailable ones.
+Python tests exercise all available backends and skip unavailable ones. The release
+workflow builds wheels from the sdist and runs these tests against installed
+wheels outside the checkout, with and without optional native runtimes.
 
-See [benchmarks/README.md](benchmarks/README.md) for the benchmark data.
+See the [changelog](https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md).
+
+See [benchmarks/README.md](https://github.com/cpo3-org/cpo3/blob/main/benchmarks/README.md) for the benchmark data.
 
 ## Authors and license
 
 Matteo Santamaria, Michael Cummins, and Brendan O'Donoghue.
 
-Licensed under [MIT](LICENSE).
+Licensed under [MIT](https://github.com/cpo3-org/cpo3/blob/main/LICENSE).

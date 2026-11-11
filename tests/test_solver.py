@@ -1,3 +1,5 @@
+import os
+import sys
 from dataclasses import dataclass
 
 import cpo3
@@ -127,6 +129,13 @@ def equality_qp() -> Case:
 def linear_solver(request: pytest.FixtureRequest) -> cpo3.LinearSolver:
     solver = request.param
     if not solver.is_available():
+        required = [cpo3.LinearSolver.FAER, cpo3.LinearSolver.CHOLMOD]
+        if sys.platform == "darwin":
+            required.append(cpo3.LinearSolver.ACCELERATE)
+        elif sys.platform in ("linux", "win32"):
+            required.append(cpo3.LinearSolver.PARDISO)
+        if os.environ.get("CI") == "true" and solver in required:
+            pytest.fail(f"{solver.value} is required in CI but is not available")
         pytest.skip(f"{solver.value} is not available")
     return solver
 

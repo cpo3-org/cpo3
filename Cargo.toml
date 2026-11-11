@@ -8,15 +8,20 @@ description = "An interior-point solver for convex quadratic and linear programs
 readme = "README.md"
 license = "MIT"
 documentation = "https://docs.rs/cpo3"
-keywords = ["python", "pyo3"]
-categories = ["api-bindings"]
+repository = "https://github.com/cpo3-org/cpo3"
+keywords = ["optimization", "convex", "quadratic", "linear-programming", "interior-point"]
+categories = ["mathematics"]
 exclude = [
     "/benchmarks/data/**",
     "/dist/**",
     "/python/**/__pycache__/**",
     "/python/**/*.so",
+    "/python/**/*.pyd",
     "/tests/**/__pycache__/**",
 ]
+
+[package.metadata.docs.rs]
+features = ["mps"]
 
 [lib]
 name = "cpo3"
@@ -36,7 +41,7 @@ python = [
 ]
 
 [dependencies]
-presolve = { git = "https://github.com/matteosantama/presolve.git", rev = "22f8b675f96c0d4a057d95445e80b4be2bb77c27" }
+presolve = "0.1.0"
 faer = { version = "0.24.4", default-features = false, features = ["linalg", "sparse", "rayon", "std"] }
 libloading = { version = "0.9.0", optional = true }
 mps = { version = "1.0.1", optional = true }
