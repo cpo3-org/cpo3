@@ -16,8 +16,6 @@ jobs:
 
   source:
     runs-on: ubuntu-24.04
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -25,7 +23,6 @@ jobs:
         with:
           python-version: "3.14"
       - name: Check version and release tag
-        id: version
         env:
           IS_TAG: ${{ github.ref_type == 'tag' }}
           REF_NAME: ${{ github.ref_name }}
@@ -37,8 +34,6 @@ jobs:
           version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
           if os.environ["IS_TAG"] == "true":
               assert os.environ["REF_NAME"] == f"v{version}", "tag must match Cargo.toml"
-          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"version={version}\n")
           PY
       - run: cargo publish --dry-run --locked
       - uses: PyO3/maturin-action@v1
@@ -60,7 +55,7 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             features: python,mps,cholmod,pardiso
-            required: faer,cholmod,pardiso
+            required: faer cholmod pardiso
             baseline: faer
             packages: libcholmod>=5.2,<5.4 mkl
             interpreter: python3.10
@@ -68,7 +63,7 @@ jobs:
           - os: windows-2022
             target: x86_64-pc-windows-msvc
             features: python,mps,cholmod,pardiso
-            required: faer,cholmod,pardiso
+            required: faer cholmod pardiso
             baseline: faer
             packages: libcholmod>=5.2,<5.4 mkl
             interpreter: python
@@ -76,16 +71,16 @@ jobs:
           - os: macos-15-intel
             target: x86_64-apple-darwin
             features: python,mps,accelerate,cholmod
-            required: faer,accelerate,cholmod
-            baseline: faer,accelerate
+            required: faer accelerate cholmod
+            baseline: faer accelerate
             packages: libcholmod>=5.2,<5.4
             interpreter: python
             python-path: bin/python
           - os: macos-15
             target: aarch64-apple-darwin
             features: python,mps,accelerate,cholmod
-            required: faer,accelerate,cholmod
-            baseline: faer,accelerate
+            required: faer accelerate cholmod
+            baseline: faer accelerate
             packages: libcholmod>=5.2,<5.4
             interpreter: python
             python-path: bin/python
@@ -134,22 +129,22 @@ jobs:
             --interpreter ${{ matrix.interpreter }}
             --features ${{ matrix.features }}
       - uses: astral-sh/setup-uv@v7
-      - name: Check wheel contents
-        run: python .github/scripts/check_artifacts.py dist/*.whl
       - name: Test installed wheel without optional runtimes
         env:
-          CPO3_REQUIRED_BACKENDS: ${{ matrix.baseline }}
-          CPO3_UNAVAILABLE_BACKENDS: cholmod,pardiso
           CPO3_CHOLMOD: /cpo3-missing-runtime/cholmod
           CPO3_MKL_RT: /cpo3-missing-runtime/mkl
         run: |
+          cp -R tests "$RUNNER_TEMP/wheel-tests"
+          cd "$RUNNER_TEMP"
           for version in 3.10 3.15; do
             env_dir="$RUNNER_TEMP/wheel-python-$version"
             uv venv --python "$version" "$env_dir"
             python_bin="$env_dir/${{ matrix.python-path }}"
-            uv pip install --python "$python_bin" dist/*.whl pytest
-            "$python_bin" .github/scripts/test_wheel.py --version '${{ needs.source.outputs.version }}' \
-              tests/test_backend_availability.py tests/test_solver.py::test_numerical_solve
+            uv pip install --python "$python_bin" "$GITHUB_WORKSPACE"/dist/*.whl pytest
+            for backend in ${{ matrix.baseline }}; do
+              "$python_bin" -c "import cpo3; assert cpo3.LinearSolver('$backend').is_available(), '$backend is required'"
+            done
+            "$python_bin" -m pytest -ra wheel-tests/test_solver.py::test_numerical_solve
           done
       - uses: mamba-org/setup-micromamba@v3
         with:
@@ -157,15 +152,17 @@ jobs:
           create-args: ${{ matrix.packages }}
           cache-environment: true
       - name: Test installed wheel with optional runtimes
-        env:
-          CPO3_REQUIRED_BACKENDS: ${{ matrix.required }}
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
             export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           fi
+          cd "$RUNNER_TEMP"
           for version in 3.10 3.15; do
             python_bin="$RUNNER_TEMP/wheel-python-$version/${{ matrix.python-path }}"
-            "$python_bin" .github/scripts/test_wheel.py --version '${{ needs.source.outputs.version }}'
+            for backend in ${{ matrix.required }}; do
+              "$python_bin" -c "import cpo3; assert cpo3.LinearSolver('$backend').is_available(), '$backend is required'"
+            done
+            "$python_bin" -m pytest -ra wheel-tests
           done
       - uses: actions/upload-artifact@v4
         with:

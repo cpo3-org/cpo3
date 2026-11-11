@@ -235,8 +235,7 @@ uv run --no-sync ruff format --check .
 uv run --no-sync ty check
 ```
 
-Python tests exercise all available backends and skip unavailable ones. CI sets
-`CPO3_REQUIRED_BACKENDS` so missing expected backends fail the run. The release
+Python tests exercise all available backends and skip unavailable ones. The release
 workflow builds wheels from the sdist and runs these tests against installed
 wheels outside the checkout, with and without optional native runtimes.
 
