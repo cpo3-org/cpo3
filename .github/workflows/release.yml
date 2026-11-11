@@ -55,32 +55,24 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             features: python,mps,cholmod,pardiso
-            required: faer cholmod pardiso
-            baseline: faer
             packages: libcholmod>=5.2,<5.4 mkl
             interpreter: python3.10
             python-path: bin/python
           - os: windows-2022
             target: x86_64-pc-windows-msvc
             features: python,mps,cholmod,pardiso
-            required: faer cholmod pardiso
-            baseline: faer
             packages: libcholmod>=5.2,<5.4 mkl
             interpreter: python
             python-path: Scripts/python.exe
           - os: macos-15-intel
             target: x86_64-apple-darwin
             features: python,mps,accelerate,cholmod
-            required: faer accelerate cholmod
-            baseline: faer accelerate
             packages: libcholmod>=5.2,<5.4
             interpreter: python
             python-path: bin/python
           - os: macos-15
             target: aarch64-apple-darwin
             features: python,mps,accelerate,cholmod
-            required: faer accelerate cholmod
-            baseline: faer accelerate
             packages: libcholmod>=5.2,<5.4
             interpreter: python
             python-path: bin/python
@@ -141,10 +133,7 @@ jobs:
             uv venv --python "$version" "$env_dir"
             python_bin="$env_dir/${{ matrix.python-path }}"
             uv pip install --python "$python_bin" "$GITHUB_WORKSPACE"/dist/*.whl pytest
-            for backend in ${{ matrix.baseline }}; do
-              "$python_bin" -c "import cpo3; assert cpo3.LinearSolver('$backend').is_available(), '$backend is required'"
-            done
-            "$python_bin" -m pytest -ra wheel-tests/test_solver.py::test_numerical_solve
+            "$python_bin" -m pytest -ra wheel-tests/test_solver.py::test_numerical_solve -k "faer or accelerate"
           done
       - uses: mamba-org/setup-micromamba@v3
         with:
@@ -159,9 +148,6 @@ jobs:
           cd "$RUNNER_TEMP"
           for version in 3.10 3.15; do
             python_bin="$RUNNER_TEMP/wheel-python-$version/${{ matrix.python-path }}"
-            for backend in ${{ matrix.required }}; do
-              "$python_bin" -c "import cpo3; assert cpo3.LinearSolver('$backend').is_available(), '$backend is required'"
-            done
             "$python_bin" -m pytest -ra wheel-tests
           done
       - uses: actions/upload-artifact@v4

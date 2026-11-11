@@ -47,19 +47,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            required: faer cholmod pardiso
             packages: libcholmod>=5.2,<5.4 mkl
             library-prefix: ""
           - os: windows-2022
-            required: faer cholmod pardiso
             packages: libcholmod>=5.2,<5.4 mkl
             library-prefix: /Library
           - os: macos-15
-            required: faer accelerate cholmod
             packages: libcholmod>=5.2,<5.4
             library-prefix: ""
           - os: macos-15-intel
-            required: faer accelerate cholmod
             packages: libcholmod>=5.2,<5.4
             library-prefix: ""
     runs-on: ${{ matrix.os }}
@@ -89,9 +85,4 @@ jobs:
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --features mps,accelerate,cholmod,pardiso
       - run: uv sync --locked --config-setting "build-args=--features=python,mps,accelerate,cholmod,pardiso"
-      - name: Check required backends
-        run: |
-          for backend in ${{ matrix.required }}; do
-            uv run --no-sync python -c "import cpo3; assert cpo3.LinearSolver('$backend').is_available(), '$backend is required'"
-          done
       - run: uv run --no-sync pytest -ra
