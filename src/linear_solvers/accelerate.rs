@@ -156,3 +156,42 @@ fn check(status: i32) -> Result<(), LinearSystemError> {
         Err(error(status))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inertia_tracks_each_numeric_factorization() {
+        if !available() {
+            return;
+        }
+        // Include scalar factors (bound elimination can leave a 1x1 KKT matrix)
+        // and sign changes on a retained symbolic factorization.
+        for dim in [1, 2, 3] {
+            let mut factor =
+                AccelerateFactorization::new(CscMatrix::identity(dim).unwrap(), 0).unwrap();
+            let mut count = 0;
+            factor.factor(&mut count).unwrap();
+            for pass in 0..6 {
+                let diagonal: Vec<_> = (0..dim)
+                    .map(|i| if (i + pass) % 2 == 0 { 2.0 } else { -3.0 })
+                    .collect();
+                factor.refactor_diagonal(&diagonal, &mut count).unwrap();
+                let report = factor.pivot_report().unwrap();
+                let positive = diagonal.iter().filter(|&&d| d > 0.0).count();
+                assert_eq!(
+                    (report.positive, report.zero, report.negative),
+                    (positive, 0, dim - positive),
+                    "dimension {dim}, refactor {pass}"
+                );
+                let mut rhs = diagonal;
+                factor.solve_in_place(&mut rhs, 1).unwrap();
+                for x in rhs {
+                    assert!((x - 1.0).abs() < 1e-12);
+                }
+            }
+            assert_eq!(count, 7);
+        }
+    }
+}
