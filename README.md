@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cpo3-org/cpo3/main/assets/logo-dark.png">
-    <img src="https://raw.githubusercontent.com/cpo3-org/cpo3/main/assets/logo-light.png" alt="cpo³ — sparse optimization solver" width="320">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/cpo3-org/.github/main/assets/logo-dark.png">
+    <img src="https://raw.githubusercontent.com/cpo3-org/.github/main/assets/logo-light.png" alt="cpo³ — sparse optimization solver" width="320">
   </picture>
 </p>
 
