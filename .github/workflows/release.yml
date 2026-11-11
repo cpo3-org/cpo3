@@ -1,0 +1,229 @@
+name: Release packages
+
+on:
+  pull_request:
+  push:
+    tags: ["v*"]
+  # Manual runs only build and test. Publishing requires a version tag push.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  source:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Check version and release tag
+        id: version
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path("Cargo.toml").read_text())["package"]["version"]
+          if os.environ["IS_TAG"] == "true":
+              assert os.environ["REF_NAME"] == f"v{version}", "tag must match Cargo.toml"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+          PY
+      - run: cargo publish --dry-run --locked
+      # Retain the verified package at Cargo's documented artifact location;
+      # publish's temporary archive location varies between Cargo versions.
+      - run: cargo package --locked --no-verify
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - name: Check source archives
+        run: >-
+          python .github/scripts/check_artifacts.py
+          --version '${{ steps.version.outputs.version }}'
+          dist/*.tar.gz target/package/*.crate
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate
+          path: target/package/*.crate
+          if-no-files-found: error
+
+  wheels:
+    needs: source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            features: python,mps,cholmod,pardiso
+            required: faer,cholmod,pardiso
+            baseline: faer
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            features: python,mps,cholmod,pardiso
+            required: faer,cholmod,pardiso
+            baseline: faer
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            features: python,mps,accelerate,cholmod
+            required: faer,accelerate,cholmod
+            baseline: faer,accelerate
+          - os: macos-14
+            target: aarch64-apple-darwin
+            features: python,mps,accelerate,cholmod
+            required: faer,accelerate,cholmod
+            baseline: faer,accelerate
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash -leo pipefail {0}
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      # Relative to the extracted source, also valid inside manylinux's container.
+      CHOLMOD_INCLUDE_DIR: target/headers/CHOLMOD/Include
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - name: Extract the source distribution
+        run: |
+          mkdir -p target/wheel-source
+          tar -xzf dist/*.tar.gz --strip-components=1 -C target/wheel-source
+      - name: Fetch CHOLMOD 5.3.1 headers only
+        uses: actions/checkout@v4
+        with:
+          repository: DrTimothyAldenDavis/SuiteSparse
+          ref: v7.10.1
+          path: target/wheel-source/target/headers
+          sparse-checkout: |
+            CHOLMOD/Include
+            SuiteSparse_config
+      - name: Prepare the header search directory
+        run: >-
+          cp target/wheel-source/target/headers/SuiteSparse_config/SuiteSparse_config.h
+          target/wheel-source/target/headers/CHOLMOD/Include/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: target/wheel-source
+          target: ${{ matrix.target }}
+          manylinux: "2_28"
+          docker-options: -e CHOLMOD_INCLUDE_DIR
+          args: >-
+            --release --locked --out ../../dist
+            --interpreter ${{ runner.os == 'Linux' && 'python3.10' || 'python' }}
+            --features ${{ matrix.features }}
+      - uses: astral-sh/setup-uv@v7
+      - name: Check wheel contents
+        run: >-
+          python .github/scripts/check_artifacts.py
+          --version '${{ needs.source.outputs.version }}' dist/*.whl
+      - name: Test installed wheel without optional runtimes
+        env:
+          CPO3_REQUIRED_BACKENDS: ${{ matrix.baseline }}
+          CPO3_UNAVAILABLE_BACKENDS: cholmod,pardiso
+          CPO3_CHOLMOD: /cpo3-missing-runtime/cholmod
+          CPO3_MKL_RT: /cpo3-missing-runtime/mkl
+        run: |
+          for version in 3.10 3.14 3.15; do
+            env_dir="$RUNNER_TEMP/wheel-python-$version"
+            uv venv --python "$version" "$env_dir"
+            if [[ "$RUNNER_OS" == Windows ]]; then
+              python_bin="$env_dir/Scripts/python.exe"
+            else
+              python_bin="$env_dir/bin/python"
+            fi
+            uv pip install --python "$python_bin" dist/*.whl pytest
+            "$python_bin" .github/scripts/test_wheel.py --version '${{ needs.source.outputs.version }}'
+          done
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: native
+          create-args: >-
+            libcholmod>=5.2,<5.4
+            ${{ runner.os != 'macOS' && 'mkl' || '' }}
+          cache-environment: true
+      - name: Test installed wheel with optional runtimes
+        env:
+          CPO3_REQUIRED_BACKENDS: ${{ matrix.required }}
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            export LD_LIBRARY_PATH="$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          for version in 3.10 3.14 3.15; do
+            if [[ "$RUNNER_OS" == Windows ]]; then
+              python_bin="$RUNNER_TEMP/wheel-python-$version/Scripts/python.exe"
+            else
+              python_bin="$RUNNER_TEMP/wheel-python-$version/bin/python"
+            fi
+            "$python_bin" .github/scripts/test_wheel.py --version '${{ needs.source.outputs.version }}'
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  publish-pypi:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [checks, source, wheels]
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish-crates:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [checks, source, wheels]
+    runs-on: ubuntu-24.04
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    # The initial crates.io publication needs a token; remove it after enabling OIDC.
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1
+        if: env.CARGO_REGISTRY_TOKEN == ''
+        id: auth
+      - name: Publish crate
+        env:
+          TRUSTED_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          export CARGO_REGISTRY_TOKEN="${CARGO_REGISTRY_TOKEN:-$TRUSTED_TOKEN}"
+          cargo publish --locked

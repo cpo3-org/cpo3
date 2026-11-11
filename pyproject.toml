@@ -10,6 +10,7 @@ description = "An interior-point solver for convex quadratic and linear programs
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
+keywords = ["optimization", "quadratic programming", "linear programming", "sparse", "solver"]
 license-files = [
     "LICENSE",
 ]
@@ -21,6 +22,12 @@ classifiers = [
 ]
 dependencies = ["numpy>=1.26", "scipy>=1.13"]
 
+[project.urls]
+Repository = "https://github.com/cpo3-org/cpo3"
+Documentation = "https://github.com/cpo3-org/cpo3#readme"
+Issues = "https://github.com/cpo3-org/cpo3/issues"
+Changelog = "https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "pytest>=8.0",
@@ -29,13 +36,19 @@ dev = [
 ]
 
 [build-system]
-requires = ["maturin>=1.0,<2.0"]
+requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
 features = ["python", "mps"]
 module-name = "cpo3.bindings"
 python-source = "python"
+include = [
+    { path = "python/cpo3/py.typed", format = ["sdist", "wheel"] },
+    { path = "python/cpo3/*.pyi", format = ["sdist", "wheel"] },
+    { path = "tests/**/*", format = "sdist" },
+]
+exclude = ["**/__pycache__/**", "**/*.pyc"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

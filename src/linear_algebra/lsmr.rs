@@ -6,7 +6,7 @@
 //! convergence.
 //!
 //! Adapted from faer 0.24.4, with callback termination inspired by PR #341:
-//! https://codeberg.org/sarah-quinones/faer/pulls/341
+//! <https://codeberg.org/sarah-quinones/faer/pulls/341>
 
 /*
 MIT License

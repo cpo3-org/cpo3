@@ -33,8 +33,24 @@ releases.
 
 ## Installation
 
-cpo3 is not yet published on PyPI or crates.io. Install it from source using
-the instructions below.
+The release packages can be installed with:
+
+```sh
+python -m pip install cpo3==0.0.1
+```
+
+```toml
+[dependencies]
+cpo3 = "0.0.1"
+```
+
+Python requires CPython 3.10 or later. The release wheels target Linux x86-64
+(glibc 2.28 or later), Windows x86-64, and macOS 13 or later on Intel and Apple
+Silicon. These are standard CPython `abi3` wheels; free-threaded Python is not
+covered by this wheel matrix. Rust requires version 1.91 or later.
+
+For an unreleased checkout, or to customize the build, use the source
+installation below.
 
 To build the Python interface from source, install Rust 1.91 or later,
 Python 3.10 or later, and [uv](https://docs.astral.sh/uv/), then run:
@@ -47,7 +63,7 @@ uv sync
 
 Use `uv run python` from this checkout to run Python with the built package.
 
-For a Rust application, add the Git dependency to `Cargo.toml`:
+To use an unreleased checkout in a Rust application:
 
 ```toml
 [dependencies]
@@ -93,7 +109,7 @@ solution = cpo3.solve(problem, settings=settings)
 `verbose=True` prints progress and a termination summary. `threads=1` selects
 sequential factorization and solves; the default, `threads=0`, uses the backend's
 automatic thread selection. See the
-[`Settings` docstring](python/cpo3/settings.py) for the available controls.
+[`Settings` docstring](https://github.com/cpo3-org/cpo3/blob/main/python/cpo3/settings.py) for the available controls.
 
 For a related problem, pass `warm_start=(solution.x, solution.y, solution.s)`
 to `solve`. The solver screens the point before deciding whether to use it.
@@ -130,16 +146,29 @@ starting point for a related problem.
 
 ## Optional factorization backends
 
-Faer is included by default. To use another backend, install its requirements
-and enable it when building cpo3:
+Faer is always included and needs no external numerical runtime. The published
+wheel builds include the following integrations:
+
+| Wheel platform | Included backend integrations |
+| --- | --- |
+| Linux x86-64 and Windows x86-64 | Faer, CHOLMOD, PARDISO |
+| macOS Intel and Apple Silicon | Faer, Accelerate, CHOLMOD |
+
+Accelerate uses the macOS system framework. CHOLMOD and MKL are **not bundled**;
+install compatible shared runtimes separately before selecting those backends.
+Importing cpo3 and using Faer work without either runtime. Check availability
+with `cpo3.LinearSolver.CHOLMOD.is_available()` (or another enum member).
+
+Source builds, including installation from the sdist, default to Faer. Python
+source builds also enable MPS/QPS loading. Enable other backends explicitly:
 
 | Backend | Build feature | Requirements |
 | --- | --- | --- |
 | Apple Accelerate | `accelerate` | macOS 13 or later; `threads=0` required |
-| SuiteSparse CHOLMOD | `cholmod` | CHOLMOD 5.2.x or 5.3.x, including development headers |
+| SuiteSparse CHOLMOD | `cholmod` | CHOLMOD 5.2.x or 5.3.x, development headers for source builds only |
 | Intel MKL PARDISO | `pardiso` | Intel oneMKL shared runtime |
 
-For example, enable Accelerate and start Python:
+For example, build from a checkout with Accelerate and start Python:
 
 ```sh
 uv sync --config-setting "build-args=--features=python,mps,accelerate"
@@ -205,12 +234,18 @@ uv run --no-sync ruff format --check .
 uv run --no-sync ty check
 ```
 
-Python tests exercise all available backends and skip unavailable ones.
+Python tests exercise all available backends and skip unavailable ones. CI sets
+`CPO3_REQUIRED_BACKENDS` so missing expected backends fail the run. The release
+workflow builds wheels from the sdist and runs these tests against installed
+wheels outside the checkout, with and without optional native runtimes.
 
-See [benchmarks/README.md](benchmarks/README.md) for the benchmark data.
+See the [release procedure](https://github.com/cpo3-org/cpo3/blob/main/RELEASING.md)
+and [changelog](https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md).
+
+See [benchmarks/README.md](https://github.com/cpo3-org/cpo3/blob/main/benchmarks/README.md) for the benchmark data.
 
 ## Authors and license
 
 Matteo Santamaria, Michael Cummins, and Brendan O'Donoghue.
 
-Licensed under [MIT](LICENSE).
+Licensed under [MIT](https://github.com/cpo3-org/cpo3/blob/main/LICENSE).
