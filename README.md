@@ -238,10 +238,6 @@ uv run --no-sync ruff format --check .
 uv run --no-sync ty check
 ```
 
-Python tests exercise all available backends and skip unavailable ones. The release
-workflow builds wheels from the sdist and runs these tests against installed
-wheels outside the checkout, with and without optional native runtimes.
-
 See the [changelog](https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md).
 
 See [benchmarks/README.md](https://github.com/cpo3-org/cpo3/blob/main/benchmarks/README.md) for the benchmark data.

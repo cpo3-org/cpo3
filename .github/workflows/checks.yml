@@ -1,9 +1,8 @@
 name: Checks
 
 on:
+  pull_request:
   workflow_call:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -85,3 +84,8 @@ jobs:
           fi
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --features mps,accelerate,cholmod,pardiso
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+      - run: uv sync --locked --config-setting "build-args=--features=python,mps,accelerate,cholmod,pardiso"
+      - run: uv run --no-sync pytest -ra
