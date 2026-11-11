@@ -54,86 +54,6 @@ For a Rust application, add the Git dependency to `Cargo.toml`:
 cpo3 = { git = "https://github.com/cpo3-org/cpo3.git" }
 ```
 
-## Optional factorization backends
-
-Faer is the default and requires no external numerical runtime. The `accelerate`,
-`cholmod`, and `pardiso` Cargo features enable additional backends. All retain symbolic
-analysis across diagonal updates and solve paired right-hand sides together.
-Equality-only problems continue to use Faer for their LDL/LSMR path.
-
-For Python development, build and install the selected backend into the checkout's
-environment. For example, on macOS:
-
-```sh
-uv sync --config-setting "build-args=--features=python,mps,accelerate"
-uv run --no-sync python
-```
-
-Use `python,mps,cholmod` for CHOLMOD or `python,mps,pardiso` for PARDISO, or combine
-the features. Install the requirements below before building. Run subsequent
-Python commands with `uv run --no-sync` so uv does not replace the selected
-build with the default configuration. Repeat the configured `uv sync` command
-after changing Rust code to rebuild the extension.
-
-Rust applications can enable the corresponding features in their Cargo dependency.
-
-- **Accelerate:** requires macOS 13 or later and the Apple SDK at build time.
-  Select `LinearSolver.ACCELERATE` with `threads=0`. Positive thread caps are
-  rejected: Apple's sparse solver has no per-solve threading control. Its
-  process-wide `VECLIB_MAXIMUM_THREADS` setting must be configured before startup
-  if needed; cpo3 never modifies it.
-- **CHOLMOD:** loads a separately installed SuiteSparse runtime when first
-  requested. With a wheel that includes the `cholmod` feature, install the
-  runtime with `brew install suite-sparse` on macOS,
-  `sudo apt-get install libcholmod5` on Ubuntu 24.04, or
-  `conda install -c conda-forge suitesparse` in a Conda environment.
-  No rebuild is needed. The loader searches the system library path, standard
-  Homebrew/MacPorts locations, and the active `CONDA_PREFIX`.
-  Set `CPO3_CHOLMOD` to the full shared-library path before starting Python to
-  override discovery; the library's dependencies must also be discoverable by
-  the operating system. Availability is cached for the process lifetime.
-  Supported CHOLMOD versions are 5.2.x and 5.3.x; other versions are rejected
-  before accessing version-dependent structs. A missing or incompatible runtime
-  disables only CHOLMOD, so importing cpo3 and using Faer still works.
-  Select `LinearSolver.CHOLMOD`. The adapter uses simplicial LDLᵀ, since CHOLMOD's
-  supernodal LLᵀ cannot factor our indefinite KKT systems. It does not pivot;
-  failed factorizations and incorrect inertia use cpo3's existing recovery path.
-  Positive `threads` settings cap CHOLMOD's per-instance OpenMP work; the
-  simplicial factorization itself is sequential. No process-wide thread settings
-  are changed.
-  Building cpo3 from source with this feature still requires compatible headers.
-  Set `CHOLMOD_INCLUDE_DIR` to the directory containing `cholmod.h`, or use
-  `pkg-config` discovery: install `suite-sparse pkg-config` with Homebrew or
-  `libsuitesparse-dev pkg-config` with apt. Set `PKG_CONFIG_PATH` to the directory
-  containing `cholmod.pc` or `CHOLMOD.pc` if needed. Conda's Windows package has
-  no pkg-config metadata; use `%CONDA_PREFIX%\Library\include\suitesparse` as
-  `CHOLMOD_INCLUDE_DIR`. The build neither links nor bundles SuiteSparse libraries.
-- **PARDISO:** requires a compatible Intel oneMKL shared runtime installed
-  separately. Select `LinearSolver.PARDISO`. Set `CPO3_MKL_RT` to the runtime's
-  full path before starting Python if it is not on the system library path.
-  The loader also searches `MKLROOT/lib`, `MKLROOT/lib/intel64`, and the
-  corresponding `bin` directories. MKL's dependent libraries must also be on the
-  loader path (for example, source Intel's `setvars.sh` on Linux). Explicit
-  thread caps use MKL's thread-local setting and restore it after every call.
-  The adapter uses `pardiso_64`, independently of `MKL_INTERFACE_LAYER`, and
-  disables MKL's internal refinement so cpo3 owns correction counting.
-
-Check availability before selecting a backend:
-
-```python
-cpo3.LinearSolver.ACCELERATE.is_available()
-cpo3.LinearSolver.CHOLMOD.is_available()
-cpo3.LinearSolver.PARDISO.is_available()
-```
-
-Availability is also exposed as `LinearSolver::is_available()` in Rust. A missing
-feature or runtime produces an error when that backend is needed; it does not
-silently fall back to Faer. Feral is no longer supported.
-
-Backend references: [Apple Sparse Solvers](https://developer.apple.com/documentation/accelerate/sparse-solvers-library),
-[CHOLMOD guide](https://github.com/DrTimothyAldenDavis/SuiteSparse/blob/dev/CHOLMOD/Doc/CHOLMOD_UserGuide.tex),
-[Intel PARDISO controls](https://www.intel.com/content/www/us/en/docs/onemkl/developer-reference-c/2026-0/pardiso-iparm-parameter.html).
-
 ## Python quick start
 
 This problem minimizes $\tfrac12(x_1^2+x_2^2)-x_1-2x_2$ subject to
@@ -208,6 +128,48 @@ Run numerical workloads with `cargo run --release`. Enable the `mps` Cargo
 feature to read MPS and QPS files. Use `solve_from` with a `WarmStart` to supply a
 starting point for a related problem.
 
+## Optional factorization backends
+
+Faer is included by default. To use another backend, install its requirements
+and enable it when building cpo3:
+
+| Backend | Build feature | Requirements |
+| --- | --- | --- |
+| Apple Accelerate | `accelerate` | macOS 13 or later; `threads=0` required |
+| SuiteSparse CHOLMOD | `cholmod` | CHOLMOD 5.2.x or 5.3.x, including development headers |
+| Intel MKL PARDISO | `pardiso` | Intel oneMKL shared runtime |
+
+For example, enable Accelerate and start Python:
+
+```sh
+uv sync --config-setting "build-args=--features=python,mps,accelerate"
+uv run --no-sync python
+```
+
+The `--no-sync` option preserves your selected build. To solve the problem
+from the Python quick start with Accelerate:
+
+```python
+import cpo3
+
+if cpo3.LinearSolver.ACCELERATE.is_available():
+    settings = cpo3.Settings(linear_solver=cpo3.LinearSolver.ACCELERATE, threads=0)
+    solution = cpo3.solve(problem, settings=settings)
+```
+
+Replace `accelerate` with `cholmod` or `pardiso` to build another backend;
+features can be combined. Rust applications enable these features in their
+Cargo dependency. Equality-only problems always use Faer.
+
+For CHOLMOD, install SuiteSparse with `brew install suite-sparse` (macOS),
+`sudo apt-get install libsuitesparse-dev` (Ubuntu), or
+`conda install -c conda-forge suitesparse` (Conda). Check that the installed
+CHOLMOD version is supported. Set
+`CHOLMOD_INCLUDE_DIR` to the directory containing `cholmod.h` unless `pkg-config`
+can find it. If runtime discovery fails, set `CPO3_CHOLMOD` or `CPO3_MKL_RT` to
+the shared library's full path before starting Python; its dependencies must
+also be discoverable by the system loader.
+
 ## Understanding results
 
 Always check the termination status before interpreting the returned vectors.
@@ -231,7 +193,7 @@ or return `SolveError` in Rust.
 
 ## Development
 
-After installing the checkout with `uv sync` (or the configured command above), run:
+After installing the checkout:
 
 ```sh
 cargo test --features mps
@@ -243,10 +205,7 @@ uv run --no-sync ruff format --check .
 uv run --no-sync ty check
 ```
 
-Python tests exercise every available backend and skip unavailable ones. To match
-CI's Rust checks, install the CHOLMOD development headers described above, use
-`--features mps,accelerate,cholmod,pardiso` for `cargo test`, and use `--all-features`
-for Clippy.
+Python tests exercise all available backends and skip unavailable ones.
 
 See [benchmarks/README.md](benchmarks/README.md) for the benchmark data.
 
