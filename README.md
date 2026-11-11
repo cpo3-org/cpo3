@@ -16,7 +16,7 @@ additional constraint rows.
 - **Solutions and certificates:** recover primal and dual solutions or
   certificates of primal or dual infeasibility.
 - **Warm starts:** supply a previous solution when solving related problems.
-- **Sparse linear algebra:** Faer and Feral factorization backends, with
+- **Sparse linear algebra:** Faer, Apple Accelerate, SuiteSparse CHOLMOD, and Intel MKL PARDISO backends, with
   presolve and Ruiz equilibration.
 - **File loading:** read continuous LPs and QPs from MPS and QPS files.
 
@@ -128,6 +128,48 @@ Run numerical workloads with `cargo run --release`. Enable the `mps` Cargo
 feature to read MPS and QPS files. Use `solve_from` with a `WarmStart` to supply a
 starting point for a related problem.
 
+## Optional factorization backends
+
+Faer is included by default. To use another backend, install its requirements
+and enable it when building cpo3:
+
+| Backend | Build feature | Requirements |
+| --- | --- | --- |
+| Apple Accelerate | `accelerate` | macOS 13 or later; `threads=0` required |
+| SuiteSparse CHOLMOD | `cholmod` | CHOLMOD 5.2.x or 5.3.x, including development headers |
+| Intel MKL PARDISO | `pardiso` | Intel oneMKL shared runtime |
+
+For example, enable Accelerate and start Python:
+
+```sh
+uv sync --config-setting "build-args=--features=python,mps,accelerate"
+uv run --no-sync python
+```
+
+The `--no-sync` option preserves your selected build. To solve the problem
+from the Python quick start with Accelerate:
+
+```python
+import cpo3
+
+if cpo3.LinearSolver.ACCELERATE.is_available():
+    settings = cpo3.Settings(linear_solver=cpo3.LinearSolver.ACCELERATE, threads=0)
+    solution = cpo3.solve(problem, settings=settings)
+```
+
+Replace `accelerate` with `cholmod` or `pardiso` to build another backend;
+features can be combined. Rust applications enable these features in their
+Cargo dependency. Equality-only problems always use Faer.
+
+For CHOLMOD, install SuiteSparse with `brew install suite-sparse` (macOS),
+`sudo apt-get install libsuitesparse-dev` (Ubuntu), or
+`conda install -c conda-forge suitesparse` (Conda). Check that the installed
+CHOLMOD version is supported. Set
+`CHOLMOD_INCLUDE_DIR` to the directory containing `cholmod.h` unless `pkg-config`
+can find it. If runtime discovery fails, set `CPO3_CHOLMOD` or `CPO3_MKL_RT` to
+the shared library's full path before starting Python; its dependencies must
+also be discoverable by the system loader.
+
 ## Understanding results
 
 Always check the termination status before interpreting the returned vectors.
@@ -151,17 +193,19 @@ or return `SolveError` in Rust.
 
 ## Development
 
-From the solver checkout:
+After installing the checkout:
 
 ```sh
 cargo test --features mps
-uv run pytest
+uv run --no-sync pytest -ra
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
+cargo clippy --all-targets --features python,mps -- -D warnings
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync ty check
 ```
+
+Python tests exercise all available backends and skip unavailable ones.
 
 See [benchmarks/README.md](benchmarks/README.md) for the benchmark data.
 

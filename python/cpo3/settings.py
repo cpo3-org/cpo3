@@ -10,7 +10,13 @@ class LinearSolver(str, Enum):
     """Linear-system implementation used by the Rust solver."""
 
     FAER = "faer"
-    FERAL = "feral"
+    ACCELERATE = "accelerate"
+    CHOLMOD = "cholmod"
+    PARDISO = "pardiso"
+
+    def is_available(self) -> bool:
+        """Whether this build and runtime provide the backend."""
+        return bindings._linear_solver_available(self.value)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -69,13 +75,17 @@ class Settings:
         cone-compatible augmented row infinity norms are within this distance
         of one.
     linear_solver : LinearSolver, default=LinearSolver.FAER
-        Sparse factorization backend: LinearSolver.FAER or LinearSolver.FERAL.
+        Sparse factorization backend: FAER, ACCELERATE, CHOLMOD, or PARDISO.
+        ACCELERATE requires macOS. CHOLMOD and PARDISO require separately
+        installed SuiteSparse and Intel MKL libraries, respectively. Use
+        the backend's is_available() method to check availability.
         Equality-only problems always use Faer with regularized LDL and LSMR.
     threads : int, default=0
         Maximum parallelism for factorization and solves. Zero uses the
-        backend default; one runs sequentially. Must be nonnegative. Feral
-        currently runs sequentially for every positive cap because it cannot
-        configure its private pool size.
+        backend default; one runs sequentially. Must be nonnegative.
+        Accelerate supports only zero because its sparse solver exposes no
+        per-solve thread cap. PARDISO uses MKL's thread-local limit.
+        CHOLMOD caps its OpenMP work; simplicial LDL factorization is sequential.
     eliminate_bounds : bool, default=True
         Eliminate nonnegative-cone constraint rows with a single nonzero
         coefficient from the KKT factorization by folding their contributions

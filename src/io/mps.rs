@@ -14,9 +14,9 @@ use crate::{Cone, CscMatrix, MatrixError, Problem, ProblemError};
 #[derive(Clone, Debug, Error, PartialEq)]
 #[non_exhaustive]
 pub enum MpsError {
-    #[error("failed to read MPS/QPS file {path:?}: {message}")]
+    #[error("failed to read MPS/QPS file {}: {message}", path.display())]
     Read { path: PathBuf, message: String },
-    #[error("failed to parse MPS/QPS file {path:?}: {message}")]
+    #[error("failed to parse MPS/QPS file {}: {message}", path.display())]
     Parse { path: PathBuf, message: String },
     #[error("the MPS model does not define an objective row")]
     MissingObjectiveRow,

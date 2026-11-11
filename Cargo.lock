@@ -148,10 +148,12 @@ dependencies = [
 name = "cpo3"
 version = "0.0.1"
 dependencies = [
+ "cc",
  "faer",
- "feral",
+ "libloading",
  "mps",
  "numpy",
+ "pkg-config",
  "presolve",
  "pulp",
  "pyo3",
@@ -378,80 +380,6 @@ name = "fast-float2"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
-
-[[package]]
-name = "feral"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52a5d10907e7891a65325ff1ae839b4dc0b01a79f7415ee200c0e850651cd491"
-dependencies = [
- "feral-amd",
- "feral-amf",
- "feral-kahip",
- "feral-metis",
- "feral-ordering-core",
- "feral-scotch",
- "pulp",
- "rayon",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "feral-amd"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ead2f064dbcef0e0d3110202e9d6d7c293c1dffe6da5964513a20c5967e4d560"
-dependencies = [
- "feral-ordering-core",
-]
-
-[[package]]
-name = "feral-amf"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3ea6dacabfa085e7f40080c894da245d9db60e9211f1f8ab08d715d6d0f5a29"
-dependencies = [
- "feral-ordering-core",
-]
-
-[[package]]
-name = "feral-kahip"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "939961cfa583694ae29df821061a9c04ac49c9ca4fdb2560d32ebe33750799de"
-dependencies = [
- "feral-amd",
- "feral-metis",
- "feral-ordering-core",
-]
-
-[[package]]
-name = "feral-metis"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c64089a23803acb3c5bbdab2aca5d46c90e7fd40e3df9fbc26001824dac8f1"
-dependencies = [
- "feral-amd",
- "feral-ordering-core",
-]
-
-[[package]]
-name = "feral-ordering-core"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "186505de135c3510fc4bc5f8d919b070af7bd9b40852452bdad96ee69b60c0a0"
-
-[[package]]
-name = "feral-scotch"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b1710ddb1a4f248db6ccfc5c38890b4f402424b8352f3eff0f9c435e4bf09f3"
-dependencies = [
- "feral-amd",
- "feral-metis",
- "feral-ordering-core",
-]
 
 [[package]]
 name = "find-msvc-tools"
@@ -690,12 +618,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "itoa"
-version = "1.0.18"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
-
-[[package]]
 name = "lazy_static"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -706,6 +628,16 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
+
+[[package]]
+name = "libloading"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
 
 [[package]]
 name = "libm"
@@ -1025,6 +957,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pkg-config"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+
+[[package]]
 name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1309,19 +1247,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
-]
-
-[[package]]
-name = "serde_json"
-version = "1.0.154"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
-dependencies = [
- "itoa",
- "memchr",
- "serde",
- "serde_core",
- "zmij",
 ]
 
 [[package]]
@@ -1691,9 +1616,3 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
-
-[[package]]
-name = "zmij"
-version = "1.0.23"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"

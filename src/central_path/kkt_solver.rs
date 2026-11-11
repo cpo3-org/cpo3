@@ -730,7 +730,15 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
             for eliminate_bound_rows in [false, true] {
                 let settings = KktSettings {
                     eliminate_bound_rows,
@@ -801,31 +809,30 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
-            let settings = KktSettings {
-                diagonal_floor: 0.0,
-                ..KktSettings::new(solver)
-            };
-            let mut cache = KktCache::new();
-            for attempts in 1..=2 {
-                cache
-                    .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
-                    .unwrap_err();
-                // Keep the prepared workspace even when numeric retries fail.
-                assert!(cache.pattern.is_some());
-                assert!(cache.factorization.is_some());
-                assert_eq!(cache.stats().factorizations, attempts);
-            }
-            assert_eq!(cache.nonbinding_floor_limit(0.1), 0.1);
+        // Faer rejects zero pivots here; PARDISO may perturb them and succeed.
+        let settings = KktSettings {
+            diagonal_floor: 0.0,
+            ..KktSettings::new(LinearSolver::Faer)
+        };
+        let mut cache = KktCache::new();
+        for attempts in 1..=2 {
             cache
-                .prepare(&problem, &geometry, 1.0, &[1.0], &settings)
-                .unwrap();
-            let result = cache
-                .solve(&problem, 1.0, &[1.0], &[1.0], &[2.0, 1.0])
-                .unwrap();
-            assert_eq!(result, vec![2.0, -1.0]);
-            assert_eq!(cache.stats().factorizations, 3);
+                .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
+                .unwrap_err();
+            // Keep the prepared workspace even when numeric retries fail.
+            assert!(cache.pattern.is_some());
+            assert!(cache.factorization.is_some());
+            assert_eq!(cache.stats().factorizations, attempts);
         }
+        assert_eq!(cache.nonbinding_floor_limit(0.1), 0.1);
+        cache
+            .prepare(&problem, &geometry, 1.0, &[1.0], &settings)
+            .unwrap();
+        let result = cache
+            .solve(&problem, 1.0, &[1.0], &[1.0], &[2.0, 1.0])
+            .unwrap();
+        assert_eq!(result, vec![2.0, -1.0]);
+        assert_eq!(cache.stats().factorizations, 3);
     }
 
     #[test]
@@ -874,7 +881,15 @@ mod cache_tests {
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
         let rhs = [1.0, -2.0, 3.0, -4.0, 5.0];
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
             for eliminate_bound_rows in [false, true] {
                 let settings = KktSettings {
                     eliminate_bound_rows,

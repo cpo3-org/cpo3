@@ -234,16 +234,8 @@ mod tests {
         )
         .unwrap();
         for threads in [0, 1, 2, 3] {
-            let settings = super::super::KktSettings::from(&crate::Settings {
-                threads,
-                ..crate::Settings::default()
-            });
-            let mut factor =
-                super::super::Factorization::prepare(matrix.clone(), &settings).unwrap();
+            let mut factor = FaerFactorization::new(matrix.clone(), threads).unwrap();
             factor.factor(&mut 0).unwrap();
-            let super::super::FactorizationInner::Faer(mut factor) = factor.inner else {
-                unreachable!()
-            };
             assert!(matches!(
                 factor.symbolic.raw(),
                 sparse_cholesky::SymbolicCholeskyRaw::Supernodal(_)

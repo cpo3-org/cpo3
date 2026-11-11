@@ -1,27 +1,67 @@
 //! Factorization adapters used by the optimization algorithm.
 
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+mod accelerate;
+#[cfg(feature = "cholmod")]
+mod cholmod;
 mod faer;
-mod feral;
+#[cfg(feature = "pardiso")]
+mod pardiso;
 
-use self::{faer::FaerFactorization, feral::FeralFactorization};
+#[cfg(all(feature = "accelerate", target_os = "macos"))]
+use self::accelerate::AccelerateFactorization;
+#[cfg(feature = "cholmod")]
+use self::cholmod::CholmodFactorization;
+use self::faer::FaerFactorization;
+#[cfg(feature = "pardiso")]
+use self::pardiso::PardisoFactorization;
 use std::fmt;
 use thiserror::Error;
 
 use crate::{CscMatrix, Settings};
+
+#[cfg(any(feature = "cholmod", feature = "pardiso"))]
+fn library_error(error: libloading::Error) -> String {
+    use std::error::Error;
+    error.source().unwrap_or(&error).to_string()
+}
 
 /// Linear-system implementation used by the numerical solver.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LinearSolver {
     #[default]
     Faer,
-    Feral,
+    Accelerate,
+    Cholmod,
+    Pardiso,
 }
 
 impl LinearSolver {
+    /// Whether this build and runtime provide the selected backend.
+    pub fn is_available(self) -> bool {
+        match self {
+            Self::Faer => true,
+            #[cfg(feature = "cholmod")]
+            Self::Cholmod => cholmod::available(),
+            #[cfg(not(feature = "cholmod"))]
+            Self::Cholmod => false,
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            Self::Accelerate => accelerate::available(),
+            #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
+            Self::Accelerate => false,
+            #[cfg(feature = "pardiso")]
+            Self::Pardiso => pardiso::available(),
+            #[cfg(not(feature = "pardiso"))]
+            Self::Pardiso => false,
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Faer => "faer",
-            Self::Feral => "feral",
+            Self::Accelerate => "accelerate",
+            Self::Cholmod => "cholmod",
+            Self::Pardiso => "pardiso",
         }
     }
 }
@@ -135,7 +175,12 @@ pub(crate) struct Factorization {
 
 enum FactorizationInner {
     Faer(Box<FaerFactorization>),
-    Feral(Box<FeralFactorization>),
+    #[cfg(all(feature = "accelerate", target_os = "macos"))]
+    Accelerate(Box<AccelerateFactorization>),
+    #[cfg(feature = "cholmod")]
+    Cholmod(Box<CholmodFactorization>),
+    #[cfg(feature = "pardiso")]
+    Pardiso(Box<PardisoFactorization>),
 }
 
 impl Factorization {
@@ -153,10 +198,37 @@ impl Factorization {
                 matrix,
                 settings.threads,
             )?)),
-            LinearSolver::Feral => FactorizationInner::Feral(Box::new(FeralFactorization::new(
-                matrix,
-                settings.threads,
-            )?)),
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            LinearSolver::Accelerate => FactorizationInner::Accelerate(Box::new(
+                AccelerateFactorization::new(matrix, settings.threads)?,
+            )),
+            #[cfg(feature = "cholmod")]
+            LinearSolver::Cholmod => FactorizationInner::Cholmod(Box::new(
+                CholmodFactorization::new(matrix, settings.threads)?,
+            )),
+            #[cfg(feature = "pardiso")]
+            LinearSolver::Pardiso => FactorizationInner::Pardiso(Box::new(
+                PardisoFactorization::new(matrix, settings.threads)?,
+            )),
+            #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
+            LinearSolver::Accelerate => {
+                return Err(LinearSystemError::Unavailable(
+                    "Accelerate requires macOS and a cpo3 installation with Accelerate support"
+                        .into(),
+                ));
+            }
+            #[cfg(not(feature = "pardiso"))]
+            LinearSolver::Pardiso => {
+                return Err(LinearSystemError::Unavailable(
+                    "This cpo3 installation does not include PARDISO support".into(),
+                ));
+            }
+            #[cfg(not(feature = "cholmod"))]
+            LinearSolver::Cholmod => {
+                return Err(LinearSystemError::Unavailable(
+                    "This cpo3 installation does not include CHOLMOD support".into(),
+                ));
+            }
         };
         Ok(Self {
             diagonal,
@@ -235,11 +307,12 @@ impl Factorization {
         validate_rhs(2 * dim, rhs)?;
         match &mut self.inner {
             FactorizationInner::Faer(factor) => factor.solve_in_place(rhs, 2)?,
-            FactorizationInner::Feral(factor) => {
-                let (first, second) = rhs.split_at_mut(dim);
-                factor.solve_in_place(first)?;
-                factor.solve_in_place(second)?;
-            }
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            FactorizationInner::Accelerate(factor) => factor.solve_in_place(rhs, 2)?,
+            #[cfg(feature = "cholmod")]
+            FactorizationInner::Cholmod(factor) => factor.solve_in_place(rhs, 2)?,
+            #[cfg(feature = "pardiso")]
+            FactorizationInner::Pardiso(factor) => factor.solve_in_place(rhs, 2)?,
         }
         validate_solution(rhs)
     }
@@ -256,7 +329,16 @@ impl Factorization {
             FactorizationInner::Faer(factor) => {
                 factor.refactor_diagonal(&self.diagonal, factorizations)
             }
-            FactorizationInner::Feral(factor) => {
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            FactorizationInner::Accelerate(factor) => {
+                factor.refactor_diagonal(&self.diagonal, factorizations)
+            }
+            #[cfg(feature = "cholmod")]
+            FactorizationInner::Cholmod(factor) => {
+                factor.refactor_diagonal(&self.diagonal, factorizations)
+            }
+            #[cfg(feature = "pardiso")]
+            FactorizationInner::Pardiso(factor) => {
                 factor.refactor_diagonal(&self.diagonal, factorizations)
             }
         }
@@ -266,7 +348,12 @@ impl Factorization {
     pub(crate) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         match &mut self.inner {
             FactorizationInner::Faer(factor) => factor.factor(factorizations),
-            FactorizationInner::Feral(factor) => factor.factor(factorizations),
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            FactorizationInner::Accelerate(factor) => factor.factor(factorizations),
+            #[cfg(feature = "cholmod")]
+            FactorizationInner::Cholmod(factor) => factor.factor(factorizations),
+            #[cfg(feature = "pardiso")]
+            FactorizationInner::Pardiso(factor) => factor.factor(factorizations),
         }
     }
 }
@@ -285,19 +372,34 @@ impl FactorizationInner {
     fn pivot_report(&self) -> Option<PivotReport> {
         match self {
             Self::Faer(_) => None,
-            Self::Feral(factorization) => factorization.pivot_report(),
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            Self::Accelerate(factorization) => factorization.pivot_report(),
+            #[cfg(feature = "cholmod")]
+            Self::Cholmod(factorization) => factorization.pivot_report(),
+            #[cfg(feature = "pardiso")]
+            Self::Pardiso(factorization) => factorization.pivot_report(),
         }
     }
 
     fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
         let dim = match self {
             Self::Faer(factorization) => factorization.dim(),
-            Self::Feral(factorization) => factorization.dim(),
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            Self::Accelerate(factorization) => factorization.dim(),
+            #[cfg(feature = "cholmod")]
+            Self::Cholmod(factorization) => factorization.dim(),
+            #[cfg(feature = "pardiso")]
+            Self::Pardiso(factorization) => factorization.dim(),
         };
         validate_rhs(dim, vector)?;
         match self {
             Self::Faer(factorization) => factorization.solve_in_place(vector, 1),
-            Self::Feral(factorization) => factorization.solve_in_place(vector),
+            #[cfg(all(feature = "accelerate", target_os = "macos"))]
+            Self::Accelerate(factorization) => factorization.solve_in_place(vector, 1),
+            #[cfg(feature = "cholmod")]
+            Self::Cholmod(factorization) => factorization.solve_in_place(vector, 1),
+            #[cfg(feature = "pardiso")]
+            Self::Pardiso(factorization) => factorization.solve_in_place(vector, 1),
         }?;
         validate_solution(vector)
     }
@@ -508,6 +610,18 @@ struct TriangleSource {
 }
 
 impl TriangleSource {
+    #[cfg(any(feature = "cholmod", all(feature = "accelerate", target_os = "macos")))]
+    fn from_matrix(matrix: &CscMatrix) -> Self {
+        let diagonal = (0..matrix.columns())
+            .filter_map(|column| {
+                let end = matrix.column_pointers()[column + 1];
+                (end > matrix.column_pointers()[column] && matrix.row_indices()[end - 1] == column)
+                    .then(|| (end - 1, column))
+            })
+            .collect();
+        Self { diagonal }
+    }
+
     fn gather_diagonal(&self, diagonal: &[f64], out: &mut [f64]) {
         for &(slot, position) in &self.diagonal {
             out[slot] = diagonal[position];
@@ -556,6 +670,8 @@ fn validate_solution(solution: &[f64]) -> Result<(), LinearSystemError> {
 
 #[derive(Clone, Debug, Error, PartialEq)]
 pub(crate) enum LinearSystemError {
+    #[error("linear-system backend unavailable: {0}")]
+    Unavailable(String),
     #[error("linear-system matrix must be square, received {rows} by {columns}")]
     NotSquare { rows: usize, columns: usize },
     #[error("linear-system matrix must not be empty")]
@@ -587,7 +703,8 @@ impl LinearSystemError {
             | Self::RefinementDiverged(_)
             | Self::Factorization(_)
             | Self::NonFiniteRightHandSide => true,
-            Self::NotSquare { .. }
+            Self::Unavailable(_)
+            | Self::NotSquare { .. }
             | Self::Empty
             | Self::NotUpperTriangle
             | Self::InvalidRightHandSide { .. }
@@ -605,8 +722,16 @@ mod tests {
     }
 
     #[test]
-    fn factorization_validation_is_shared_by_both_backends() {
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+    fn factorization_validation_is_shared_by_backends() {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
             let settings = KktSettings::from(&Settings {
                 linear_solver: solver,
                 ..Settings::default()
@@ -862,7 +987,15 @@ mod tests {
 
     #[test]
     fn diagonal_updates_preserve_off_diagonals_across_refactors() {
-        for solver in [LinearSolver::Faer, LinearSolver::Feral] {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
             let settings = KktSettings::from(&Settings {
                 linear_solver: solver,
                 ..Settings::default()
@@ -897,25 +1030,31 @@ mod tests {
 
     #[test]
     fn inertia_check_counts_positive_pivots() {
-        let settings = KktSettings::from(&Settings {
-            linear_solver: LinearSolver::Feral,
-            ..Settings::default()
-        });
-        let mut factorization =
-            Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
-                .unwrap();
-        factorization.factor(&mut 0).unwrap();
-        let report = factorization.pivot_report().unwrap();
-        assert_eq!((report.positive, report.negative, report.zero), (2, 1, 0));
-        assert!(factorization.check_inertia(2).is_ok());
-        assert!(matches!(
-            factorization.check_inertia(1),
-            Err(LinearSystemError::WrongInertia {
-                positive: 2,
-                expected: 1
-            })
-        ));
-        assert_eq!(factorization.stats().inertia_failures, 1);
+        for solver in [
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
+            let settings = KktSettings::new(solver);
+            let mut factorization =
+                Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
+                    .unwrap();
+            factorization.factor(&mut 0).unwrap();
+            let report = factorization.pivot_report().unwrap();
+            assert_eq!((report.positive, report.negative, report.zero), (2, 1, 0));
+            assert!(factorization.check_inertia(2).is_ok());
+            assert!(matches!(
+                factorization.check_inertia(1),
+                Err(LinearSystemError::WrongInertia {
+                    positive: 2,
+                    expected: 1
+                })
+            ));
+            assert_eq!(factorization.stats().inertia_failures, 1);
+        }
     }
 
     #[test]
