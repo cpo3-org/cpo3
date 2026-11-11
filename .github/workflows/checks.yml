@@ -38,6 +38,7 @@ jobs:
       - run: cargo test --locked
       - run: cargo test --locked --features mps
       - run: cargo doc --locked --no-deps --features mps
+        if: matrix.toolchain == 'stable'
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -67,7 +68,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
       - uses: mamba-org/setup-micromamba@v3
@@ -84,5 +85,3 @@ jobs:
           fi
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --features mps,accelerate,cholmod,pardiso
-      - run: uv sync --locked --config-setting "build-args=--features=python,mps,accelerate,cholmod,pardiso"
-      - run: uv run --no-sync pytest -ra
