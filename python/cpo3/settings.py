@@ -76,7 +76,9 @@ class Settings:
         of one.
     linear_solver : LinearSolver, default=LinearSolver.FAER
         Sparse factorization backend: FAER, ACCELERATE, CHOLMOD, or PARDISO.
-        Backends other than FAER require their optional Cargo features.
+        ACCELERATE requires macOS. CHOLMOD and PARDISO require separately
+        installed SuiteSparse and Intel MKL libraries, respectively. Use
+        the backend's is_available() method to check availability.
         Equality-only problems always use Faer with regularized LDL and LSMR.
     threads : int, default=0
         Maximum parallelism for factorization and solves. Zero uses the

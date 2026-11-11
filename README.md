@@ -61,15 +61,21 @@ Faer is the default and requires no external numerical runtime. The `accelerate`
 analysis across diagonal updates and solve paired right-hand sides together.
 Equality-only problems continue to use Faer for their LDL/LSMR path.
 
-For example, build a Python wheel with Accelerate using:
+For Python development, build and install the selected backend into the checkout's
+environment. For example, on macOS:
 
 ```sh
-uv build --wheel --config-setting "build-args=--features=python,mps,accelerate"
+uv sync --config-setting "build-args=--features=python,mps,accelerate"
+uv run --no-sync python
 ```
 
 Use `python,mps,cholmod` for CHOLMOD or `python,mps,pardiso` for PARDISO, or combine
-the features. Rust
-applications can enable the corresponding features in their Cargo dependency.
+the features. Install the requirements below before building. Run subsequent
+Python commands with `uv run --no-sync` so uv does not replace the selected
+build with the default configuration. Repeat the configured `uv sync` command
+after changing Rust code to rebuild the extension.
+
+Rust applications can enable the corresponding features in their Cargo dependency.
 
 - **Accelerate:** requires macOS 13 or later and the Apple SDK at build time.
   Select `LinearSolver.ACCELERATE` with `threads=0`. Positive thread caps are
@@ -225,17 +231,22 @@ or return `SolveError` in Rust.
 
 ## Development
 
-From the solver checkout:
+After installing the checkout with `uv sync` (or the configured command above), run:
 
 ```sh
 cargo test --features mps
-uv run pytest
+uv run --no-sync pytest -ra
 cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-uv run ruff check .
-uv run ruff format --check .
-uv run ty check
+cargo clippy --all-targets --features python,mps -- -D warnings
+uv run --no-sync ruff check .
+uv run --no-sync ruff format --check .
+uv run --no-sync ty check
 ```
+
+Python tests exercise every available backend and skip unavailable ones. To match
+CI's Rust checks, install the CHOLMOD development headers described above, use
+`--features mps,accelerate,cholmod,pardiso` for `cargo test`, and use `--all-features`
+for Clippy.
 
 See [benchmarks/README.md](benchmarks/README.md) for the benchmark data.
 

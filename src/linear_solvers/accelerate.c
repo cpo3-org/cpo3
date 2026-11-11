@@ -7,11 +7,16 @@ typedef struct {
     SparseMatrixStructure matrix;
     SparseOpaqueSymbolicFactorization symbolic;
     SparseOpaqueFactorization_Double numeric;
-    bool factored;
+    bool numeric_created;
     void *factor_workspace;
     void *solve_workspace;
     size_t solve_workspace_size;
 } Cpo3Accelerate;
+
+static void report_error(const char *message) {
+    // Return errors through the factorization status instead of trapping.
+    (void)message;
+}
 
 bool cpo3_accelerate_available(void) {
     if (__builtin_available(macOS 13.0, *)) return true;
@@ -20,7 +25,7 @@ bool cpo3_accelerate_available(void) {
 
 void cpo3_accelerate_free(Cpo3Accelerate *factor) {
     if (!factor) return;
-    if (factor->factored) SparseCleanup(factor->numeric);
+    if (factor->numeric_created) SparseCleanup(factor->numeric);
     SparseCleanup(factor->symbolic);
     free(factor->factor_workspace);
     free(factor->solve_workspace);
@@ -35,7 +40,11 @@ Cpo3Accelerate *cpo3_accelerate_new(int n, long *columns, int *rows, int *status
         .rowIndices = rows, .blockSize = 1,
         .attributes = { .kind = SparseSymmetric, .triangle = SparseUpperTriangle }
     };
-    factor->symbolic = SparseFactor(SparseFactorizationLDLTTPP, factor->matrix);
+    SparseSymbolicFactorOptions options = {
+        .control = SparseDefaultControl, .orderMethod = SparseOrderDefault,
+        .malloc = malloc, .free = free, .reportError = report_error
+    };
+    factor->symbolic = SparseFactor(SparseFactorizationLDLTTPP, factor->matrix, options);
     *status = factor->symbolic.status;
     if (*status != SparseStatusOK) { cpo3_accelerate_free(factor); return NULL; }
     factor->factor_workspace = malloc(factor->symbolic.workspaceSize_Double);
@@ -53,11 +62,13 @@ int cpo3_accelerate_factor(Cpo3Accelerate *factor, double *values) {
     SparseNumericFactorOptions options = {
         .scalingMethod = SparseScalingUser, .pivotTolerance = 0.01, .zeroTolerance = 0.0
     };
-    if (factor->factored) {
+    if (factor->numeric.numericFactorization) {
         SparseRefactor(matrix, &factor->numeric, options, factor->factor_workspace);
     } else {
-        factor->numeric = SparseFactor(factor->symbolic, matrix, options);
-        factor->factored = true;
+        if (factor->numeric_created) SparseCleanup(factor->numeric);
+        factor->numeric = SparseFactor(factor->symbolic, matrix, options,
+                                      NULL, factor->factor_workspace);
+        factor->numeric_created = true;
     }
     return factor->numeric.status;
 }

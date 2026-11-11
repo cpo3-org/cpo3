@@ -213,19 +213,20 @@ impl Factorization {
             #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
             LinearSolver::Accelerate => {
                 return Err(LinearSystemError::Unavailable(
-                    "Accelerate requires macOS and the accelerate Cargo feature".into(),
+                    "Accelerate requires macOS and a cpo3 installation with Accelerate support"
+                        .into(),
                 ));
             }
             #[cfg(not(feature = "pardiso"))]
             LinearSolver::Pardiso => {
                 return Err(LinearSystemError::Unavailable(
-                    "PARDISO requires the pardiso Cargo feature and Intel MKL".into(),
+                    "This cpo3 installation does not include PARDISO support".into(),
                 ));
             }
             #[cfg(not(feature = "cholmod"))]
             LinearSolver::Cholmod => {
                 return Err(LinearSystemError::Unavailable(
-                    "CHOLMOD requires the cholmod Cargo feature and SuiteSparse".into(),
+                    "This cpo3 installation does not include CHOLMOD support".into(),
                 ));
             }
         };
