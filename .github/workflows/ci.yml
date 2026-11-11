@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, macos-14, macos-15-intel]
+        os: [ubuntu-24.04, windows-2022, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     env:
       CPO3_REQUIRED_BACKENDS: ${{ startsWith(matrix.os, 'macos-') && 'faer,accelerate,cholmod' || 'faer,cholmod,pardiso' }}

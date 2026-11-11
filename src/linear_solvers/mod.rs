@@ -1024,7 +1024,12 @@ mod tests {
                     assert!((actual - expected).abs() < 1e-9);
                 }
             }
-            assert_eq!(count, 4);
+            // Accelerate may retry once to work around stale refactor inertia.
+            if solver == LinearSolver::Accelerate {
+                assert!((4..=5).contains(&count));
+            } else {
+                assert_eq!(count, 4);
+            }
         }
     }
 
