@@ -2,7 +2,7 @@
 
 use std::{ffi::c_void, ptr::NonNull};
 
-use super::{LinearSystemError, PivotReport, TriangleSource};
+use super::{LinearSystemError, TriangleSource};
 use crate::CscMatrix;
 
 unsafe extern "C" {
@@ -14,13 +14,7 @@ unsafe extern "C" {
         status: *mut i32,
     ) -> *mut c_void;
     fn cpo3_accelerate_free(factor: *mut c_void);
-    fn cpo3_accelerate_factor(factor: *mut c_void, values: *mut f64, reuse_numeric: bool) -> i32;
-    fn cpo3_accelerate_inertia(
-        factor: *mut c_void,
-        positive: *mut i32,
-        zero: *mut i32,
-        negative: *mut i32,
-    ) -> i32;
+    fn cpo3_accelerate_factor(factor: *mut c_void, values: *mut f64) -> i32;
     fn cpo3_accelerate_solve(factor: *mut c_void, columns: i32, rhs: *mut f64) -> i32;
 }
 
@@ -37,8 +31,6 @@ pub(super) struct AccelerateFactorization {
     values: Vec<f64>,
     source: TriangleSource,
     dim: usize,
-    inertia: Option<PivotReport>,
-    reuse_numeric: bool,
 }
 
 impl AccelerateFactorization {
@@ -83,8 +75,6 @@ impl AccelerateFactorization {
             values,
             source,
             dim,
-            inertia: None,
-            reuse_numeric: true,
         })
     }
 
@@ -94,49 +84,8 @@ impl AccelerateFactorization {
 
     pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         *factorizations += 1;
-        self.inertia = None;
         // SAFETY: The live handle and its fixed CSC buffers remain owned by self.
-        check(unsafe {
-            cpo3_accelerate_factor(
-                self.handle.as_ptr(),
-                self.values.as_mut_ptr(),
-                self.reuse_numeric,
-            )
-        })?;
-        let (mut positive, mut zero, mut negative) = (0, 0, 0);
-        // SAFETY: The successful LDLᵀ factor is live and output pointers are valid.
-        check(unsafe {
-            cpo3_accelerate_inertia(
-                self.handle.as_ptr(),
-                &mut positive,
-                &mut zero,
-                &mut negative,
-            )
-        })?;
-        if positive < 0
-            || zero < 0
-            || negative < 0
-            || i64::from(positive) + i64::from(zero) + i64::from(negative) != self.dim as i64
-        {
-            // On Intel macOS 15, SparseRefactor can accumulate the previous
-            // factor's inertia (even a 1x1 matrix reports two positive pivots).
-            // Rebuild numeric storage on affected runtimes, retaining symbolic
-            // analysis and workspaces. Never infer inertia from the KKT shape.
-            if self.reuse_numeric {
-                self.reuse_numeric = false;
-                return self.factor(factorizations);
-            }
-            return Err(LinearSystemError::Factorization(format!(
-                "Accelerate returned invalid inertia ({positive}, {zero}, {negative}) for dimension {}",
-                self.dim
-            )));
-        }
-        self.inertia = Some(PivotReport {
-            positive: positive as usize,
-            zero: zero as usize,
-            negative: negative as usize,
-        });
-        Ok(())
+        check(unsafe { cpo3_accelerate_factor(self.handle.as_ptr(), self.values.as_mut_ptr()) })
     }
 
     pub(super) fn refactor_diagonal(
@@ -146,10 +95,6 @@ impl AccelerateFactorization {
     ) -> Result<(), LinearSystemError> {
         self.source.gather_diagonal(diagonal, &mut self.values);
         self.factor(factorizations)
-    }
-
-    pub(super) fn pivot_report(&self) -> Option<PivotReport> {
-        self.inertia
     }
 
     pub(super) fn solve_in_place(
@@ -188,7 +133,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn inertia_tracks_each_numeric_factorization() {
+    fn repeated_refactors_solve_after_diagonal_sign_changes() {
         if !available() {
             return;
         }
@@ -199,57 +144,42 @@ mod tests {
                 AccelerateFactorization::new(CscMatrix::identity(dim).unwrap(), 0).unwrap();
             let mut count = 0;
             factor.factor(&mut count).unwrap();
-            let report = factor.pivot_report().unwrap();
-            assert_eq!((report.positive, report.zero, report.negative), (dim, 0, 0));
             for pass in 0..6 {
                 let diagonal: Vec<_> = (0..dim)
                     .map(|i| if (i + pass) % 2 == 0 { 2.0 } else { -3.0 })
                     .collect();
                 factor.refactor_diagonal(&diagonal, &mut count).unwrap();
-                let report = factor.pivot_report().unwrap();
-                let positive = diagonal.iter().filter(|&&d| d > 0.0).count();
-                assert_eq!(
-                    (report.positive, report.zero, report.negative),
-                    (positive, 0, dim - positive),
-                    "dimension {dim}, refactor {pass}"
-                );
                 let mut rhs = diagonal;
                 factor.solve_in_place(&mut rhs, 1).unwrap();
                 for x in rhs {
                     assert!((x - 1.0).abs() < 1e-12);
                 }
             }
-            // A runtime requiring fresh numeric factors incurs one retry only.
-            assert_eq!(count, 7 + usize::from(!factor.reuse_numeric));
+            assert_eq!(count, 7);
         }
     }
 
     #[test]
-    fn inertia_and_solves_track_changes_between_one_and_two_by_two_pivots() {
+    fn repeated_refactors_solve_with_one_and_two_by_two_pivots() {
         if !available() {
             return;
         }
-        // Tiny diagonals force a 2x2 pivot. Later updates also change inertia;
-        // it must be measured from each factor, not inferred from the KKT shape.
+        // Tiny diagonals force a 2x2 pivot; later updates exercise both
+        // positive and negative definite matrices with the same sparsity.
         let matrix =
             CscMatrix::new(2, 2, vec![0, 1, 3], vec![0, 0, 1], vec![1e-12, 1.0, -1e-12]).unwrap();
         let mut factor = AccelerateFactorization::new(matrix, 0).unwrap();
         let mut count = 0;
         factor.factor(&mut count).unwrap();
-        for (diagonal, positive) in [
-            ([1e-12, -1e-12], 1),
-            ([3.0, -2.0], 1),
-            ([-1e-12, 1e-12], 1),
-            ([-2.0, -3.0], 0),
-            ([4.0, 2.0], 2),
-            ([1e-12, -1e-12], 1),
+        for diagonal in [
+            [1e-12, -1e-12],
+            [3.0, -2.0],
+            [-1e-12, 1e-12],
+            [-2.0, -3.0],
+            [4.0, 2.0],
+            [1e-12, -1e-12],
         ] {
             factor.refactor_diagonal(&diagonal, &mut count).unwrap();
-            let report = factor.pivot_report().unwrap();
-            assert_eq!(
-                (report.positive, report.zero, report.negative),
-                (positive, 0, 2 - positive)
-            );
             let mut rhs = [
                 diagonal[0] + 2.0,
                 1.0 + 2.0 * diagonal[1],
@@ -261,6 +191,6 @@ mod tests {
                 assert!((x - expected).abs() < 1e-12);
             }
         }
-        assert_eq!(count, 7 + usize::from(!factor.reuse_numeric));
+        assert_eq!(count, 7);
     }
 }

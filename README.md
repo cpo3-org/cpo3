@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="cpo³ — sparse optimization solver" width="320">
+</p>
+
 # cpo3
 
 cpo3 is a sparse interior-point solver for convex linear and quadratic programs,
@@ -44,10 +48,7 @@ python -m pip install cpo3==0.0.1
 cpo3 = "0.0.1"
 ```
 
-Python requires CPython 3.10 or later. The release wheels target Linux x86-64
-(glibc 2.28 or later), Windows x86-64, and macOS 13 or later on Intel and Apple
-Silicon. These are standard CPython `abi3` wheels; free-threaded Python is not
-covered by this wheel matrix. Rust requires version 1.91 or later.
+Requires Python 3.10 or later.
 
 For an unreleased checkout, or to customize the build, use the source
 installation below.
@@ -239,8 +240,7 @@ Python tests exercise all available backends and skip unavailable ones. CI sets
 workflow builds wheels from the sdist and runs these tests against installed
 wheels outside the checkout, with and without optional native runtimes.
 
-See the [release procedure](https://github.com/cpo3-org/cpo3/blob/main/RELEASING.md)
-and [changelog](https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md).
+See the [changelog](https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md).
 
 See [benchmarks/README.md](https://github.com/cpo3-org/cpo3/blob/main/benchmarks/README.md) for the benchmark data.
 

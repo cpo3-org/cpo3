@@ -14,6 +14,7 @@ import cpo3.bindings
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
+    parser.add_argument("tests", nargs="*", default=["tests"])
     args = parser.parse_args()
     assert importlib.metadata.version("cpo3") == args.version
     for module in (cpo3, cpo3.bindings):
@@ -29,7 +30,7 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory(prefix="cpo3-wheel-test-") as directory:
         shutil.copytree(source / "tests", Path(directory) / "tests")
         subprocess.run(
-            [sys.executable, "-m", "pytest", "-ra", "tests"],
+            [sys.executable, "-m", "pytest", "-ra", *args.tests],
             cwd=directory,
             check=True,
         )

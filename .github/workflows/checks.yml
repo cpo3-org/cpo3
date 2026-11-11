@@ -1,4 +1,4 @@
-name: CI
+name: Checks
 
 on:
   workflow_call:
@@ -9,6 +9,22 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.14"
+      - run: cargo fmt --check
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check . .github/scripts
+      - run: uv run --no-sync ruff format --check . .github/scripts
+      - run: uv run --no-sync ty check
+
   rust:
     runs-on: ubuntu-24.04
     strategy:
@@ -29,49 +45,50 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022, macos-15, macos-15-intel]
+        include:
+          - os: ubuntu-24.04
+            required: faer,cholmod,pardiso
+            packages: libcholmod>=5.2,<5.4 mkl
+            library-prefix: ""
+          - os: windows-2022
+            required: faer,cholmod,pardiso
+            packages: libcholmod>=5.2,<5.4 mkl
+            library-prefix: /Library
+          - os: macos-15
+            required: faer,accelerate,cholmod
+            packages: libcholmod>=5.2,<5.4
+            library-prefix: ""
+          - os: macos-15-intel
+            required: faer,accelerate,cholmod
+            packages: libcholmod>=5.2,<5.4
+            library-prefix: ""
     runs-on: ${{ matrix.os }}
     env:
-      CPO3_REQUIRED_BACKENDS: ${{ startsWith(matrix.os, 'macos-') && 'faer,accelerate,cholmod' || 'faer,cholmod,pardiso' }}
+      CPO3_REQUIRED_BACKENDS: ${{ matrix.required }}
     defaults:
       run:
         shell: bash -leo pipefail {0}
     steps:
       - uses: actions/checkout@v4
-      - name: Diagnose Accelerate runtime inertia
-        if: runner.os == 'macOS'
-        run: |
-          sw_vers
-          uname -m
-          clang -std=c11 -Wall -Wextra -Werror -mmacosx-version-min=13.0 \
-            -framework Accelerate .github/scripts/diagnose_accelerate_inertia.c \
-            -o "$RUNNER_TEMP/accelerate-inertia"
-          "$RUNNER_TEMP/accelerate-inertia"
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          components: clippy
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.14"
       - uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: native
-          create-args: >-
-            libcholmod>=5.2,<5.4
-            ${{ runner.os != 'macOS' && 'mkl' || '' }}
+          create-args: ${{ matrix.packages }}
           cache-environment: true
       - name: Configure native library paths
         run: |
-          native_prefix="$CONDA_PREFIX${{ runner.os == 'Windows' && '/Library' || '' }}"
+          native_prefix="$CONDA_PREFIX${{ matrix.library-prefix }}"
           echo "CHOLMOD_INCLUDE_DIR=$native_prefix/include/suitesparse" >> "$GITHUB_ENV"
           if [[ "$RUNNER_OS" == Linux ]]; then
             echo "LD_LIBRARY_PATH=$native_prefix/lib" >> "$GITHUB_ENV"
           fi
-      - run: cargo fmt --check
       - run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - run: cargo test --locked --features mps,accelerate,cholmod,pardiso
       - run: uv sync --locked --config-setting "build-args=--features=python,mps,accelerate,cholmod,pardiso"
-      - run: uv run --no-sync ruff check . .github/scripts
-      - run: uv run --no-sync ruff format --check . .github/scripts
-      - run: uv run --no-sync ty check
       - run: uv run --no-sync pytest -ra

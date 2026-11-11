@@ -4,7 +4,7 @@ use std::{ffi::c_void, path::PathBuf, sync::OnceLock};
 
 use libloading::Library;
 
-use super::{LinearSystemError, PivotReport, TriangleSource, library_error};
+use super::{LinearSystemError, TriangleSource, library_error};
 use crate::CscMatrix;
 
 type Pardiso = unsafe extern "C" fn(
@@ -109,7 +109,6 @@ pub(super) struct PardisoFactorization {
     source: TriangleSource,
     scratch: Vec<f64>,
     threads: i32,
-    inertia: Option<PivotReport>,
 }
 
 impl PardisoFactorization {
@@ -182,7 +181,6 @@ impl PardisoFactorization {
             source,
             scratch: Vec::new(),
             threads,
-            inertia: None,
         };
         factor.call(11, 1, &mut 0.0, &mut 0.0)?;
         Ok(factor)
@@ -237,15 +235,7 @@ impl PardisoFactorization {
 
     pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         *factorizations += 1;
-        self.inertia = None;
-        self.call(22, 1, &mut 0.0, &mut 0.0)?;
-        let (positive, negative) = (self.iparm[21] as usize, self.iparm[22] as usize);
-        self.inertia = Some(PivotReport {
-            positive,
-            negative,
-            zero: self.dim().saturating_sub(positive + negative),
-        });
-        Ok(())
+        self.call(22, 1, &mut 0.0, &mut 0.0)
     }
 
     pub(super) fn refactor_diagonal(
@@ -255,10 +245,6 @@ impl PardisoFactorization {
     ) -> Result<(), LinearSystemError> {
         self.source.gather_diagonal(diagonal, &mut self.values);
         self.factor(factorizations)
-    }
-
-    pub(super) fn pivot_report(&self) -> Option<PivotReport> {
-        self.inertia
     }
 
     pub(super) fn solve_in_place(

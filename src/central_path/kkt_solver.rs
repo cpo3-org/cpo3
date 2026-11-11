@@ -203,7 +203,7 @@ impl KktCache {
 
     /// Factorize the clamped preconditioner `[P + shift I, A^T; A, -diag(d)]`
     /// with `d = factor_diagonal`, reusing the cached pattern and symbolic
-    /// analysis when present, and reject factors with the wrong inertia.
+    /// analysis when present.
     pub(crate) fn prepare(
         &mut self,
         problem: &Problem,
@@ -244,11 +244,7 @@ impl KktCache {
                     .factor(&mut self.factorizations)?;
             }
         }
-        self.factorization
-            .as_mut()
-            .expect("the factorization was just stored")
-            .check_inertia(problem.variable_count())
-            .map_err(KktError::from)
+        Ok(())
     }
 
     /// Refine a right-hand side after `prepare` succeeds for this system.
@@ -765,12 +761,7 @@ mod cache_tests {
                         assert!((actual - expected).abs() < 1e-12);
                     }
                 }
-                // Accelerate may retry once to work around stale refactor inertia.
-                if solver == LinearSolver::Accelerate {
-                    assert!((2..=3).contains(&cache.stats().factorizations));
-                } else {
-                    assert_eq!(cache.stats().factorizations, 2);
-                }
+                assert_eq!(cache.stats().factorizations, 2);
             }
         }
     }

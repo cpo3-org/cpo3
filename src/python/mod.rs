@@ -267,11 +267,6 @@ impl PySolutionInfo {
     }
 
     #[getter]
-    fn inertia_failures(&self) -> usize {
-        self.inner.linear_algebra.inertia_failures
-    }
-
-    #[getter]
     fn linear_solver<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         py.import("cpo3.settings")?
             .getattr("LinearSolver")?

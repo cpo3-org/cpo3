@@ -9,8 +9,8 @@ readme = "README.md"
 license = "MIT"
 documentation = "https://docs.rs/cpo3"
 repository = "https://github.com/cpo3-org/cpo3"
-keywords = ["optimization", "quadratic", "linear-programming", "solver", "sparse"]
-categories = ["mathematics", "science"]
+keywords = ["optimization", "convex", "quadratic", "linear-programming", "interior-point"]
+categories = ["mathematics"]
 exclude = [
     "/benchmarks/data/**",
     "/dist/**",

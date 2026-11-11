@@ -381,13 +381,6 @@ mod tests {
         assert!(floors.windows(2).all(|w| w[1] > w[0]));
         for (error, numerical) in [
             (LinearSystemError::Singular, true),
-            (
-                LinearSystemError::WrongInertia {
-                    positive: 0,
-                    expected: 1,
-                },
-                true,
-            ),
             (LinearSystemError::RefinementDiverged(1.0), true),
             (LinearSystemError::Factorization("failed".into()), true),
             (LinearSystemError::NonFiniteRightHandSide, true),

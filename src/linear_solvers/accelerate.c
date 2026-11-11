@@ -56,13 +56,13 @@ Cpo3Accelerate *cpo3_accelerate_new(int n, long *columns, int *rows, int *status
     return factor;
 }
 
-int cpo3_accelerate_factor(Cpo3Accelerate *factor, double *values, bool reuse_numeric) {
+int cpo3_accelerate_factor(Cpo3Accelerate *factor, double *values) {
     SparseMatrix_Double matrix = { .structure = factor->matrix, .data = values };
     // Ruiz and the outer refinement already handle scaling and accuracy.
     SparseNumericFactorOptions options = {
         .scalingMethod = SparseScalingUser, .pivotTolerance = 0.01, .zeroTolerance = 0.0
     };
-    if (reuse_numeric && factor->numeric.numericFactorization) {
+    if (factor->numeric.numericFactorization) {
         SparseRefactor(matrix, &factor->numeric, options, factor->factor_workspace);
     } else {
         if (factor->numeric_created) SparseCleanup(factor->numeric);
@@ -71,13 +71,6 @@ int cpo3_accelerate_factor(Cpo3Accelerate *factor, double *values, bool reuse_nu
         factor->numeric_created = true;
     }
     return factor->numeric.status;
-}
-
-int cpo3_accelerate_inertia(Cpo3Accelerate *factor, int *positive, int *zero, int *negative) {
-    if (__builtin_available(macOS 13.0, *)) {
-        return SparseGetInertia(factor->numeric, positive, zero, negative);
-    }
-    return -1;
 }
 
 int cpo3_accelerate_solve(Cpo3Accelerate *factor, int columns, double *rhs) {

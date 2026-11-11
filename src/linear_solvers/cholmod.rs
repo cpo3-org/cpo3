@@ -4,7 +4,7 @@ use std::{ffi::c_void, path::PathBuf, ptr::NonNull, sync::OnceLock};
 
 use libloading::Library;
 
-use super::{LinearSystemError, PivotReport, TriangleSource, library_error};
+use super::{LinearSystemError, TriangleSource, library_error};
 use crate::CscMatrix;
 
 // Must match Cpo3CholmodApi in cholmod.c. CHOLMOD structs stay opaque to Rust.
@@ -155,7 +155,7 @@ unsafe extern "C" {
         status: *mut i32,
     ) -> *mut c_void;
     fn cpo3_cholmod_free(solver: *mut c_void);
-    fn cpo3_cholmod_factor(solver: *mut c_void, positive: *mut usize, negative: *mut usize) -> i32;
+    fn cpo3_cholmod_factor(solver: *mut c_void) -> i32;
     fn cpo3_cholmod_solve(solver: *mut c_void, columns: usize, rhs: *mut f64) -> i32;
 }
 
@@ -167,7 +167,6 @@ pub(super) struct CholmodFactorization {
     values: Vec<f64>,
     source: TriangleSource,
     dim: usize,
-    inertia: Option<PivotReport>,
 }
 
 impl CholmodFactorization {
@@ -203,7 +202,6 @@ impl CholmodFactorization {
             values,
             source,
             dim,
-            inertia: None,
         })
     }
 
@@ -213,16 +211,8 @@ impl CholmodFactorization {
 
     pub(super) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         *factorizations += 1;
-        self.inertia = None;
-        let (mut positive, mut negative) = (0, 0);
         // SAFETY: The handle and its fixed CSC buffers are live and uniquely owned.
-        check(unsafe { cpo3_cholmod_factor(self.handle.as_ptr(), &mut positive, &mut negative) })?;
-        self.inertia = Some(PivotReport {
-            positive,
-            negative,
-            zero: 0,
-        });
-        Ok(())
+        check(unsafe { cpo3_cholmod_factor(self.handle.as_ptr()) })
     }
 
     pub(super) fn refactor_diagonal(
@@ -232,10 +222,6 @@ impl CholmodFactorization {
     ) -> Result<(), LinearSystemError> {
         self.source.gather_diagonal(diagonal, &mut self.values);
         self.factor(factorizations)
-    }
-
-    pub(super) fn pivot_report(&self) -> Option<PivotReport> {
-        self.inertia
     }
 
     pub(super) fn solve_in_place(
@@ -287,7 +273,6 @@ mod tests {
             factor.refactor_diagonal(&[1.0, 0.0], &mut count),
             Err(LinearSystemError::Singular)
         ));
-        assert!(factor.pivot_report().is_none());
         factor.refactor_diagonal(&[2.0, -3.0], &mut count).unwrap();
         let mut rhs = [4.0, 6.0];
         factor.solve_in_place(&mut rhs, 1).unwrap();

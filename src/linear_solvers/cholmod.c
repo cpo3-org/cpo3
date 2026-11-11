@@ -76,7 +76,7 @@ Cpo3Cholmod *cpo3_cholmod_new(const Cpo3CholmodApi *api, size_t n,
     return solver;
 }
 
-int cpo3_cholmod_factor(Cpo3Cholmod *solver, size_t *positive, size_t *negative) {
+int cpo3_cholmod_factor(Cpo3Cholmod *solver) {
     if (!solver->api->factorize(&solver->matrix, solver->factor, &solver->common)) {
         return solver->common.status;
     }
@@ -85,14 +85,10 @@ int cpo3_cholmod_factor(Cpo3Cholmod *solver, size_t *positive, size_t *negative)
     // Simplicial LDL' stores D at the first entry of each column of L.
     const int64_t *columns = solver->factor->p;
     const double *values = solver->factor->x;
-    *positive = 0;
-    *negative = 0;
     for (size_t column = 0; column < solver->factor->n; ++column) {
         double pivot = values[columns[column]];
         if (!isfinite(pivot)) return CHOLMOD_INVALID;
         if (pivot == 0.0) return CHOLMOD_NOT_POSDEF;
-        *positive += pivot > 0.0;
-        *negative += pivot < 0.0;
     }
     return CHOLMOD_OK;
 }
