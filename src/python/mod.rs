@@ -151,13 +151,8 @@ fn linear_solver_available(name: &str) -> PyResult<bool> {
 }
 
 fn parse_cone(name: &str, parameter: usize) -> PyResult<Cone> {
-    match name {
-        "zero" => Ok(Cone::Zero(parameter)),
-        "nonnegative" => Ok(Cone::Nonnegative(parameter)),
-        "second_order" => Ok(Cone::SecondOrder(parameter)),
-        "positive_semidefinite" => Ok(Cone::PositiveSemidefinite(parameter)),
-        _ => Err(PyValueError::new_err(format!("unknown cone type {name:?}"))),
-    }
+    Cone::from_name(name, parameter)
+        .ok_or_else(|| PyValueError::new_err(format!("unknown cone type {name:?}")))
 }
 
 /// Summary information for a completed solve.

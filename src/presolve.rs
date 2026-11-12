@@ -1,7 +1,7 @@
 //! cpo3's Ax+s=b convention at the standalone presolve boundary.
 use crate::{
     Cone, Problem, WarmStart,
-    cone::{ConeBlock, ConeGeometry},
+    cone::{ConeGeometry, PresolveForm},
 };
 use ::presolve as native;
 use std::time::Duration;
@@ -51,27 +51,21 @@ pub(crate) fn domains(
     let mut offset = 0;
     for cone in input_cones {
         let n = cone.vector_dim();
-        match *cone {
-            Cone::Zero(_) => {
+        match cone.presolve_form() {
+            PresolveForm::Equality => {
                 rows.extend(b[offset..offset + n].iter().map(|&b| {
                     native::problem::Constraint::Linear(native::problem::Bounds::fixed(b))
                 }))
             }
-            Cone::Nonnegative(_) => rows.extend(b[offset..offset + n].iter().map(|&b| {
+            PresolveForm::UpperBound => rows.extend(b[offset..offset + n].iter().map(|&b| {
                 native::problem::Constraint::Linear(native::problem::Bounds {
                     lower: f64::NEG_INFINITY,
                     upper: b,
                 })
             })),
-            _ => {
+            PresolveForm::Conic(native_cone) => {
                 let block = cones.len();
-                cones.push(match *cone {
-                    Cone::SecondOrder(n) => native::problem::Cone::SecondOrder(n),
-                    Cone::PositiveSemidefinite(order) => {
-                        native::problem::Cone::PositiveSemidefinite { order }
-                    }
-                    _ => unreachable!(),
-                });
+                cones.push(native_cone);
                 rows.extend(
                     b[offset..offset + n]
                         .iter()
@@ -118,9 +112,11 @@ fn original_dual(original: &Problem, y: &[f64], w: &[f64]) -> Vec<f64> {
     let mut out = Vec::with_capacity(original.constraint_count());
     for cone in original.cones() {
         let n = cone.vector_dim();
-        match cone {
-            Cone::Zero(_) | Cone::Nonnegative(_) => out.extend(y.by_ref().take(n).map(|v| -v)),
-            _ => out.extend(w.by_ref().take(n).copied()),
+        match cone.presolve_form() {
+            PresolveForm::Equality | PresolveForm::UpperBound => {
+                out.extend(y.by_ref().take(n).map(|v| -v));
+            }
+            PresolveForm::Conic(_) => out.extend(w.by_ref().take(n).copied()),
         }
     }
     out
@@ -172,14 +168,8 @@ pub(crate) fn presolve(
             let cones = p
                 .cones
                 .iter()
-                .map(|&c| match c {
-                    native::problem::Cone::Zero(n) => Cone::Zero(n),
-                    native::problem::Cone::Nonnegative(n) => Cone::Nonnegative(n),
-                    native::problem::Cone::SecondOrder(n) => Cone::SecondOrder(n),
-                    native::problem::Cone::PositiveSemidefinite { order } => {
-                        Cone::PositiveSemidefinite(order)
-                    }
-                    _ => unreachable!("presolve emitted an unsupported cpo3 cone"),
+                .map(|&c| {
+                    Cone::from_presolve(c).expect("presolve emitted an unsupported cpo3 cone")
                 })
                 .collect();
             let problem = Problem::from_validated(
@@ -341,13 +331,7 @@ impl Presolved {
         let ax = crate::linear_algebra::matrix_mul(self.problem.a(), &p.x);
         let mut s = Vec::new();
         geometry.reconstruct_slack(self.problem.b(), &ax, &mut s);
-        for block in geometry.blocks() {
-            if let ConeBlock::Nonnegative(range) = block {
-                for value in &mut y[range.clone()] {
-                    *value = value.max(0.0);
-                }
-            }
-        }
+        geometry.project_dual(&mut y);
         WarmStart { x: p.x, y, s }
     }
 }

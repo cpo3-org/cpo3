@@ -1,6 +1,20 @@
-mod geometry;
+//! Cone blocks: the public descriptors and one implementation file per cone.
+//!
+//! The interior-point method reaches cones only through [`ConeGeometry`], which
+//! forwards each operation to the [`ConeKernel`] of every block. To add a cone,
+//! implement [`ConeKernel`] in its own file, then register it in this file: a
+//! [`Cone`] variant with its name and dimensions, a [`SupportedCone`] variant,
+//! and its presolve conversions.
 
-pub(crate) use geometry::{ConeBlock, ConeGeometry, ConeGeometryError};
+mod geometry;
+mod nonnegative;
+mod zero;
+
+use ::presolve as native;
+
+pub(crate) use geometry::{ConeGeometry, ConeGeometryError};
+use nonnegative::NonnegativeCone;
+use zero::ZeroCone;
 
 pub(crate) const INTERIOR_FLOOR: f64 = 1e-32;
 
@@ -44,6 +58,149 @@ impl Cone {
             Self::Nonnegative(_) => "nonnegative",
             Self::SecondOrder(_) => "second_order",
             Self::PositiveSemidefinite(_) => "positive_semidefinite",
+        }
+    }
+
+    /// Inverse of [`Cone::name`] and [`Cone::parameter`].
+    #[cfg(feature = "python")]
+    pub(crate) fn from_name(name: &str, parameter: usize) -> Option<Self> {
+        Some(match name {
+            "zero" => Self::Zero(parameter),
+            "nonnegative" => Self::Nonnegative(parameter),
+            "second_order" => Self::SecondOrder(parameter),
+            "positive_semidefinite" => Self::PositiveSemidefinite(parameter),
+            _ => return None,
+        })
+    }
+
+    /// How this block is expressed to the native presolver.
+    pub(crate) fn presolve_form(&self) -> PresolveForm {
+        match *self {
+            Self::Zero(_) => PresolveForm::Equality,
+            Self::Nonnegative(_) => PresolveForm::UpperBound,
+            Self::SecondOrder(dim) => PresolveForm::Conic(native::problem::Cone::SecondOrder(dim)),
+            Self::PositiveSemidefinite(order) => {
+                PresolveForm::Conic(native::problem::Cone::PositiveSemidefinite { order })
+            }
+        }
+    }
+
+    /// Convert a cone block emitted by the native presolver.
+    pub(crate) fn from_presolve(cone: native::problem::Cone) -> Option<Self> {
+        Some(match cone {
+            native::problem::Cone::Zero(dim) => Self::Zero(dim),
+            native::problem::Cone::Nonnegative(dim) => Self::Nonnegative(dim),
+            native::problem::Cone::SecondOrder(dim) => Self::SecondOrder(dim),
+            native::problem::Cone::PositiveSemidefinite { order } => {
+                Self::PositiveSemidefinite(order)
+            }
+            _ => return None,
+        })
+    }
+}
+
+/// How a cone block crosses the native presolve boundary.
+pub(crate) enum PresolveForm {
+    /// Each row is the linear equality `(Ax)_i = b_i`.
+    Equality,
+    /// Each row is the linear inequality `(Ax)_i <= b_i`.
+    UpperBound,
+    /// The block passes through as one native cone.
+    Conic(native::problem::Cone),
+}
+
+/// Which member of the primal–dual pair a vector belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConeSide {
+    Primal,
+    Dual,
+}
+
+/// Structure of a block's scaling matrix in the KKT system.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScalingShape {
+    /// Identically zero, as for equality rows.
+    Zero,
+    /// Diagonal, with strictly positive entries at interior points.
+    Diagonal,
+}
+
+/// The operations the interior-point method needs from one cone block.
+///
+/// Every slice argument covers exactly this block's rows; [`ConeGeometry`]
+/// checks lengths and splits product-cone vectors before calling these.
+/// `F` is the cone's barrier and `F*` the barrier of its dual cone.
+trait ConeKernel: std::fmt::Debug {
+    /// Contribution to the barrier parameter `nu` of the product cone.
+    fn barrier_parameter(&self) -> usize;
+
+    /// Structure of this block's scaling in the KKT system.
+    fn scaling_shape(&self) -> ScalingShape;
+
+    /// Whether `s` lies in the relative interior of the primal cone.
+    fn is_primal_interior(&self, s: &[f64]) -> bool;
+
+    /// Whether `y` lies in the interior of the dual cone.
+    fn is_dual_interior(&self, y: &[f64]) -> bool;
+
+    /// The unit point `e` of the canonical start: `-∇F(e) = e`, and
+    /// `<e, e>` equals the barrier parameter.
+    fn unit_point(&self, out: &mut [f64]);
+
+    /// The scaling used by the CVXOPT-style start: the identity on cone rows.
+    fn identity_scaling(&self, out: &mut [f64]);
+
+    /// The largest `t` with `v - t e` in the closed cone, or `+∞` when the
+    /// cone imposes no margin.
+    fn margin(&self, v: &[f64]) -> f64;
+
+    /// Shift `v` by `alpha e` towards the interior of the cone on `side`. A
+    /// cone without an interior projects onto itself instead.
+    fn unit_shift(&self, v: &mut [f64], alpha: f64, side: ConeSide);
+
+    /// Write the slack for a given `Ax`: `b - Ax` projected onto the primal cone.
+    fn reconstruct_slack(&self, b: &[f64], ax: &[f64], out: &mut [f64]);
+
+    /// Project `y` onto the dual cone.
+    fn project_dual(&self, y: &mut [f64]);
+
+    /// Move `s` and `y` at least `floor` inside the primal and dual cones.
+    fn floor_interior(&self, s: &mut [f64], y: &mut [f64], floor: f64);
+
+    /// Write the diagonal scaling `h`, with `h y = s` and `h s^{-1} = y^{-1}`,
+    /// and the Jordan inverse `y^{-1}`. Blocks without a barrier write zeros.
+    fn scaling_and_inverse(&self, s: &[f64], y: &[f64], h: &mut [f64], inverse: &mut [f64]);
+
+    /// The largest step in `[0, 1]` from the interior point `v` toward
+    /// `target` that stays in the cone. Non-finite targets are an error.
+    fn step_to_boundary(&self, v: &[f64], target: &[f64]) -> Result<f64, ConeGeometryError>;
+
+    /// Complete the warm-start dual residual `r <- r + mu ∇F*(y)` and add
+    /// `r' (mu (I + ∇²F*(y)))^{-1} r` to `sum`.
+    fn accumulate_local_score(&self, y: &[f64], mu: f64, residual: &mut [f64], sum: &mut f64);
+}
+
+/// The implemented cones, one variant per implementation file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SupportedCone {
+    Zero(ZeroCone),
+    Nonnegative(NonnegativeCone),
+}
+
+impl SupportedCone {
+    /// The implementation for a public cone descriptor, if one exists.
+    fn new(cone: &Cone) -> Option<Self> {
+        match *cone {
+            Cone::Zero(_) => Some(Self::Zero(ZeroCone)),
+            Cone::Nonnegative(dim) => Some(Self::Nonnegative(NonnegativeCone::new(dim))),
+            Cone::SecondOrder(_) | Cone::PositiveSemidefinite(_) => None,
+        }
+    }
+
+    fn kernel(&self) -> &dyn ConeKernel {
+        match self {
+            Self::Zero(cone) => cone,
+            Self::Nonnegative(cone) => cone,
         }
     }
 }

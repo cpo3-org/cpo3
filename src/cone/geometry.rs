@@ -1,10 +1,8 @@
 use std::ops::Range;
 
-use faer::{ColMut, ColRef};
-
 use thiserror::Error;
 
-use super::{Cone, INTERIOR_FLOOR};
+use super::{ConeKernel, ConeSide, INTERIOR_FLOOR, ScalingShape, SupportedCone};
 use crate::Problem;
 
 /// Failures while laying out or evaluating product-cone geometry.
@@ -22,27 +20,21 @@ pub(crate) enum ConeGeometryError {
     NonFiniteInput { argument: &'static str },
 }
 
+/// One cone block and the consecutive rows it occupies.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ConeBlock {
-    Zero(Range<usize>),
-    Nonnegative(Range<usize>),
+struct Block {
+    range: Range<usize>,
+    cone: SupportedCone,
 }
 
-impl ConeBlock {
-    pub(crate) fn range(&self) -> Range<usize> {
-        match self {
-            Self::Zero(range) | Self::Nonnegative(range) => range.clone(),
-        }
-    }
-}
-
-/// Block layout of consecutive primal-cone rows.
+/// The product cone: block layout of consecutive primal-cone rows.
 ///
-/// A zero-cone block contributes no barrier parameter; its dual block is
-/// unrestricted.
+/// Each method splits its vectors by block and forwards to that block's
+/// [`ConeKernel`]. A zero-cone block contributes no barrier parameter; its
+/// dual block is unrestricted.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ConeGeometry {
-    blocks: Vec<ConeBlock>,
+    blocks: Vec<Block>,
     dim: usize,
     barrier_parameter: usize,
 }
@@ -56,22 +48,19 @@ impl ConeGeometry {
         let mut barrier_parameter = 0usize;
 
         for (block, cone) in cones.iter().enumerate() {
-            let dim = cone.vector_dim();
-            let end = offset.strict_add(dim);
-            let layout = match cone {
-                Cone::Zero(_) => ConeBlock::Zero(offset..end),
-                Cone::Nonnegative(_) => {
-                    barrier_parameter = barrier_parameter.strict_add(dim);
-                    ConeBlock::Nonnegative(offset..end)
-                }
-                unsupported => {
-                    return Err(ConeGeometryError::UnsupportedCone {
-                        block,
-                        name: unsupported.name(),
-                    });
-                }
+            let end = offset.strict_add(cone.vector_dim());
+            let Some(implementation) = SupportedCone::new(cone) else {
+                return Err(ConeGeometryError::UnsupportedCone {
+                    block,
+                    name: cone.name(),
+                });
             };
-            blocks.push(layout);
+            barrier_parameter =
+                barrier_parameter.strict_add(implementation.kernel().barrier_parameter());
+            blocks.push(Block {
+                range: offset..end,
+                cone: implementation,
+            });
             offset = end;
         }
 
@@ -82,81 +71,107 @@ impl ConeGeometry {
         })
     }
 
-    pub(crate) fn dim(&self) -> usize {
-        self.dim
+    fn kernels(&self) -> impl Iterator<Item = (Range<usize>, &dyn ConeKernel)> {
+        self.blocks
+            .iter()
+            .map(|block| (block.range.clone(), block.cone.kernel()))
     }
 
-    pub(crate) fn blocks(&self) -> &[ConeBlock] {
-        &self.blocks
+    pub(crate) fn dim(&self) -> usize {
+        self.dim
     }
 
     pub(crate) fn barrier_parameter(&self) -> usize {
         self.barrier_parameter
     }
 
-    /// Test membership in the relative interior of the primal product cone.
-    ///
-    /// Zero-cone coordinates must be exactly zero, while nonnegative-cone
-    /// coordinates must be strictly positive.
-    pub(crate) fn is_primal_interior(&self, s: &[f64]) -> Result<bool, ConeGeometryError> {
-        self.ensure_length("s", s)?;
-        Ok(self.blocks.iter().all(|block| match block {
-            ConeBlock::Zero(range) => s[range.clone()].iter().all(|entry| *entry == 0.0),
-            ConeBlock::Nonnegative(range) => s[range.clone()]
-                .iter()
-                .all(|entry| entry.is_finite() && *entry > 0.0),
-        }))
+    /// Row ranges with the structure of their KKT scaling blocks.
+    pub(crate) fn scaling_layout(&self) -> impl Iterator<Item = (Range<usize>, ScalingShape)> {
+        self.kernels()
+            .map(|(range, kernel)| (range, kernel.scaling_shape()))
     }
 
+    /// Test membership in the relative interior of the primal product cone:
+    /// every block in the relative interior of its own cone, so equality
+    /// rows must be exactly zero.
+    pub(crate) fn is_primal_interior(&self, s: &[f64]) -> Result<bool, ConeGeometryError> {
+        self.ensure_length("s", s)?;
+        Ok(self
+            .kernels()
+            .all(|(range, kernel)| kernel.is_primal_interior(&s[range])))
+    }
+
+    /// Write the unit point `e` of the product cone.
     pub(crate) fn canonical_identity(&self, out: &mut [f64]) -> Result<(), ConeGeometryError> {
         self.ensure_length("out", out)?;
-        out.fill(0.0);
-        for block in &self.blocks {
-            if let ConeBlock::Nonnegative(range) = block {
-                out[range.clone()].fill(1.0);
-            }
+        for (range, kernel) in self.kernels() {
+            kernel.unit_point(&mut out[range]);
         }
         Ok(())
     }
 
-    /// Test membership in the interior of the dual product cone.
-    ///
-    /// Zero-cone coordinates are unrestricted, while nonnegative-cone
-    /// coordinates must be strictly positive.
-    pub(crate) fn is_dual_interior(&self, y: &[f64]) -> Result<bool, ConeGeometryError> {
-        self.ensure_length("y", y)?;
-        Ok(self.blocks.iter().all(|block| match block {
-            ConeBlock::Zero(range) => y[range.clone()].iter().all(|entry| entry.is_finite()),
-            ConeBlock::Nonnegative(range) => y[range.clone()]
-                .iter()
-                .all(|entry| entry.is_finite() && *entry > 0.0),
-        }))
+    /// Write the diagonal of the CVXOPT-style start's scaling: the identity
+    /// on cone rows and zero on equality rows.
+    pub(crate) fn identity_scaling(&self, out: &mut [f64]) -> Result<(), ConeGeometryError> {
+        self.ensure_length("out", out)?;
+        for (range, kernel) in self.kernels() {
+            kernel.identity_scaling(&mut out[range]);
+        }
+        Ok(())
     }
 
-    /// Reconstruct slack from a precomputed `Ax`: zero equality rows and
-    /// clamp `b - Ax` to zero on nonnegative-cone rows.
+    /// Test membership in the interior of the dual product cone: every block
+    /// in the interior of its own dual cone, so equality rows only need to be
+    /// finite.
+    pub(crate) fn is_dual_interior(&self, y: &[f64]) -> Result<bool, ConeGeometryError> {
+        self.ensure_length("y", y)?;
+        Ok(self
+            .kernels()
+            .all(|(range, kernel)| kernel.is_dual_interior(&y[range])))
+    }
+
+    /// Reconstruct slack from a precomputed `Ax`: project `b - Ax` onto the
+    /// primal cone of each block, which zeros equality rows.
     pub(crate) fn reconstruct_slack(&self, b: &[f64], ax: &[f64], out: &mut Vec<f64>) {
         out.resize(self.dim, 0.0);
-        for block in &self.blocks {
-            match block {
-                ConeBlock::Zero(range) => out[range.clone()].fill(0.0),
-                ConeBlock::Nonnegative(range) => {
-                    for i in range.clone() {
-                        out[i] = (b[i] - ax[i]).max(0.0);
-                    }
-                }
-            }
+        for (range, kernel) in self.kernels() {
+            kernel.reconstruct_slack(&b[range.clone()], &ax[range.clone()], &mut out[range]);
         }
     }
 
-    /// Floor nonnegative-cone components, leaving equality rows unchanged.
+    /// Project a dual estimate onto the dual product cone.
+    pub(crate) fn project_dual(&self, y: &mut [f64]) {
+        for (range, kernel) in self.kernels() {
+            kernel.project_dual(&mut y[range]);
+        }
+    }
+
+    /// Keep an accepted iterate strictly interior despite rounding: move cone
+    /// components of `s` and `y` at least [`INTERIOR_FLOOR`] inside.
     pub(crate) fn floor_interior(&self, s: &mut [f64], y: &mut [f64]) {
-        for block in &self.blocks {
-            if let ConeBlock::Nonnegative(range) = block {
-                for value in s[range.clone()].iter_mut().chain(&mut y[range.clone()]) {
-                    *value = value.max(INTERIOR_FLOOR);
-                }
-            }
+        self.floor_interior_with_margin(s, y, INTERIOR_FLOOR);
+    }
+
+    /// Move cone components of `s` and `y` at least `margin` into the interior;
+    /// equality rows of `s` are zeroed and those of `y` left unchanged.
+    pub(crate) fn floor_interior_with_margin(&self, s: &mut [f64], y: &mut [f64], margin: f64) {
+        for (range, kernel) in self.kernels() {
+            kernel.floor_interior(&mut s[range.clone()], &mut y[range], margin);
+        }
+    }
+
+    /// Shift every block of `v` by one common multiple of its unit point so
+    /// that the smallest margin reaches `margin`; primal equality rows are
+    /// zeroed and dual equality rows left unchanged.
+    pub(crate) fn shift_into_interior(&self, v: &mut [f64], side: ConeSide, margin: f64) {
+        let minimum = self
+            .kernels()
+            .map(|(range, kernel)| kernel.margin(&v[range]))
+            .fold(f64::INFINITY, f64::min);
+        let shift = margin - minimum;
+        let alpha = if shift > 0.0 { shift } else { 0.0 };
+        for (range, kernel) in self.kernels() {
+            kernel.unit_shift(&mut v[range], alpha, side);
         }
     }
 
@@ -172,25 +187,13 @@ impl ConeGeometry {
         debug_assert!(self.is_dual_interior(y).unwrap_or(false));
         self.ensure_length("h", h)?;
         self.ensure_length("inverse", inverse)?;
-        for block in &self.blocks {
-            match block {
-                ConeBlock::Zero(range) => {
-                    h[range.clone()].fill(0.0);
-                    inverse[range.clone()].fill(0.0);
-                }
-                ConeBlock::Nonnegative(range) => {
-                    faer::zip!(
-                        ColMut::from_slice_mut(&mut h[range.clone()]),
-                        ColMut::from_slice_mut(&mut inverse[range.clone()]),
-                        ColRef::from_slice(&s[range.clone()]),
-                        ColRef::from_slice(&y[range.clone()])
-                    )
-                    .for_each(|faer::unzip!(h, inverse, s, y)| {
-                        *h = s / y;
-                        *inverse = y.recip();
-                    });
-                }
-            }
+        for (range, kernel) in self.kernels() {
+            kernel.scaling_and_inverse(
+                &s[range.clone()],
+                &y[range.clone()],
+                &mut h[range.clone()],
+                &mut inverse[range],
+            );
         }
         Ok(())
     }
@@ -201,31 +204,27 @@ impl ConeGeometry {
         v: &[f64],
         target: &[f64],
     ) -> Result<f64, ConeGeometryError> {
-        let values = target;
         debug_assert!(self.is_dual_interior(v).unwrap_or(false));
-        self.ensure_length("dv", values)?;
+        self.ensure_length("dv", target)?;
         let mut alpha: f64 = 1.0;
-        for block in &self.blocks {
-            match block {
-                ConeBlock::Zero(range) => {
-                    if !values[range.clone()].iter().all(|value| value.is_finite()) {
-                        return Err(ConeGeometryError::NonFiniteInput { argument: "dv" });
-                    }
-                }
-                ConeBlock::Nonnegative(range) => {
-                    for (&value, &other) in v[range.clone()].iter().zip(&values[range.clone()]) {
-                        if !other.is_finite() {
-                            return Err(ConeGeometryError::NonFiniteInput { argument: "dv" });
-                        }
-                        let direction = other - value;
-                        if direction < 0.0 {
-                            alpha = alpha.min(-value / direction);
-                        }
-                    }
-                }
-            }
+        for (range, kernel) in self.kernels() {
+            alpha = alpha.min(kernel.step_to_boundary(&v[range.clone()], &target[range])?);
         }
         Ok(alpha)
+    }
+
+    /// Complete the warm-start dual residual with each block's barrier
+    /// gradient and accumulate its weighted squared norm into `sum`.
+    pub(crate) fn accumulate_local_score(
+        &self,
+        y: &[f64],
+        mu: f64,
+        residual: &mut [f64],
+        sum: &mut f64,
+    ) {
+        for (range, kernel) in self.kernels() {
+            kernel.accumulate_local_score(&y[range.clone()], mu, &mut residual[range], sum);
+        }
     }
 
     fn ensure_length(
@@ -247,6 +246,51 @@ impl ConeGeometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Cone;
+
+    #[test]
+    fn scaling_layout_reports_each_block_shape() {
+        let geometry =
+            crate::cone::test_geometry(vec![Cone::Zero(2), Cone::Nonnegative(3), Cone::Zero(1)]);
+        assert_eq!(
+            geometry.scaling_layout().collect::<Vec<_>>(),
+            [
+                (0..2, ScalingShape::Zero),
+                (2..5, ScalingShape::Diagonal),
+                (5..6, ScalingShape::Zero),
+            ]
+        );
+    }
+
+    #[test]
+    fn floor_and_projection_respect_equality_rows() {
+        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(2)]);
+        let mut s = [3.0, -1.0, 5.0];
+        let mut y = [-4.0, 0.0, 2.0];
+        geometry.floor_interior_with_margin(&mut s, &mut y, 0.5);
+        assert_eq!(s, [0.0, 0.5, 5.0]);
+        assert_eq!(y, [-4.0, 0.5, 2.0]);
+
+        let mut y = [-4.0, -1.0, 2.0];
+        geometry.project_dual(&mut y);
+        assert_eq!(y, [-4.0, 0.0, 2.0]);
+
+        let mut identity = [f64::NAN; 3];
+        geometry.identity_scaling(&mut identity).unwrap();
+        assert_eq!(identity, [0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn local_score_adds_the_barrier_only_on_cone_rows() {
+        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(1)]);
+        let (y, mu) = ([3.0, 2.0], 0.5);
+        let mut residual = [1.0, 1.0];
+        let mut sum = 0.0;
+        geometry.accumulate_local_score(&y, mu, &mut residual, &mut sum);
+        // r_1 = 1 - mu / 2 with weight mu + mu / 4.
+        assert_eq!(residual, [1.0, 0.75]);
+        assert_eq!(sum, 1.0 / mu + 0.75 * 0.75 / (mu + mu / 4.0));
+    }
 
     #[test]
     fn slack_reconstruction_overwrites_mixed_cone_rows() {

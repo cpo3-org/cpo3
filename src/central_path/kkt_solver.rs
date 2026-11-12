@@ -6,7 +6,7 @@
 
 use crate::{
     CscMatrix, MatrixError, Problem,
-    cone::{ConeBlock, ConeGeometry},
+    cone::{ConeGeometry, ScalingShape},
     linear_algebra::{KktLayout, KktOperator, assemble_kkt_pattern},
     linear_solvers::{
         Factorization, KktSettings, LinearAlgebraStats, LinearSystemError, RefinementWorkspace,
@@ -175,9 +175,11 @@ impl BoundRows {
                 singleton[row] = Some((column, value));
             }
         });
-        for block in geometry.blocks() {
-            if let ConeBlock::Zero(range) = block {
-                counts[range.clone()].fill(0);
+        // Only rows with a strictly positive diagonal scaling can be
+        // eliminated by dividing through by it.
+        for (range, shape) in geometry.scaling_layout() {
+            if shape != ScalingShape::Diagonal {
+                counts[range].fill(0);
             }
         }
         let mut eliminated = Vec::new();

@@ -8,7 +8,7 @@ use super::{
 
 use crate::{
     Problem, Settings,
-    cone::{ConeBlock, ConeGeometry},
+    cone::{ConeGeometry, ConeSide},
     linear_algebra::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
     linear_solvers::KktSettings,
     ruiz::EquilibratedProblem,
@@ -68,17 +68,7 @@ fn warm_state(
     for floor in WARM_FLOORS {
         let mut cy = y.clone();
         let mut cs = s.clone();
-        for block in geometry.blocks() {
-            match block {
-                ConeBlock::Zero(range) => cs[range.clone()].fill(0.0),
-                ConeBlock::Nonnegative(range) => {
-                    for i in range.clone() {
-                        cy[i] = cy[i].max(floor);
-                        cs[i] = cs[i].max(floor);
-                    }
-                }
-            }
-        }
+        geometry.floor_interior_with_margin(&mut cs, &mut cy, floor);
         let Ok(mut candidate) = State::new(x.clone(), cs, cy, 1.0) else {
             continue;
         };
@@ -119,19 +109,13 @@ fn local_score(
         })
         .sum::<f64>()
         / mu.max(LOCAL_EPS);
+    let mut y_residual = y
+        .iter()
+        .enumerate()
+        .map(|(i, &value)| -tau * ax[i] + problem.b()[i] * tau + mu * value)
+        .collect::<Vec<_>>();
     let mut y_sq = 0.0;
-    for block in geometry.blocks() {
-        for i in block.range() {
-            let value = y[i];
-            let mut residual = -tau * ax[i] + problem.b()[i] * tau + mu * value;
-            let mut weight = mu;
-            if matches!(block, ConeBlock::Nonnegative(_)) {
-                residual -= mu / value;
-                weight += mu / (value * value);
-            }
-            y_sq += residual * residual / weight;
-        }
-    }
+    geometry.accumulate_local_score(y, mu, &mut y_residual, &mut y_sq);
     let quadratic = tau * dot(x, px);
     let tau_residual = -dot(problem.c(), x) - dot(problem.b(), y) - quadratic / tau.max(LOCAL_EPS)
         + mu * (tau - 1.0 / tau.max(LOCAL_EPS));
@@ -182,8 +166,9 @@ fn canonical_state(
 /// rows give the bounded least-squares point `y = A x - b`. Linear programs
 /// split the solve on one factorization: `(0, b)` for the primal and
 /// `(-c, 0)` for the dual, since coupling both is ill-posed without a
-/// `(1,1)` block. Then `s = b - A x`, and cone components of `s` and `y`
-/// are shifted so that their minimum is at least the interior margin.
+/// `(1,1)` block. Then `s = b - A x`, and cone blocks of `s` and `y` are
+/// shifted along their unit points so that their smallest margin is at least
+/// the interior margin.
 ///
 /// The shifted duals can be orders of magnitude larger than the sphere
 /// radius `sqrt(nu + 1)` (the CONT family reaches `||y|| ~ 1e5` against a
@@ -198,7 +183,7 @@ fn cvxopt_state(
     let (n, m) = (problem.variable_count(), problem.constraint_count());
     let mut h = vec![0.0; geometry.dim()];
     geometry
-        .canonical_identity(&mut h)
+        .identity_scaling(&mut h)
         .map_err(|error| error.to_string())?;
     let linear = problem
         .p()
@@ -223,20 +208,13 @@ fn cvxopt_state(
         let (x, y) = solutions[0].split_at(n);
         (x.to_vec(), y.to_vec())
     };
-    // Equality slacks are exactly zero; the solve only makes them small.
     let mut s = matrix_mul(problem.a(), &x);
-    for block in geometry.blocks() {
-        match block {
-            ConeBlock::Zero(range) => s[range.clone()].fill(0.0),
-            ConeBlock::Nonnegative(range) => {
-                for (s, b) in s[range.clone()].iter_mut().zip(&problem.b()[range.clone()]) {
-                    *s = b - *s;
-                }
-            }
-        }
+    for (s, b) in s.iter_mut().zip(problem.b()) {
+        *s = b - *s;
     }
-    shift_into_interior(&mut s, geometry);
-    shift_into_interior(&mut y, geometry);
+    // Shifting also zeros equality slacks, which the solve only makes small.
+    geometry.shift_into_interior(&mut s, ConeSide::Primal, INTERIOR_MARGIN);
+    geometry.shift_into_interior(&mut y, ConeSide::Dual, INTERIOR_MARGIN);
     let scale = sphere_factor(geometry, &x, &y);
     crate::linear_algebra::scale(&mut x, scale);
     crate::linear_algebra::scale(&mut s, scale);
@@ -285,31 +263,6 @@ fn cvxopt_solve(
                 }
             }
             Err(error) => return Err(error.to_string()),
-        }
-    }
-}
-
-/// Add one constant to every cone component so that their minimum reaches
-/// the interior margin; equality components are left unchanged.
-fn shift_into_interior(values: &mut [f64], geometry: &ConeGeometry) {
-    let minimum = geometry
-        .blocks()
-        .iter()
-        .filter_map(|block| match block {
-            ConeBlock::Nonnegative(range) => Some(&values[range.clone()]),
-            ConeBlock::Zero(_) => None,
-        })
-        .flatten()
-        .copied()
-        .fold(f64::INFINITY, f64::min);
-    let shift = INTERIOR_MARGIN - minimum;
-    if shift > 0.0 {
-        for block in geometry.blocks() {
-            if let ConeBlock::Nonnegative(range) = block {
-                for value in &mut values[range.clone()] {
-                    *value += shift;
-                }
-            }
         }
     }
 }
@@ -545,15 +498,19 @@ mod tests {
             Cone::Nonnegative(2),
         ]);
         let mut values = vec![-3.0, 0.5, -7.0, 2.0, -1.0];
-        shift_into_interior(&mut values, &geometry);
+        geometry.shift_into_interior(&mut values, ConeSide::Dual, INTERIOR_MARGIN);
         assert_eq!(values, [-3.0, 2.5, -7.0, 4.0, 1.0]);
+        // Primal equality slacks are projected onto zero instead.
+        let mut values = vec![-3.0, 0.5, -7.0, 2.0, -1.0];
+        geometry.shift_into_interior(&mut values, ConeSide::Primal, INTERIOR_MARGIN);
+        assert_eq!(values, [0.0, 2.5, 0.0, 4.0, 1.0]);
         let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(2), Cone::Zero(1)]);
         let mut values = vec![7.0, 1.5, 4.0];
-        shift_into_interior(&mut values, &geometry);
+        geometry.shift_into_interior(&mut values, ConeSide::Dual, INTERIOR_MARGIN);
         assert_eq!(values, [7.0, 1.5, 4.0]);
         let geometry = crate::cone::test_geometry(vec![Cone::Zero(1)]);
         let mut values = vec![-2.0];
-        shift_into_interior(&mut values, &geometry);
+        geometry.shift_into_interior(&mut values, ConeSide::Dual, INTERIOR_MARGIN);
         assert_eq!(values, [-2.0]);
     }
 
