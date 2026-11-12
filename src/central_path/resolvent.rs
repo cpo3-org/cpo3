@@ -58,6 +58,11 @@ pub(crate) struct ResolventSolution {
     pub(crate) x_len: usize,
     /// Nonnegative subproblem candidate; the accepted iterate stays positive.
     pub(crate) tau: f64,
+    /// The `y` increment from the current iterate before it is added, kept
+    /// only when coupled cone blocks need it. Their `H` grows like `1 / mu`
+    /// in some directions, so `H (y_new - y)` from rounded points would carry
+    /// an error of order `eps ||H|| ||y||`.
+    pub(crate) dy: Option<Vec<f64>>,
 }
 
 impl ResolventSolution {
@@ -251,6 +256,7 @@ impl<'a> Resolvent<'a> {
             self.cache.direction(),
             |increment, direction| delta_tau.mul_add(direction, increment),
         );
+        let dy = self.scaling.is_coupled().then(|| increment[n..].to_vec());
         let (x, y) = increment.split_at_mut(n);
         crate::linear_algebra::add_assign(x, self.state.x());
         crate::linear_algebra::add_assign(y, self.state.y());
@@ -258,6 +264,7 @@ impl<'a> Resolvent<'a> {
             xy: increment,
             x_len: n,
             tau,
+            dy,
         })
     }
 

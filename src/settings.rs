@@ -85,7 +85,8 @@ pub struct Settings {
 
     // Outer iterations.
     /// Fraction of the cone-boundary step to take, strictly between zero and one.
-    /// The default is 0.999, leaving a relative margin of 1e-3.
+    /// The default is 0.999, leaving a relative margin of 1e-3. Second-order
+    /// cones take at most 0.99 of their own boundary step.
     pub step_fraction: f64,
 }
 

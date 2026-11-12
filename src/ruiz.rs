@@ -3,7 +3,7 @@
 use faer::{Col, ColRef};
 use std::borrow::Cow;
 
-use crate::{CscMatrix, Problem, Settings, SolveError};
+use crate::{CscMatrix, Problem, Settings, SolveError, cone::ConeGeometry};
 
 struct Scales {
     dx: Vec<f64>,
@@ -135,7 +135,13 @@ impl<'a> EquilibratedProblem<'a> {
         );
     }
 
-    pub(crate) fn new(problem: &'a Problem, settings: &Settings) -> Result<Self, SolveError> {
+    /// Equilibrate `problem`, keeping each cone block of `geometry` invariant
+    /// under the row scaling.
+    pub(crate) fn new(
+        problem: &'a Problem,
+        geometry: &ConeGeometry,
+        settings: &Settings,
+    ) -> Result<Self, SolveError> {
         if settings.ruiz_iters == 0 {
             return Ok(Self::unscaled(problem));
         }
@@ -159,6 +165,7 @@ impl<'a> EquilibratedProblem<'a> {
 
             update_scales(&mut dx, &max_x);
             update_scales(&mut dy, &max_y);
+            geometry.rectify_row_scaling(&mut dy);
             if max_t > 0.0 {
                 dt /= max_t.sqrt();
             }

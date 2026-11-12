@@ -85,6 +85,14 @@ impl ConeGeometry {
         self.barrier_parameter
     }
 
+    /// Make cumulative Ruiz row scales admissible for every block, e.g. one
+    /// common scale per second-order cone. Separable blocks are unchanged.
+    pub(crate) fn rectify_row_scaling(&self, scales: &mut [f64]) {
+        for (range, kernel) in self.kernels() {
+            kernel.rectify_row_scaling(&mut scales[range]);
+        }
+    }
+
     /// Row ranges with the structure of their KKT scaling blocks.
     pub(crate) fn scaling_layout(&self) -> impl Iterator<Item = (Range<usize>, ScalingShape)> {
         self.kernels()
@@ -162,6 +170,12 @@ impl ConeGeometry {
         }
     }
 
+    /// Project `v` onto the primal product cone, which zeros equality rows.
+    pub(crate) fn project_primal(&self, v: &mut Vec<f64>) {
+        let point = std::mem::take(v);
+        self.reconstruct_slack(&point, &vec![0.0; self.dim], v);
+    }
+
     /// Project a dual estimate onto the dual product cone.
     pub(crate) fn project_dual(&self, y: &mut [f64]) {
         for (range, kernel) in self.kernels() {
@@ -236,6 +250,7 @@ impl ConeGeometry {
     }
 
     /// Boundary from an accepted interior base toward a new target.
+    #[cfg(test)]
     pub(crate) fn step_to_boundary_toward(
         &self,
         v: &[f64],
@@ -248,6 +263,38 @@ impl ConeGeometry {
             .map(|(target, base)| target - base)
             .collect::<Vec<_>>();
         self.step_length(v, &dv)
+    }
+
+    /// The step from accepted interior bases `s` and `y` toward their targets:
+    /// each block's step to its boundary, damped by `fraction` capped at the
+    /// block's maximum step fraction, minimized over blocks and capped at one.
+    pub(crate) fn damped_step_toward(
+        &self,
+        s: &[f64],
+        s_target: &[f64],
+        y: &[f64],
+        y_target: &[f64],
+        fraction: f64,
+    ) -> Result<f64, ConeGeometryError> {
+        debug_assert!(self.is_dual_interior(y).unwrap_or(false));
+        self.ensure_length("dv", s_target)?;
+        self.ensure_length("dv", y_target)?;
+        let difference = |target: &[f64], base: &[f64]| {
+            target
+                .iter()
+                .zip(base)
+                .map(|(target, base)| target - base)
+                .collect::<Vec<_>>()
+        };
+        let (ds, dy) = (difference(s_target, s), difference(y_target, y));
+        let mut alpha: f64 = 1.0;
+        for (range, kernel) in self.kernels() {
+            let boundary = kernel
+                .step_length(&s[range.clone()], &ds[range.clone()])?
+                .min(kernel.step_length(&y[range.clone()], &dy[range])?);
+            alpha = alpha.min(fraction.min(kernel.max_step_fraction()) * boundary);
+        }
+        Ok(alpha)
     }
 
     /// Complete the warm-start dual residual with each block's barrier
@@ -373,14 +420,14 @@ mod tests {
             vec![],
             crate::CscMatrix::zeros(3, 0).unwrap(),
             vec![0.0; 3],
-            vec![Cone::SecondOrder(3)],
+            vec![Cone::PositiveSemidefinite(2)],
         )
         .unwrap();
         assert_eq!(
             ConeGeometry::new(&problem),
             Err(ConeGeometryError::UnsupportedCone {
                 block: 0,
-                name: "second_order"
+                name: "positive_semidefinite"
             })
         );
 
@@ -445,6 +492,31 @@ mod tests {
             geometry.step_length(&v, &[f64::INFINITY, 0.0, 1.0]),
             Err(ConeGeometryError::NonFiniteInput { argument: "dv" })
         );
+    }
+
+    #[test]
+    fn damped_step_caps_the_fraction_of_second_order_blocks_only() {
+        let geometry = crate::cone::test_geometry(vec![Cone::Nonnegative(1), Cone::SecondOrder(2)]);
+        let base = [1.0, 2.0, 0.0];
+        // The orthant row reaches its boundary at 0.5, the cone at 0.8 (s)
+        // and never (y).
+        let s_target = [-1.0, 2.0 - 2.0 / 0.8, 0.0];
+        let y_target = [2.0, 3.0, 0.0];
+        let damped = |fraction| {
+            geometry
+                .damped_step_toward(&base, &s_target, &base, &y_target, fraction)
+                .unwrap()
+        };
+        assert_eq!(damped(0.999), 0.999 * 0.5);
+        // With a nearer orthant boundary removed, the cone's own cap binds.
+        let s_target = [2.0, 2.0 - 2.0 / 0.8, 0.0];
+        let damped = |fraction| {
+            geometry
+                .damped_step_toward(&base, &s_target, &base, &y_target, fraction)
+                .unwrap()
+        };
+        assert!((damped(0.999) - 0.99 * 0.8).abs() < 1e-15);
+        assert!((damped(0.5) - 0.5 * 0.8).abs() < 1e-15);
     }
 
     #[test]

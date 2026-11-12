@@ -114,7 +114,8 @@ class Settings:
         Zero skips corrections and goes from the direct solve to LSMR if needed.
     step_fraction : float, default=0.999
         Fraction of the step to the cone boundary to take. Must be strictly
-        between zero and one to retain an interior margin.
+        between zero and one to retain an interior margin. Second-order cones
+        take at most 0.99 of their own boundary step.
 
     Notes
     -----

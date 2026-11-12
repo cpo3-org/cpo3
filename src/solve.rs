@@ -193,7 +193,7 @@ fn solve_core(
     original: Option<(&Problem, &Presolved, &ConeGeometry)>,
     started: Instant,
 ) -> Result<Solution, SolveError> {
-    let equilibrated = EquilibratedProblem::new(problem, settings)?;
+    let equilibrated = EquilibratedProblem::new(problem, geometry, settings)?;
     let mut recovery = Recovery::new(problem, &equilibrated, geometry, original);
     if geometry.barrier_parameter() == 0 {
         let settings = Settings {
@@ -383,7 +383,7 @@ pub(crate) fn time_limit_reached(started: Instant, time_limit: Option<Duration>)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Cone;
+    use crate::{Cone, CscMatrix};
 
     #[test]
     fn the_core_keeps_time_already_spent_in_presolve() {
@@ -407,6 +407,164 @@ mod tests {
         assert_eq!(result.status(), SolverStatus::TimeLimit);
         assert_eq!(result.info().iters, 0);
         assert!(result.info().solve_time >= Duration::from_secs(2));
+    }
+
+    /// min -sum(x) subject to ||x|| <= 1, with optimum x = 1 / sqrt(dim).
+    fn ball(dim: usize) -> Problem {
+        let rows = (1..=dim).collect();
+        let columns = (0..dim).collect();
+        Problem::new(
+            None,
+            vec![-1.0; dim],
+            CscMatrix::from_triplets(dim + 1, dim, rows, columns, vec![-1.0; dim]).unwrap(),
+            std::iter::once(1.0).chain(vec![0.0; dim]).collect(),
+            vec![Cone::SecondOrder(dim + 1)],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn second_order_cones_solve_in_dense_and_expanded_layouts() {
+        for dim in [1, 2, 3, 5, 12] {
+            for presolve in [false, true] {
+                for cvxopt_init in [false, true] {
+                    let settings = Settings {
+                        presolve,
+                        cvxopt_init,
+                        ..Settings::default()
+                    };
+                    let solution = solve(&ball(dim), &settings).unwrap();
+                    assert_eq!(solution.status(), SolverStatus::Solved, "{dim}");
+                    let root = (dim as f64).sqrt();
+                    for x in solution.x() {
+                        assert!((x - 1.0 / root).abs() < 1e-6, "{dim}: {:?}", solution.x());
+                    }
+                    assert!((solution.info().pobj + root).abs() < 1e-6);
+                    assert!((solution.y()[0] - root).abs() < 1e-5);
+                }
+            }
+        }
+    }
+
+    /// A deterministic generator for random test data.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn uniform(&mut self) -> f64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (self.0 >> 11) as f64 / (1u64 << 53) as f64
+        }
+
+        fn normal(&mut self) -> f64 {
+            let (u, v) = (self.uniform().max(1e-300), self.uniform());
+            (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * v).cos()
+        }
+    }
+
+    /// The projection of `z` onto the second-order cone.
+    fn project_soc(z: &[f64]) -> Vec<f64> {
+        let norm = z[1..].iter().map(|v| v * v).sum::<f64>().sqrt();
+        if norm <= z[0] {
+            return z.to_vec();
+        }
+        if norm <= -z[0] {
+            return vec![0.0; z.len()];
+        }
+        let scale = 0.5 * (z[0] + norm);
+        std::iter::once(scale)
+            .chain(z[1..].iter().map(|v| v * scale / norm))
+            .collect()
+    }
+
+    #[test]
+    fn random_mixed_cone_programs_reach_their_known_optimum() {
+        // Optimal (x*, s*, y*) by construction: s* = proj(z), y* = proj(-z)
+        // per block, b = A x* + s*, c = -(P x* + A' y*).
+        for seed in 0..12_u64 {
+            let mut rng = Lcg(seed + 1);
+            let cones = vec![
+                Cone::Zero(2),
+                Cone::Nonnegative(4),
+                Cone::SecondOrder(3),
+                Cone::SecondOrder(2),
+                Cone::SecondOrder(6),
+                Cone::SecondOrder(11),
+            ];
+            let m: usize = cones.iter().map(Cone::vector_dim).sum();
+            let n = 8;
+            let mut a = vec![0.0; m * n];
+            for (index, value) in a.iter_mut().enumerate() {
+                if rng.uniform() < 0.5 || index % n == (index / n) % n {
+                    *value = rng.normal();
+                }
+            }
+            let (mut s, mut y) = (vec![0.0; m], vec![0.0; m]);
+            let mut row = 0;
+            for cone in &cones {
+                let dim = cone.vector_dim();
+                let mut z = (0..dim).map(|_| rng.normal()).collect::<Vec<_>>();
+                match cone {
+                    Cone::Zero(_) => y[row..row + dim].copy_from_slice(&z),
+                    Cone::Nonnegative(_) => {
+                        for i in 0..dim {
+                            s[row + i] = z[i].max(0.0);
+                            y[row + i] = (-z[i]).max(0.0);
+                        }
+                    }
+                    _ => {
+                        let tail = z[1..].iter().map(|v| v * v).sum::<f64>().sqrt();
+                        z[0] += [-1.0, 0.0, 1.0][(seed % 3) as usize] * tail;
+                        s[row..row + dim].copy_from_slice(&project_soc(&z));
+                        let negated = z.iter().map(|v| -v).collect::<Vec<_>>();
+                        y[row..row + dim].copy_from_slice(&project_soc(&negated));
+                    }
+                }
+                row += dim;
+            }
+            let x = (0..n).map(|_| rng.normal()).collect::<Vec<_>>();
+            let quadratic = seed % 2 == 1;
+            let p = quadratic.then(|| CscMatrix::identity(n).unwrap());
+            let b = (0..m)
+                .map(|i| (0..n).map(|j| a[i * n + j] * x[j]).sum::<f64>() + s[i])
+                .collect::<Vec<_>>();
+            let c = (0..n)
+                .map(|j| {
+                    let px = if quadratic { x[j] } else { 0.0 };
+                    -(px + (0..m).map(|i| a[i * n + j] * y[i]).sum::<f64>())
+                })
+                .collect::<Vec<_>>();
+            let quadratic_value = if quadratic {
+                0.5 * x.iter().map(|v| v * v).sum::<f64>()
+            } else {
+                0.0
+            };
+            let objective = quadratic_value + c.iter().zip(&x).map(|(c, x)| c * x).sum::<f64>();
+            let problem = Problem::new(
+                p,
+                c,
+                crate::linear_algebra::test_matrix(m, n, a).unwrap(),
+                b,
+                cones,
+            )
+            .unwrap();
+            for presolve in [false, true] {
+                let settings = Settings {
+                    presolve,
+                    ..Settings::default()
+                };
+                let solution = solve(&problem, &settings).unwrap();
+                assert_eq!(solution.status(), SolverStatus::Solved, "seed {seed}");
+                let error = (solution.info().pobj - objective).abs() / (1.0 + objective.abs());
+                assert!(
+                    error < 1e-6,
+                    "seed {seed}: {} vs {objective}",
+                    solution.info().pobj
+                );
+            }
+        }
     }
 
     fn lp(a: Vec<f64>, rows: usize, b: Vec<f64>, c: Vec<f64>) -> Problem {

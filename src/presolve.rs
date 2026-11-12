@@ -297,6 +297,12 @@ impl Presolved {
         for &(original, reduced) in self.postsolve.surviving_conic_coordinates() {
             full[self.postsolve.original_conic_rows()[original]] = s[conic_start + reduced];
         }
+        // Removed coordinates take b - Ax, which together with the surviving
+        // interior coordinates can leave a cone block outside its cone by the
+        // primal residual; project the assembled blocks back.
+        if !self.postsolve.original_conic_rows().is_empty() {
+            geometry.project_primal(full);
+        }
     }
     pub(crate) fn reduce_warm_start(&self, geometry: &ConeGeometry, warm: &WarmStart) -> WarmStart {
         let y: Vec<_> = self

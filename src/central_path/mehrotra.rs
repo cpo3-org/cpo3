@@ -119,12 +119,17 @@ fn step_attempt(
     let sigma = first.sigma;
     let alpha_affine = first.alpha_affine;
     let second = corrector(state, scaling, first, &mut resolvent)?;
-    let boundary = geometry
-        .step_to_boundary_toward(state.s(), &second.s_centered)?
-        .min(geometry.step_to_boundary_toward(state.y(), second.centered.y())?);
+    // Per block, the same as `step_fraction` times the overall boundary step
+    // when no block caps its fraction.
+    let alpha = geometry.damped_step_toward(
+        state.s(),
+        &second.s_centered,
+        state.y(),
+        second.centered.y(),
+        settings.step_fraction,
+    )?;
     let mut centered = second.centered;
     let mut slack = second.s_centered;
-    let alpha = (settings.step_fraction * boundary).min(1.0);
 
     // `base + alpha (target - base)`, overwriting the corrector's buffers.
     let step_toward = |base: &[f64], target: &mut [f64]| {
@@ -211,12 +216,15 @@ pub(crate) fn predictor(
 
     // Affine displacements: dy from the solve, and ds = -H dy - s from
     // linearized complementarity.
-    let dy = affine
+    let mut dy = affine
         .y()
         .iter()
         .zip(state.y())
         .map(|(target, y)| target - y)
         .collect::<Vec<_>>();
+    if let Some(exact) = &affine.dy {
+        scaling.cones.adopt_coupled_rows(&mut dy, exact);
+    }
     let mut ds = vec![0.0; dy.len()];
     scaling.cones.mul(&dy, &mut ds);
     for (ds, s) in ds.iter_mut().zip(state.s()) {
@@ -297,12 +305,15 @@ pub(crate) fn corrector(
     // The slack s = mu_c y^{-1} - H (y_c - y) + correction. The second-order
     // correction is no longer needed after the solve, so reuse its allocation;
     // floating-point addition commutes, so the sum is unchanged.
-    let dy = centered
+    let mut dy = centered
         .y()
         .iter()
         .zip(state.y())
         .map(|(centered, y)| centered - y)
         .collect::<Vec<_>>();
+    if let Some(exact) = &centered.dy {
+        scaling.cones.adopt_coupled_rows(&mut dy, exact);
+    }
     let mut h_dy = vec![0.0; m];
     scaling.cones.mul(&dy, &mut h_dy);
     for ((value, target), h_dy) in correction.iter_mut().zip(&target).zip(&h_dy) {
@@ -469,6 +480,7 @@ mod tests {
                     xy: state.x().iter().chain(state.y()).copied().collect(),
                     x_len: state.x().len(),
                     tau: state.tau(),
+                    dy: None,
                 };
                 first.correction.fill(0.0);
                 first.sigma = 1.0;

@@ -9,6 +9,7 @@
 mod geometry;
 mod nonnegative;
 mod scaling;
+mod second_order;
 mod zero;
 
 use ::presolve as native;
@@ -16,6 +17,7 @@ use ::presolve as native;
 pub(crate) use geometry::{ConeGeometry, ConeGeometryError};
 use nonnegative::NonnegativeCone;
 pub(crate) use scaling::ConeScaling;
+use second_order::SecondOrderCone;
 use zero::ZeroCone;
 
 pub(crate) const INTERIOR_FLOOR: f64 = 1e-32;
@@ -131,10 +133,6 @@ pub(crate) enum ScalingShape {
     Diagonal,
     /// A dense `H`, stored as the full upper triangle of its block; `D` is
     /// the diagonal of `H`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "built by the second-order cone's small blocks")
-    )]
     Dense,
     /// `H = D + sum_k e_k e_k' / g_k` with a diagonal `D`. The KKT matrix
     /// appends `rank` rows and columns, the `k`-th holding `e_k` against the
@@ -143,10 +141,6 @@ pub(crate) enum ScalingShape {
     /// with the primal variables, so `D + shift I` minus the terms with
     /// `g_k < 0` must stay positive definite for the system to be
     /// quasi-definite.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "built by the second-order cone's large blocks")
-    )]
     Expanded { rank: usize },
 }
 
@@ -178,6 +172,11 @@ trait ConeKernel: std::fmt::Debug {
 
     /// Structure of this block's scaling in the KKT system.
     fn scaling_shape(&self) -> ScalingShape;
+
+    /// Make one Ruiz pass's cumulative row scales of this block admissible:
+    /// the cone must be invariant under the row scaling. Separable cones
+    /// accept any positive scales.
+    fn rectify_row_scaling(&self, _scales: &mut [f64]) {}
 
     /// Whether `s` lies in the relative interior of the primal cone.
     fn is_primal_interior(&self, s: &[f64]) -> bool;
@@ -264,6 +263,12 @@ trait ConeKernel: std::fmt::Debug {
         out: &mut [f64],
     );
 
+    /// The largest fraction of the step to this block's boundary that an
+    /// iteration takes, whatever the configured step fraction.
+    fn max_step_fraction(&self) -> f64 {
+        1.0
+    }
+
     /// The largest step in `[0, 1]` from the interior point `v` along `dv`
     /// that stays in the cone. Non-finite displacements are an error.
     fn step_length(&self, v: &[f64], dv: &[f64]) -> Result<f64, ConeGeometryError>;
@@ -278,13 +283,6 @@ trait ConeKernel: std::fmt::Debug {
 #[derive(Clone, Copy)]
 struct BlockScaling<'a> {
     diagonal: &'a [f64],
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by cones with a non-diagonal scaling, such as the second-order cone"
-        )
-    )]
     data: &'a [f64],
 }
 
@@ -293,6 +291,7 @@ struct BlockScaling<'a> {
 enum SupportedCone {
     Zero(ZeroCone),
     Nonnegative(NonnegativeCone),
+    SecondOrder(SecondOrderCone),
     #[cfg(test)]
     Coupled(coupled_test::CoupledTestCone),
 }
@@ -303,7 +302,8 @@ impl SupportedCone {
         match *cone {
             Cone::Zero(_) => Some(Self::Zero(ZeroCone)),
             Cone::Nonnegative(dim) => Some(Self::Nonnegative(NonnegativeCone::new(dim))),
-            Cone::SecondOrder(_) | Cone::PositiveSemidefinite(_) => None,
+            Cone::SecondOrder(dim) => Some(Self::SecondOrder(SecondOrderCone::new(dim))),
+            Cone::PositiveSemidefinite(_) => None,
         }
     }
 
@@ -311,6 +311,7 @@ impl SupportedCone {
         match self {
             Self::Zero(cone) => cone,
             Self::Nonnegative(cone) => cone,
+            Self::SecondOrder(cone) => cone,
             #[cfg(test)]
             Self::Coupled(cone) => cone,
         }

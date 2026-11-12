@@ -1,8 +1,10 @@
-//! A sparse interior-point solver for convex linear and quadratic programs.
+//! A sparse interior-point solver for convex linear, quadratic and
+//! second-order cone programs.
 //!
 //! Solve `min ½ xᵀPx + cᵀx` subject to `Ax + s = b`, with positive
-//! semidefinite `P` and slack `s` in a product of zero and nonnegative cones.
-//! Only these two cone types are currently supported. The API is experimental.
+//! semidefinite `P` and slack `s` in a product of zero, nonnegative and
+//! second-order cones. Positive-semidefinite cones are not yet supported.
+//! The API is experimental.
 //!
 //! # Example
 //!

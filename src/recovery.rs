@@ -559,7 +559,12 @@ mod tests {
             ruiz_iters: 0,
             ..Settings::default()
         };
-        let equilibrated = EquilibratedProblem::new(presolved.problem(), &settings).unwrap();
+        let equilibrated = EquilibratedProblem::new(
+            presolved.problem(),
+            &crate::cone::ConeGeometry::new(presolved.problem()).unwrap(),
+            &settings,
+        )
+        .unwrap();
         let state = State::new(x, s, y, 1.0).unwrap();
         let sy = dot(state.s(), state.y());
         let mut reduced = Recovery::new(presolved.problem(), &equilibrated, &geometry, None);
@@ -646,7 +651,12 @@ mod tests {
                 ruiz_iters,
                 ..Settings::default()
             };
-            let equilibrated = EquilibratedProblem::new(&problem, &settings).unwrap();
+            let equilibrated = EquilibratedProblem::new(
+                &problem,
+                &crate::cone::ConeGeometry::new(&problem).unwrap(),
+                &settings,
+            )
+            .unwrap();
             let mut workspace = CertificateWorkspace::default();
             for residual in [[-1.0, -2.0], [-3.0, -1.0]] {
                 assert!(
@@ -690,6 +700,7 @@ mod tests {
         let problem = lp(vec![-1.0], 1, vec![0.0], vec![-1.0]);
         let equilibrated = EquilibratedProblem::new(
             &problem,
+            &crate::cone::ConeGeometry::new(&problem).unwrap(),
             &crate::Settings {
                 ruiz_iters: 0,
                 ..crate::Settings::default()
@@ -739,6 +750,7 @@ mod tests {
         .unwrap();
         let equilibrated = EquilibratedProblem::new(
             &problem,
+            &crate::cone::ConeGeometry::new(&problem).unwrap(),
             &crate::Settings {
                 ruiz_iters: 0,
                 ..crate::Settings::default()

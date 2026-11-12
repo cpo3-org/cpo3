@@ -15,6 +15,19 @@ use crate::{
 };
 use thiserror::Error;
 
+/// The backward error that refinement must reach on rows of coupled cone
+/// blocks, when `refine_tol` is looser.
+///
+/// The slack of a step comes from linearized complementarity, so the KKT
+/// residual of a cone row enters the primal residual of the next iterate
+/// directly. Near the boundary of a second-order cone the factorization of
+/// its block loses accuracy like the condition of `H`, whose largest
+/// eigenvalue grows like `1 / mu`. A residual allowed at `refine_tol` then
+/// stalls the primal residual near `refine_tol`, which grows as `mu` falls.
+/// Rounding in the residual itself is about `eps` relative to the row's
+/// normalizer, so this target stays attainable.
+const COUPLED_REFINE_TOL: f64 = 1e-13;
+
 /// Failures while assembling or solving a shifted KKT system.
 #[derive(Clone, Debug, Error, PartialEq)]
 pub(crate) enum KktError {
@@ -757,6 +770,10 @@ impl KktWorkspace {
             self.perturbation_ready = true;
         }
         let operator = KktOperator::shifted(problem, scaling, shift, d_diagonal);
+        // Scaling a row's normalizer by this factor makes it meet
+        // COUPLED_REFINE_TOL whenever refine_tol does.
+        let coupled_factor = (COUPLED_REFINE_TOL / factorization.settings().refine_tol).min(1.0);
+        let n = pattern.variable_count;
         let result = refine_with(
             rhs,
             initial,
@@ -765,6 +782,7 @@ impl KktWorkspace {
             |solution, rhs, out| operator.residual(rhs, solution, out),
             |solution, rhs, residual, denominator| {
                 operator.residual_and_denominator(rhs, solution, residual, denominator);
+                scaling.scale_coupled_rows(&mut denominator[n..], coupled_factor);
             },
             |residual, out| {
                 pattern.solve_preconditioner_into(factorization, d_factor, residual, out, reduced)
@@ -978,9 +996,11 @@ mod cache_tests {
                         );
                         for i in 0..10 {
                             assert!(residual[i].abs() < 1e-12);
-                            let magnitude: f64 =
-                                k[i].iter().zip(&expected).map(|(k, z)| (k * z).abs()).sum();
-                            assert!((denominator[i] - rhs[i].abs() - magnitude).abs() < 1e-12);
+                            let magnitude = |columns: std::ops::Range<usize>| -> f64 {
+                                columns.map(|j| (k[i][j] * expected[j]).abs()).sum()
+                            };
+                            let expected = rhs[i].abs() + magnitude(0..10);
+                            assert!((denominator[i] - expected).abs() < 1e-12 * expected);
                         }
                         let y = &expected[2..];
                         let form = scaling.shifted_quadratic_form(0.0, shift, &target, y);

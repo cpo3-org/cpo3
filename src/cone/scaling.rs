@@ -97,6 +97,35 @@ impl<'a> ConeScaling<'a> {
         &self.diagonal
     }
 
+    /// Whether any block stores KKT entries off the diagonal.
+    pub(crate) fn is_coupled(&self) -> bool {
+        self.coupled
+    }
+
+    /// Multiply the entries of `values` on rows of coupled blocks by `factor`.
+    pub(crate) fn scale_coupled_rows(&self, values: &mut [f64], factor: f64) {
+        if !self.coupled {
+            return;
+        }
+        for (rows, _, kernel) in self.geometry.scaling_blocks() {
+            if kernel.scaling_shape().is_coupled() {
+                for value in &mut values[rows] {
+                    *value *= factor;
+                }
+            }
+        }
+    }
+
+    /// Overwrite the rows of coupled blocks in `dy` with those of `exact`.
+    /// Diagonal blocks keep their values, so their arithmetic is unchanged.
+    pub(crate) fn adopt_coupled_rows(&self, dy: &mut [f64], exact: &[f64]) {
+        for (rows, _, kernel) in self.geometry.scaling_blocks() {
+            if kernel.scaling_shape().is_coupled() {
+                dy[rows.clone()].copy_from_slice(&exact[rows]);
+            }
+        }
+    }
+
     /// Write the KKT entries of every coupled block beyond its diagonal, in
     /// block order, as laid out by [`ConeGeometry::kkt_couplings`].
     pub(crate) fn write_kkt_coupling(

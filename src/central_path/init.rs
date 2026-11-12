@@ -361,7 +361,12 @@ mod tests {
     /// The CVXOPT start of an unscaled problem and its report.
     fn cvxopt_start(problem: &Problem) -> (State, InitReport) {
         let settings = cvxopt_settings();
-        let equilibrated = EquilibratedProblem::new(problem, &settings).unwrap();
+        let equilibrated = EquilibratedProblem::new(
+            problem,
+            &crate::cone::ConeGeometry::new(problem).unwrap(),
+            &settings,
+        )
+        .unwrap();
         let geometry = ConeGeometry::new(problem).unwrap();
         initial_state(
             &geometry,
@@ -384,7 +389,12 @@ mod tests {
             vec![Cone::Zero(1), Cone::Nonnegative(1)],
         )
         .unwrap();
-        let scaled = EquilibratedProblem::new(&problem, &crate::Settings::default()).unwrap();
+        let scaled = EquilibratedProblem::new(
+            &problem,
+            &crate::cone::ConeGeometry::new(&problem).unwrap(),
+            &crate::Settings::default(),
+        )
+        .unwrap();
         let geometry = ConeGeometry::new(scaled.problem()).unwrap();
         for beta in [0.25, 1.0] {
             let settings = Settings {
@@ -541,6 +551,7 @@ mod tests {
             .unwrap();
             let equilibrated = EquilibratedProblem::new(
                 &problem,
+                &crate::cone::ConeGeometry::new(&problem).unwrap(),
                 &crate::Settings {
                     ruiz_iters: 0,
                     ..crate::Settings::default()
@@ -596,7 +607,12 @@ mod tests {
             ruiz_iters: 0,
             ..Settings::default()
         };
-        let equilibrated = EquilibratedProblem::new(&problem, &settings).unwrap();
+        let equilibrated = EquilibratedProblem::new(
+            &problem,
+            &crate::cone::ConeGeometry::new(&problem).unwrap(),
+            &settings,
+        )
+        .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
         let warm = WarmStart {
             x: vec![0.0],
