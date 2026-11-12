@@ -119,12 +119,52 @@ pub(crate) enum ConeSide {
 }
 
 /// Structure of a block's scaling matrix in the KKT system.
+///
+/// The KKT matrix stores `-(D + shift I)` on the block's diagonal, where `D`
+/// is the block's [`ConeScaling::kkt_diagonal`]. Only `Dense` and `Expanded`
+/// blocks store further entries, written by [`ConeKernel::write_kkt_coupling`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScalingShape {
     /// Identically zero, as for equality rows.
     Zero,
     /// Diagonal, with strictly positive entries at interior points.
     Diagonal,
+    /// A dense `H`, stored as the full upper triangle of its block; `D` is
+    /// the diagonal of `H`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "built by the second-order cone's small blocks")
+    )]
+    Dense,
+    /// `H = D + sum_k e_k e_k' / g_k` with a diagonal `D`. The KKT matrix
+    /// appends `rank` rows and columns, the `k`-th holding `e_k` against the
+    /// block's rows and `g_k` on its diagonal, so that eliminating them
+    /// restores `-(H + shift I)`. Expansion columns with `g_k > 0` are factored
+    /// with the primal variables, so `D + shift I` minus the terms with
+    /// `g_k < 0` must stay positive definite for the system to be
+    /// quasi-definite.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "built by the second-order cone's large blocks")
+    )]
+    Expanded { rank: usize },
+}
+
+impl ScalingShape {
+    /// Whether the KKT matrix stores entries of this block off its diagonal.
+    pub(crate) fn is_coupled(self) -> bool {
+        matches!(self, Self::Dense | Self::Expanded { .. })
+    }
+
+    /// Numbers of off-diagonal and expansion-diagonal KKT entries stored for
+    /// a block of `dim` rows.
+    pub(crate) fn coupling_len(self, dim: usize) -> (usize, usize) {
+        match self {
+            Self::Zero | Self::Diagonal => (0, 0),
+            Self::Dense => (dim * dim.saturating_sub(1) / 2, 0),
+            Self::Expanded { rank } => (rank * dim, rank),
+        }
+    }
 }
 
 /// The operations the interior-point method needs from one cone block.
@@ -150,7 +190,8 @@ trait ConeKernel: std::fmt::Debug {
     fn unit_point(&self, out: &mut [f64]);
 
     /// The scaling used by the CVXOPT-style start: the identity on cone rows.
-    fn identity_scaling(&self, out: &mut [f64]);
+    /// Writes the diagonal and further data as [`ConeKernel::update_scaling`].
+    fn identity_scaling(&self, diagonal: &mut [f64], data: &mut [f64]);
 
     /// The largest `t` with `v - t e` in the closed cone, or `+∞` when the
     /// cone imposes no margin.
@@ -175,8 +216,9 @@ trait ConeKernel: std::fmt::Debug {
     }
 
     /// Compute the scaling `H`, with `H y = s` and `H s^{-1} = y^{-1}`, at an
-    /// interior pair: write the diagonal of `H` and the block's further data.
-    /// Blocks without a barrier have `H = 0`.
+    /// interior pair: write the diagonal `D` that the KKT matrix stores for
+    /// `H` (see [`ScalingShape`]) and the block's further data. Blocks without
+    /// a barrier have `H = 0`.
     fn update_scaling(&self, s: &[f64], y: &[f64], diagonal: &mut [f64], data: &mut [f64]);
 
     /// Write `H v`. The default applies a diagonal `H`.
@@ -184,6 +226,27 @@ trait ConeKernel: std::fmt::Debug {
         for ((out, h), v) in out.iter_mut().zip(scaling.diagonal).zip(v) {
             *out = h * v;
         }
+    }
+
+    /// Write a componentwise upper bound on `|H| |v|`, the normalizer of the
+    /// KKT backward error. The default applies a diagonal `H` exactly.
+    fn abs_mul_scaling(&self, scaling: BlockScaling<'_>, v: &[f64], out: &mut [f64]) {
+        for ((out, h), v) in out.iter_mut().zip(scaling.diagonal).zip(v) {
+            *out = h.abs() * v.abs();
+        }
+    }
+
+    /// Write the KKT entries of a coupled block beyond its stored diagonal;
+    /// they do not depend on the shift. A `Dense` block writes `-H_ij` for
+    /// `i < j`, column by column, into `off_diagonal`. An `Expanded` block
+    /// writes each `e_k` into `off_diagonal` and each `g_k` into
+    /// `expansion_diagonal`. Other blocks store nothing.
+    fn write_kkt_coupling(
+        &self,
+        _scaling: BlockScaling<'_>,
+        _off_diagonal: &mut [f64],
+        _expansion_diagonal: &mut [f64],
+    ) {
     }
 
     /// Write the centering target `mu y^{-1}` of linearized complementarity.
@@ -210,14 +273,17 @@ trait ConeKernel: std::fmt::Debug {
     fn accumulate_local_score(&self, y: &[f64], mu: f64, residual: &mut [f64], sum: &mut f64);
 }
 
-/// One block's view of a [`ConeScaling`]: the diagonal of its `H` and the
-/// further data written by [`ConeKernel::update_scaling`].
+/// One block's view of a [`ConeScaling`]: the stored diagonal of its `H` and
+/// the further data written by [`ConeKernel::update_scaling`].
 #[derive(Clone, Copy)]
 struct BlockScaling<'a> {
     diagonal: &'a [f64],
-    #[expect(
-        dead_code,
-        reason = "read by cones with a non-diagonal scaling, such as the second-order cone"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by cones with a non-diagonal scaling, such as the second-order cone"
+        )
     )]
     data: &'a [f64],
 }
@@ -227,6 +293,8 @@ struct BlockScaling<'a> {
 enum SupportedCone {
     Zero(ZeroCone),
     Nonnegative(NonnegativeCone),
+    #[cfg(test)]
+    Coupled(coupled_test::CoupledTestCone),
 }
 
 impl SupportedCone {
@@ -243,9 +311,14 @@ impl SupportedCone {
         match self {
             Self::Zero(cone) => cone,
             Self::Nonnegative(cone) => cone,
+            #[cfg(test)]
+            Self::Coupled(cone) => cone,
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod coupled_test;
 
 #[cfg(test)]
 pub(crate) fn test_geometry(cones: Vec<Cone>) -> ConeGeometry {

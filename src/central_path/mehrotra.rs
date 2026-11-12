@@ -113,15 +113,8 @@ fn step_attempt(
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
-    let (mut resolvent, predictor_increment) = Resolvent::new(
-        problem,
-        geometry,
-        state,
-        scaling.cones.diagonal(),
-        scaling.mu,
-        kkt,
-        cache,
-    )?;
+    let (mut resolvent, predictor_increment) =
+        Resolvent::new(problem, state, &scaling.cones, scaling.mu, kkt, cache)?;
     let first = predictor(state, scaling, predictor_increment, &mut resolvent)?;
     let sigma = first.sigma;
     let alpha_affine = first.alpha_affine;
@@ -430,6 +423,8 @@ mod tests {
         .unwrap();
         let state = State::new(vec![0.0], vec![1.0], vec![1.0], 1.0).unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
+        // The unit scaling H = 1 of the single nonnegative row.
+        let scaling = geometry.identity_scaling();
         let settings = KktSettings {
             refine_iters: 0,
             ..KktSettings::new(LinearSolver::Faer)
@@ -439,8 +434,7 @@ mod tests {
         let mut calls = 0;
         with_clamp_retries(&settings, 1e-14, &mut cache, |trial, cache| {
             calls += 1;
-            let _resolvent =
-                Resolvent::new(&problem, &geometry, &state, &[1.0], 1e-14, trial, cache)?;
+            let _resolvent = Resolvent::new(&problem, &state, &scaling, 1e-14, trial, cache)?;
             Ok(())
         })
         .unwrap();
@@ -459,9 +453,8 @@ mod tests {
             let mut cache = KktCache::new();
             let (mut resolvent, increment) = Resolvent::new(
                 &problem,
-                &geometry,
                 &state,
-                scaling.cones.diagonal(),
+                &scaling.cones,
                 mu,
                 &KktSettings::new(LinearSolver::Faer),
                 &mut cache,
@@ -517,7 +510,7 @@ mod tests {
             for i in 0..problem.constraint_count() {
                 assert_close(
                     ax[i]
-                        - (scaling.cones.diagonal()[i] + mu) * point.y()[i]
+                        - (scaling.cones.kkt_diagonal()[i] + mu) * point.y()[i]
                         - problem.b()[i] * point.tau,
                     -ry[i],
                 );
@@ -626,9 +619,8 @@ mod tests {
             let mut cache = KktCache::new();
             let (mut resolvent, increment) = Resolvent::new(
                 &problem,
-                &geometry,
                 &state,
-                scaling.cones.diagonal(),
+                &scaling.cones,
                 scaling.mu,
                 &KktSettings::new(LinearSolver::Faer),
                 &mut cache,
@@ -671,9 +663,8 @@ mod tests {
             let mut cache = KktCache::new();
             let (mut resolvent, increment) = Resolvent::new(
                 &problem,
-                &geometry,
                 &state,
-                scaling.cones.diagonal(),
+                &scaling.cones,
                 mu,
                 &KktSettings::new(LinearSolver::Faer),
                 &mut cache,
@@ -744,9 +735,8 @@ mod tests {
             assert_eq!(
                 Resolvent::new(
                     &problem,
-                    &geometry,
                     &state,
-                    scaling.cones.diagonal(),
+                    &scaling.cones,
                     shift,
                     &KktSettings::new(LinearSolver::Faer),
                     &mut cache,

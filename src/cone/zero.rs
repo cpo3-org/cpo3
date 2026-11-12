@@ -27,8 +27,8 @@ impl ConeKernel for ZeroCone {
         out.fill(0.0);
     }
 
-    fn identity_scaling(&self, out: &mut [f64]) {
-        out.fill(0.0);
+    fn identity_scaling(&self, diagonal: &mut [f64], _data: &mut [f64]) {
+        diagonal.fill(0.0);
     }
 
     fn margin(&self, _v: &[f64]) -> f64 {

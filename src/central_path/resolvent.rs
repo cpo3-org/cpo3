@@ -21,7 +21,7 @@ use super::{
 
 use crate::{
     Problem,
-    cone::ConeGeometry,
+    cone::ConeScaling,
     linear_solvers::{KktSettings, LinearSystemError},
 };
 
@@ -74,7 +74,9 @@ impl ResolventSolution {
 pub(crate) struct Resolvent<'a> {
     problem: &'a Problem,
     cache: &'a mut KktCache,
+    scaling: &'a ConeScaling<'a>,
     shift: f64,
+    /// The stored `(2,2)` diagonal `D` of the scaling, plus the shift.
     d_diagonal: Vec<f64>,
     /// Present only when the preconditioner modifies the true diagonal.
     d_factor: Option<Vec<f64>>,
@@ -105,9 +107,8 @@ impl<'a> Resolvent<'a> {
     /// predictor solves. Return the predictor increment for reconstruction.
     pub(crate) fn new(
         problem: &'a Problem,
-        geometry: &ConeGeometry,
         state: &'a State,
-        h_diagonal: &[f64],
+        scaling: &'a ConeScaling<'a>,
         shift: f64,
         kkt: &KktSettings,
         cache: &'a mut KktCache,
@@ -115,6 +116,7 @@ impl<'a> Resolvent<'a> {
         if !shift.is_finite() || shift <= 0.0 {
             return Err(StateError::InvalidMu.into());
         }
+        let h_diagonal = scaling.kkt_diagonal();
         let d_diagonal = h_diagonal
             .iter()
             .map(|entry| entry + shift)
@@ -126,7 +128,7 @@ impl<'a> Resolvent<'a> {
                 .collect::<Vec<_>>()
         });
         let factor_diagonal = d_factor.as_deref().unwrap_or(&d_diagonal);
-        cache.prepare(problem, geometry, shift, factor_diagonal, kkt)?;
+        cache.prepare(problem, scaling, shift, factor_diagonal, kkt)?;
         let n = problem.variable_count();
         let mut dual_residual = problem.p_mul(state.x());
         for (out, c) in dual_residual.iter_mut().zip(problem.c()) {
@@ -149,6 +151,7 @@ impl<'a> Resolvent<'a> {
             .collect::<Vec<_>>();
         let predictor_increment = cache.prepare_direction(
             problem,
+            scaling,
             shift,
             &d_diagonal,
             factor_diagonal,
@@ -156,7 +159,7 @@ impl<'a> Resolvent<'a> {
         )?;
         let (x2, y2) = cache.direction().split_at(n);
         // Positive identity from the KKT equations, with d = H + shift I.
-        let alpha = tau_leading_coefficient(shift, x2, y2, &d_diagonal);
+        let alpha = tau_leading_coefficient(scaling, shift, x2, y2, &d_diagonal);
         let direction_quadratic = problem
             .p_mul_opt(x2)
             .as_ref()
@@ -165,6 +168,7 @@ impl<'a> Resolvent<'a> {
             Self {
                 problem,
                 cache,
+                scaling,
                 shift,
                 d_diagonal,
                 d_factor,
@@ -201,6 +205,7 @@ impl<'a> Resolvent<'a> {
         }
         let increment = self.cache.solve(
             self.problem,
+            self.scaling,
             self.shift,
             &self.d_diagonal,
             self.d_factor.as_deref().unwrap_or(&self.d_diagonal),
@@ -333,15 +338,19 @@ impl<'a> Resolvent<'a> {
 }
 
 /// shift + shift*||x||^2 + y'*(H + shift I)*y, without forming unweighted squares.
-fn tau_leading_coefficient(shift: f64, x: &[f64], y: &[f64], d: &[f64]) -> f64 {
+fn tau_leading_coefficient(
+    scaling: &ConeScaling<'_>,
+    shift: f64,
+    x: &[f64],
+    y: &[f64],
+    d: &[f64],
+) -> f64 {
     // Multiplying the nonnegative weight first avoids an intermediate square
     // overflowing/underflowing when the weighted square is representable.
     let primal = x
         .iter()
         .fold(shift, |sum, &value| sum + (shift * value) * value);
-    y.iter().zip(d).fold(primal, |sum, (&value, &weight)| {
-        sum + (weight * value) * value
-    })
+    scaling.shifted_quadratic_form(primal, shift, d, y)
 }
 
 fn q_dot(problem: &Problem, vector: &[f64]) -> f64 {

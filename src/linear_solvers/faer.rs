@@ -16,7 +16,7 @@ const FAER_REGULARIZATION_DELTA: f64 = 0.0;
 pub(super) struct FaerFactorization {
     dim: usize,
     pattern: SymbolicSparseColMat<usize>,
-    /// Diagonal slots in the permuted triangle.
+    /// Variable-entry slots in the permuted triangle.
     source: TriangleSource,
     values: Vec<f64>,
     symbolic: sparse_cholesky::SymbolicCholesky<usize>,
@@ -26,7 +26,11 @@ pub(super) struct FaerFactorization {
 }
 
 impl FaerFactorization {
-    pub(super) fn new(matrix: CscMatrix, threads: usize) -> Result<Self, LinearSystemError> {
+    pub(super) fn new(
+        matrix: CscMatrix,
+        variable_positions: &[usize],
+        threads: usize,
+    ) -> Result<Self, LinearSystemError> {
         let symbolic = sparse_cholesky::factorize_symbolic_cholesky(
             matrix.as_faer().symbolic(),
             Side::Upper,
@@ -77,7 +81,7 @@ impl FaerFactorization {
             scratch,
             parallelism,
         };
-        let values = factorization.permute_input(&values);
+        let values = factorization.permute_input(&values, variable_positions);
         factorization.values = values;
         Ok(factorization)
     }
@@ -98,18 +102,18 @@ impl FaerFactorization {
         Ok(())
     }
 
-    pub(super) fn refactor_diagonal(
+    pub(super) fn refactor_entries(
         &mut self,
-        diagonal: &[f64],
+        entries: &[f64],
         factorizations: &mut usize,
     ) -> Result<(), LinearSystemError> {
-        self.source.gather_diagonal(diagonal, &mut self.values);
+        self.source.gather(entries, &mut self.values);
         self.factor(factorizations)
     }
 
     /// Cache the input layout expected by Faer's numeric kernel. Preserve the
     /// entry order of its unsorted permutation to preserve floating-point sums.
-    fn permute_input(&mut self, values: &[f64]) -> Vec<f64> {
+    fn permute_input(&mut self, values: &[f64], variable_positions: &[usize]) -> Vec<f64> {
         let perm = self.symbolic.perm().expect("AMD supplies a permutation");
         let (_forward, inverse) = perm.arrays();
         let upper = matches!(
@@ -138,28 +142,20 @@ impl FaerFactorization {
         let mut next = pointers[..self.dim].to_vec();
         let mut rows = vec![0; values.len()];
         let mut permuted = vec![0.0; values.len()];
-        let mut source = TriangleSource {
-            diagonal: Vec::with_capacity(self.dim),
-        };
+        let mut slots = vec![0; values.len()];
         for column in 0..self.dim {
-            let range = self.pattern.col_ptr()[column]..self.pattern.col_ptr()[column + 1];
-            for (&row, &value) in self.pattern.row_idx()[range.clone()]
-                .iter()
-                .zip(&values[range])
-            {
-                let (new_row, new_column) = coordinates(row, column);
+            for position in self.pattern.col_ptr()[column]..self.pattern.col_ptr()[column + 1] {
+                let (new_row, new_column) = coordinates(self.pattern.row_idx()[position], column);
                 let slot = next[new_column];
                 next[new_column] += 1;
                 rows[slot] = new_row;
-                permuted[slot] = value;
-                if row == column {
-                    source.diagonal.push((slot, column));
-                }
+                permuted[slot] = values[position];
+                slots[position] = slot;
             }
         }
         self.pattern =
             SymbolicSparseColMat::new_unsorted_checked(self.dim, self.dim, pointers, None, rows);
-        self.source = source;
+        self.source = TriangleSource::new(variable_positions, |position| slots[position]);
         permuted
     }
 
@@ -207,7 +203,7 @@ mod tests {
     fn disabled_pivot_replacement_preserves_tiny_signed_pivots() {
         let matrix =
             CscMatrix::from_triplets(2, 2, vec![0, 1], vec![0, 1], vec![1e-20, -1e-20]).unwrap();
-        let mut factor = FaerFactorization::new(matrix, 3).unwrap();
+        let mut factor = FaerFactorization::new(matrix, &[], 3).unwrap();
         factor.factor(&mut 0).unwrap();
         assert_eq!(factor.parallelism, Par::Seq);
         let mut rhs = vec![1e-20, 1e-20];
@@ -234,7 +230,8 @@ mod tests {
         )
         .unwrap();
         for threads in [0, 1, 2, 3] {
-            let mut factor = FaerFactorization::new(matrix.clone(), threads).unwrap();
+            let positions = super::super::diagonal_positions(&matrix);
+            let mut factor = FaerFactorization::new(matrix.clone(), &positions, threads).unwrap();
             factor.factor(&mut 0).unwrap();
             assert!(matches!(
                 factor.symbolic.raw(),
@@ -249,9 +246,7 @@ mod tests {
                 }
             );
             for diagonal in [2.0, 3.0] {
-                factor
-                    .refactor_diagonal(&vec![diagonal; n], &mut 0)
-                    .unwrap();
+                factor.refactor_entries(&vec![diagonal; n], &mut 0).unwrap();
                 for columns in [1, 2] {
                     let mut rhs = vec![diagonal + 0.001 * (n - 1) as f64; n * columns];
                     factor.solve_in_place(&mut rhs, columns).unwrap();
@@ -285,7 +280,7 @@ mod tests {
             let matrix = crate::linear_algebra::take_upper_triangle(
                 CscMatrix::from_triplets(n, n, rows, columns, values).unwrap(),
             );
-            let mut factor = FaerFactorization::new(matrix.clone(), 1).unwrap();
+            let mut factor = FaerFactorization::new(matrix.clone(), &[], 1).unwrap();
             factor.factor(&mut 0).unwrap();
             assert_eq!(
                 matches!(

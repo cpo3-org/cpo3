@@ -153,9 +153,11 @@ impl LinearAlgebraStats {
 
 /// A reusable symmetric factorization workspace. Numerical factors are valid
 /// only after a successful factorization attempt. The backend owns matrix
-/// storage; the wrapper retains its diagonal for subsequent KKT updates.
+/// storage; the wrapper retains the values of the entries that change
+/// between factorizations for subsequent KKT updates.
 pub(crate) struct Factorization {
-    diagonal: Vec<f64>,
+    /// Values of the variable entries, in the order of their positions.
+    entries: Vec<f64>,
     inner: FactorizationInner,
     settings: KktSettings,
     stats: LinearAlgebraStats,
@@ -172,31 +174,44 @@ enum FactorizationInner {
 }
 
 impl Factorization {
-    /// Prepare and retain backend storage before attempting numeric factorization.
+    /// Prepare and retain backend storage before attempting numeric
+    /// factorization. `variable_positions` lists the positions in the
+    /// matrix's value storage of the entries that later updates rewrite.
     pub(crate) fn prepare(
         matrix: CscMatrix,
+        variable_positions: &[usize],
         settings: &KktSettings,
     ) -> Result<Self, LinearSystemError> {
         validate_matrix(&matrix)?;
-        let diagonal = (0..matrix.rows())
-            .map(|column| matrix.get(column, column).unwrap_or(0.0))
+        if variable_positions
+            .iter()
+            .any(|&position| position >= matrix.values().len())
+        {
+            return Err(LinearSystemError::Factorization(
+                "variable KKT entry lies outside the matrix storage".into(),
+            ));
+        }
+        let entries = variable_positions
+            .iter()
+            .map(|&position| matrix.values()[position])
             .collect();
         let inner = match settings.linear_solver {
             LinearSolver::Faer => FactorizationInner::Faer(Box::new(FaerFactorization::new(
                 matrix,
+                variable_positions,
                 settings.threads,
             )?)),
             #[cfg(all(feature = "accelerate", target_os = "macos"))]
             LinearSolver::Accelerate => FactorizationInner::Accelerate(Box::new(
-                AccelerateFactorization::new(matrix, settings.threads)?,
+                AccelerateFactorization::new(matrix, variable_positions, settings.threads)?,
             )),
             #[cfg(feature = "cholmod")]
             LinearSolver::Cholmod => FactorizationInner::Cholmod(Box::new(
-                CholmodFactorization::new(matrix, settings.threads)?,
+                CholmodFactorization::new(matrix, variable_positions, settings.threads)?,
             )),
             #[cfg(feature = "pardiso")]
             LinearSolver::Pardiso => FactorizationInner::Pardiso(Box::new(
-                PardisoFactorization::new(matrix, settings.threads)?,
+                PardisoFactorization::new(matrix, variable_positions, settings.threads)?,
             )),
             #[cfg(not(all(feature = "accelerate", target_os = "macos")))]
             LinearSolver::Accelerate => {
@@ -219,7 +234,7 @@ impl Factorization {
             }
         };
         Ok(Self {
-            diagonal,
+            entries,
             inner,
             settings: *settings,
             stats: LinearAlgebraStats::default(),
@@ -265,8 +280,7 @@ impl Factorization {
 
     /// Apply the factors to two column-major right-hand sides together.
     pub(crate) fn solve_pair_in_place(&mut self, rhs: &mut [f64]) -> Result<(), LinearSystemError> {
-        let dim = self.diagonal.len();
-        validate_rhs(2 * dim, rhs)?;
+        validate_rhs(2 * self.inner.dim(), rhs)?;
         match &mut self.inner {
             FactorizationInner::Faer(factor) => factor.solve_in_place(rhs, 2)?,
             #[cfg(all(feature = "accelerate", target_os = "macos"))]
@@ -279,34 +293,35 @@ impl Factorization {
         validate_solution(rhs)
     }
 
-    /// Update the compact diagonal in original variable order. Each backend
-    /// scatters it into its own matrix; no second KKT matrix is retained here.
-    pub(crate) fn update_diagonal_and_refactor(
+    /// Update the compact variable entries in the order of their positions.
+    /// Each backend scatters them into its own matrix; no second KKT matrix
+    /// is retained here.
+    pub(crate) fn update_and_refactor(
         &mut self,
         factorizations: &mut usize,
         update: impl FnOnce(&mut [f64]),
     ) -> Result<(), LinearSystemError> {
-        update(&mut self.diagonal);
+        update(&mut self.entries);
         match &mut self.inner {
             FactorizationInner::Faer(factor) => {
-                factor.refactor_diagonal(&self.diagonal, factorizations)
+                factor.refactor_entries(&self.entries, factorizations)
             }
             #[cfg(all(feature = "accelerate", target_os = "macos"))]
             FactorizationInner::Accelerate(factor) => {
-                factor.refactor_diagonal(&self.diagonal, factorizations)
+                factor.refactor_entries(&self.entries, factorizations)
             }
             #[cfg(feature = "cholmod")]
             FactorizationInner::Cholmod(factor) => {
-                factor.refactor_diagonal(&self.diagonal, factorizations)
+                factor.refactor_entries(&self.entries, factorizations)
             }
             #[cfg(feature = "pardiso")]
             FactorizationInner::Pardiso(factor) => {
-                factor.refactor_diagonal(&self.diagonal, factorizations)
+                factor.refactor_entries(&self.entries, factorizations)
             }
         }
     }
 
-    /// Factor the already assembled values without rewriting their diagonal.
+    /// Factor the already assembled values without rewriting any entries.
     pub(crate) fn factor(&mut self, factorizations: &mut usize) -> Result<(), LinearSystemError> {
         match &mut self.inner {
             FactorizationInner::Faer(factor) => factor.factor(factorizations),
@@ -331,8 +346,8 @@ fn solve_into(
 }
 
 impl FactorizationInner {
-    fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
-        let dim = match self {
+    fn dim(&self) -> usize {
+        match self {
             Self::Faer(factorization) => factorization.dim(),
             #[cfg(all(feature = "accelerate", target_os = "macos"))]
             Self::Accelerate(factorization) => factorization.dim(),
@@ -340,8 +355,11 @@ impl FactorizationInner {
             Self::Cholmod(factorization) => factorization.dim(),
             #[cfg(feature = "pardiso")]
             Self::Pardiso(factorization) => factorization.dim(),
-        };
-        validate_rhs(dim, vector)?;
+        }
+    }
+
+    fn solve_in_place(&mut self, vector: &mut [f64]) -> Result<(), LinearSystemError> {
+        validate_rhs(self.dim(), vector)?;
         match self {
             Self::Faer(factorization) => factorization.solve_in_place(vector, 1),
             #[cfg(all(feature = "accelerate", target_os = "macos"))]
@@ -552,31 +570,42 @@ fn backward_error(residual: &[f64], denominator: &[f64]) -> f64 {
         .fold(0.0_f64, f64::max)
 }
 
-/// Backend slots for diagonal entries in original variable order.
+/// Backend slots for the variable entries of a factorized matrix.
 #[derive(Default)]
 struct TriangleSource {
-    /// (triangle slot, original column) for each stored diagonal entry.
-    diagonal: Vec<(usize, usize)>,
+    /// (backend slot, index into the variable entries) for each entry.
+    entries: Vec<(usize, usize)>,
 }
 
 impl TriangleSource {
-    #[cfg(any(feature = "cholmod", all(feature = "accelerate", target_os = "macos")))]
-    fn from_matrix(matrix: &CscMatrix) -> Self {
-        let diagonal = (0..matrix.columns())
-            .filter_map(|column| {
-                let end = matrix.column_pointers()[column + 1];
-                (end > matrix.column_pointers()[column] && matrix.row_indices()[end - 1] == column)
-                    .then(|| (end - 1, column))
-            })
-            .collect();
-        Self { diagonal }
-    }
-
-    fn gather_diagonal(&self, diagonal: &[f64], out: &mut [f64]) {
-        for &(slot, position) in &self.diagonal {
-            out[slot] = diagonal[position];
+    /// Map each variable position of the input CSC storage to its backend slot.
+    fn new(variable_positions: &[usize], slot: impl Fn(usize) -> usize) -> Self {
+        Self {
+            entries: variable_positions
+                .iter()
+                .enumerate()
+                .map(|(index, &position)| (slot(position), index))
+                .collect(),
         }
     }
+
+    fn gather(&self, entries: &[f64], out: &mut [f64]) {
+        for &(slot, index) in &self.entries {
+            out[slot] = entries[index];
+        }
+    }
+}
+
+/// Positions of the diagonal entries of an upper CSC matrix, in column order.
+#[cfg(test)]
+fn diagonal_positions(matrix: &CscMatrix) -> Vec<usize> {
+    (0..matrix.columns())
+        .map(|column| {
+            let end = matrix.column_pointers()[column + 1];
+            assert_eq!(matrix.row_indices()[end - 1], column);
+            end - 1
+        })
+        .collect()
 }
 
 /// Check the factorization contract once before selecting a backend.
@@ -698,11 +727,14 @@ mod tests {
                     LinearSystemError::NotUpperTriangle,
                 ),
             ] {
-                assert_eq!(Factorization::prepare(matrix, &settings).err(), Some(error));
+                assert_eq!(
+                    Factorization::prepare(matrix, &[], &settings).err(),
+                    Some(error)
+                );
             }
             assert_eq!(count, 0);
             let mut factor =
-                Factorization::prepare(CscMatrix::identity(1).unwrap(), &settings).unwrap();
+                Factorization::prepare(CscMatrix::identity(1).unwrap(), &[0], &settings).unwrap();
             factor.factor(&mut count).unwrap();
             assert_eq!(
                 factor.solve_unrefined_in_place(&mut []),
@@ -948,16 +980,14 @@ mod tests {
                 ..Settings::default()
             });
             let mut count = 0;
-            let mut factorization =
-                Factorization::prepare(sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]), &settings)
-                    .unwrap();
+            let matrix = sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]);
+            let positions = diagonal_positions(&matrix);
+            let mut factorization = Factorization::prepare(matrix, &positions, &settings).unwrap();
             factorization.factor(&mut count).unwrap();
             let mut solution = Vec::new();
             for diagonal in [[4.0, -3.0, 2.0], [5.0, -4.0, 3.0], [7.0, -2.0, 6.0]] {
                 factorization
-                    .update_diagonal_and_refactor(&mut count, |values| {
-                        values.copy_from_slice(&diagonal)
-                    })
+                    .update_and_refactor(&mut count, |values| values.copy_from_slice(&diagonal))
                     .unwrap();
                 let rhs = [
                     diagonal[0] + 2.0,
@@ -969,6 +999,52 @@ mod tests {
                     .unwrap();
                 for (&actual, expected) in solution.iter().zip([1.0, 2.0, 3.0]) {
                     assert!((actual - expected).abs() < 1e-9);
+                }
+            }
+            assert_eq!(count, 4);
+        }
+    }
+
+    #[test]
+    fn off_diagonal_updates_are_scattered_on_every_backend() {
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
+            let settings = KktSettings::from(&Settings {
+                linear_solver: solver,
+                ..Settings::default()
+            });
+            // Storage order (0,0), (0,1), (1,1), (1,2), (2,2); every entry varies,
+            // listed diagonal first as in a KKT layout.
+            let matrix = sparse_system(vec![4.0, 1.0, -3.0, 1.0, 2.0]);
+            let mut count = 0;
+            let mut factorization =
+                Factorization::prepare(matrix, &[0, 2, 4, 1, 3], &settings).unwrap();
+            factorization.factor(&mut count).unwrap();
+            let mut solution = Vec::new();
+            for [a, b, c, ab, bc] in [
+                [4.0, -3.0, 2.0, 1.0, 1.0],
+                [5.0, -4.0, 3.0, -2.0, 0.5],
+                [6.0, -2.0, 5.0, 0.0, -1.5],
+            ] {
+                factorization
+                    .update_and_refactor(&mut count, |values| {
+                        values.copy_from_slice(&[a, b, c, ab, bc])
+                    })
+                    .unwrap();
+                // K * (1, 2, 3) for K = [a, ab, 0; ab, b, bc; 0, bc, c].
+                let rhs = [a + 2.0 * ab, ab + 2.0 * b + 3.0 * bc, 2.0 * bc + 3.0 * c];
+                factorization
+                    .solve_unrefined_into(&rhs, &mut solution)
+                    .unwrap();
+                for (&actual, expected) in solution.iter().zip([1.0, 2.0, 3.0]) {
+                    assert!((actual - expected).abs() < 1e-9, "{solver}: {solution:?}");
                 }
             }
             assert_eq!(count, 4);

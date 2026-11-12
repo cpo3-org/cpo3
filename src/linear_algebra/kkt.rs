@@ -1,6 +1,8 @@
 //! Matrix-free KKT operators, sparse assembly, and a regularized LDL preconditioner.
 
-use crate::{CscMatrix, MatrixError, Problem, linear_solvers::LinearSystemError};
+use crate::{
+    CscMatrix, MatrixError, Problem, cone::ConeScaling, linear_solvers::LinearSystemError,
+};
 use faer::{
     Conj, MatMut, MatRef, Par, Side,
     dyn_stack::{MemBuffer, MemStack, StackReq},
@@ -10,14 +12,26 @@ use faer::{
     sparse::linalg::cholesky as sparse_cholesky,
 };
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
-/// Matrix-free K = [P + shift I, Aᵀ; A, -diag(d)], independent of its factorization.
+/// Matrix-free K = [P + shift I, Aᵀ; A, -(H + shift I)], independent of its
+/// factorization.
 #[derive(Debug)]
 pub(crate) struct KktOperator<'a> {
     problem: &'a Problem,
     shift: f64,
-    diagonal: Option<&'a [f64]>,
+    dual: Option<DualBlock<'a>>,
+}
+
+/// The (2,2) block `-(H + shift I)`: `d = D + shift` on diagonal cone blocks
+/// and the scaling itself on coupled ones.
+#[derive(Debug)]
+struct DualBlock<'a> {
+    d: &'a [f64],
+    scaling: &'a ConeScaling<'a>,
 }
 
 impl<'a> KktOperator<'a> {
@@ -26,22 +40,29 @@ impl<'a> KktOperator<'a> {
         Self {
             problem,
             shift: 0.0,
-            diagonal: None,
+            dual: None,
         }
     }
 
-    pub(crate) fn shifted(problem: &'a Problem, shift: f64, diagonal: &'a [f64]) -> Self {
+    /// The shifted operator, with `d = D + shift` for the stored diagonal `D`
+    /// of `scaling`.
+    pub(crate) fn shifted(
+        problem: &'a Problem,
+        scaling: &'a ConeScaling<'a>,
+        shift: f64,
+        d: &'a [f64],
+    ) -> Self {
         Self {
             problem,
             shift,
-            diagonal: Some(diagonal),
+            dual: Some(DualBlock { d, scaling }),
         }
     }
 
     /// Subtract K * (x, y) from an existing accumulator.
     pub(crate) fn subtract(&self, point: (&[f64], &[f64]), out: &mut [f64]) {
         let (out_x, out_y) = out.split_at_mut(self.problem.variable_count());
-        self.accumulate(point, [out_x], [out_y], |value| [-value]);
+        self.accumulate(point, [out_x], [out_y], |value, _| [-value]);
     }
 
     /// Overwrite out with rhs - K * point.
@@ -69,7 +90,7 @@ impl<'a> KktOperator<'a> {
             point.split_at(n),
             [residual_x, denominator_x],
             [residual_y, denominator_y],
-            |value| [-value, value.abs()],
+            |value, magnitude| [-value, magnitude],
         );
     }
 
@@ -77,23 +98,26 @@ impl<'a> KktOperator<'a> {
         out.fill(0.0);
         let n = self.problem.variable_count();
         let (out_x, out_y) = out.split_at_mut(n);
-        self.accumulate(point.split_at(n), [out_x], [out_y], |value| [value]);
+        self.accumulate(point.split_at(n), [out_x], [out_y], |value, _| [value]);
     }
 
-    /// Accumulate signed products, optionally collecting absolute products in the same pass.
+    /// Accumulate signed products, optionally collecting absolute products in
+    /// the same pass. `map` receives each term with a bound on its magnitude,
+    /// which is exact except on coupled cone blocks.
     fn accumulate<const N: usize>(
         &self,
         (x, y): (&[f64], &[f64]),
         mut out_x: [&mut [f64]; N],
         mut out_y: [&mut [f64]; N],
-        map: impl Fn(f64) -> [f64; N] + Copy,
+        map: impl Fn(f64, f64) -> [f64; N] + Copy,
     ) {
+        let scalar = |value: f64| map(value, value.abs());
         if let Some(p) = self.problem.p() {
-            super::symmetric_accumulate(p, x, out_x.each_mut().map(|out| &mut **out), map);
+            super::symmetric_accumulate(p, x, out_x.each_mut().map(|out| &mut **out), scalar);
         }
         if self.shift != 0.0 {
             for (i, &x) in x.iter().enumerate() {
-                for (out, value) in out_x.iter_mut().zip(map(self.shift * x)) {
+                for (out, value) in out_x.iter_mut().zip(scalar(self.shift * x)) {
                     out[i] += value;
                 }
             }
@@ -104,14 +128,15 @@ impl<'a> KktOperator<'a> {
             y,
             out_x,
             out_y.each_mut().map(|out| &mut **out),
-            map,
+            scalar,
         );
-        if let Some(diagonal) = self.diagonal {
-            for (i, (&y, &d)) in y.iter().zip(diagonal).enumerate() {
-                for (out, value) in out_y.iter_mut().zip(map(-d * y)) {
-                    out[i] += value;
-                }
-            }
+        if let Some(dual) = &self.dual {
+            dual.scaling
+                .visit_shifted_product(self.shift, dual.d, y, |i, value, magnitude| {
+                    for (out, value) in out_y.iter_mut().zip(map(value, magnitude)) {
+                        out[i] += value;
+                    }
+                });
         }
     }
 }
@@ -192,33 +217,65 @@ impl BiLinOp<f64> for KktOperator<'_> {
     }
 }
 
-/// Diagonal metadata shared by full and reduced KKT assembly.
+/// Constraint rows whose (2,2) block stores entries off its diagonal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DualCoupling {
+    /// Every pair of rows in the range, stored as the strict upper triangle
+    /// of the block, column by column.
+    Dense(Range<usize>),
+    /// `rank` columns appended to the matrix, each holding an entry for
+    /// every row in the range followed by its own diagonal.
+    Expanded { rows: Range<usize>, rank: usize },
+}
+
+impl DualCoupling {
+    fn expansion(&self) -> usize {
+        match self {
+            Self::Dense(_) => 0,
+            Self::Expanded { rank, .. } => *rank,
+        }
+    }
+}
+
+/// Metadata shared by full and reduced KKT assembly for the entries that
+/// change between factorizations.
 pub(crate) struct KktLayout {
-    /// Position of each diagonal entry in the matrix's value storage.
-    pub(crate) diagonal_positions: Vec<usize>,
+    /// Position in the matrix's value storage of every entry that changes
+    /// between factorizations: each diagonal entry in column order, then the
+    /// off-diagonal entries of each [`DualCoupling`] in its storage order.
+    pub(crate) variable_positions: Vec<usize>,
     /// Original diagonal of P, before shifts or Schur-complement updates.
     pub(crate) p_diagonal: Vec<f64>,
+    /// Number of expansion rows appended after the constraint rows.
+    pub(crate) expansion: usize,
 }
 
 /// Assemble [P, Aᵀ; A, 0] with every constraint row retained.
 pub(crate) fn assemble_unshifted_kkt(problem: &Problem) -> Result<CscMatrix, MatrixError> {
     let kept_rows: Vec<_> = (0..problem.constraint_count()).collect();
-    let (mut matrix, layout) = assemble_kkt_pattern(problem, &kept_rows)?;
+    let (mut matrix, layout) = assemble_kkt_pattern(problem, &kept_rows, &[])?;
     for (column, value) in layout.p_diagonal.iter().enumerate() {
-        matrix.values_mut()[layout.diagonal_positions[column]] = *value;
+        matrix.values_mut()[layout.variable_positions[column]] = *value;
     }
     Ok(matrix)
 }
 
-/// Assemble fixed off-diagonal entries and zero-valued diagonal slots.
-/// Constraint rows appear in `kept_rows` order; indices must be distinct and in bounds.
+/// Assemble fixed off-diagonal entries and zero-valued slots for the entries
+/// listed in [`KktLayout::variable_positions`]. Constraint rows appear in
+/// `kept_rows` order; indices must be distinct and in bounds. The rows of
+/// every coupling must be kept, in increasing order.
 pub(crate) fn assemble_kkt_pattern(
     problem: &Problem,
     kept_rows: &[usize],
+    couplings: &[DualCoupling],
 ) -> Result<(CscMatrix, KktLayout), MatrixError> {
     let n = problem.variable_count();
     let m = kept_rows.len();
-    let dim = n.checked_add(m).ok_or(MatrixError::DimensionOverflow)?;
+    let expansion = couplings.iter().map(DualCoupling::expansion).sum::<usize>();
+    let dim = n
+        .checked_add(m)
+        .and_then(|dim| dim.checked_add(expansion))
+        .ok_or(MatrixError::DimensionOverflow)?;
     // Every column has a diagonal. Count the remaining upper-triangle entries
     // before allocating CSC buffers, avoiding triplets and sorting temporaries.
     let mut pointers = vec![1usize; dim + 1];
@@ -242,6 +299,25 @@ pub(crate) fn assemble_kkt_pattern(
             pointers[column + 1] += 1;
         }
     });
+    let mut expansion_column = n + m;
+    for coupling in couplings {
+        match coupling {
+            DualCoupling::Dense(block) => {
+                debug_assert!(block.clone().all(|row| reduced_rows[row] != usize::MAX));
+                debug_assert!(block.clone().is_sorted_by_key(|row| reduced_rows[row]));
+                for (j, source) in block.clone().enumerate() {
+                    pointers[reduced_rows[source] + 1] += j;
+                }
+            }
+            DualCoupling::Expanded { rows: block, rank } => {
+                debug_assert!(block.clone().all(|row| reduced_rows[row] != usize::MAX));
+                for _ in 0..*rank {
+                    pointers[expansion_column + 1] += block.len();
+                    expansion_column += 1;
+                }
+            }
+        }
+    }
     for column in 0..dim {
         pointers[column + 1] = pointers[column + 1]
             .checked_add(pointers[column])
@@ -250,7 +326,7 @@ pub(crate) fn assemble_kkt_pattern(
     let mut rows = vec![0; pointers[dim]];
     let mut values = vec![0.0; pointers[dim]];
     let mut next = pointers[..dim].to_vec();
-    let mut diagonal_positions = vec![0; dim];
+    let mut variable_positions = vec![0; dim];
     let mut p_diagonal = vec![0.0; n];
     for column in 0..n {
         if let Some(p) = problem.p() {
@@ -267,7 +343,7 @@ pub(crate) fn assemble_kkt_pattern(
             }
         }
         rows[next[column]] = column;
-        diagonal_positions[column] = next[column];
+        variable_positions[column] = next[column];
     }
     // A is visited in primal-column order, so each column of A^T is sorted.
     crate::linear_algebra::visit_entries(problem.a(), |source, row, value| {
@@ -278,16 +354,43 @@ pub(crate) fn assemble_kkt_pattern(
             next[column] += 1;
         }
     });
+    // Coupling entries follow A^T (rows < n) and precede each diagonal.
+    let mut push = |row: usize, column: usize, positions: &mut Vec<usize>| {
+        rows[next[column]] = row;
+        positions.push(next[column]);
+        next[column] += 1;
+    };
+    let mut expansion_column = n + m;
+    for coupling in couplings {
+        match coupling {
+            DualCoupling::Dense(block) => {
+                for j in block.clone() {
+                    for i in block.start..j {
+                        push(reduced_rows[i], reduced_rows[j], &mut variable_positions);
+                    }
+                }
+            }
+            DualCoupling::Expanded { rows: block, rank } => {
+                for _ in 0..*rank {
+                    for i in block.clone() {
+                        push(reduced_rows[i], expansion_column, &mut variable_positions);
+                    }
+                    expansion_column += 1;
+                }
+            }
+        }
+    }
     for column in n..dim {
         rows[next[column]] = column;
-        diagonal_positions[column] = next[column];
+        variable_positions[column] = next[column];
     }
     let matrix = CscMatrix::new(dim, dim, pointers, rows, values)?;
     Ok((
         matrix,
         KktLayout {
-            diagonal_positions,
+            variable_positions,
             p_diagonal,
+            expansion,
         },
     ))
 }
@@ -487,7 +590,7 @@ mod tests {
             vec![Cone::Zero(3)],
         )
         .unwrap();
-        let (matrix, layout) = assemble_kkt_pattern(&problem, &[2, 0]).unwrap();
+        let (matrix, layout) = assemble_kkt_pattern(&problem, &[2, 0], &[]).unwrap();
         let expected = [
             [0.0, 1.0, 4.0, 1.0],
             [0.0, 0.0, -1.0, 2.0],
@@ -496,8 +599,9 @@ mod tests {
         ];
         assert_eq!(layout.p_diagonal, [2.0, 0.0]);
         assert_eq!(matrix.rows(), 4);
-        assert_eq!(layout.diagonal_positions.len(), 4);
-        for (column, &position) in layout.diagonal_positions.iter().enumerate() {
+        assert_eq!(layout.variable_positions.len(), 4);
+        assert_eq!(layout.expansion, 0);
+        for (column, &position) in layout.variable_positions.iter().enumerate() {
             assert!(
                 (matrix.column_pointers()[column]..matrix.column_pointers()[column + 1])
                     .contains(&position)
@@ -524,10 +628,12 @@ mod tests {
             let problem =
                 Problem::from_upper_triangle(p, vec![0.0; 2], a, vec![0.0], vec![Cone::Zero(1)])
                     .unwrap();
+            let geometry = crate::cone::ConeGeometry::new(&problem).unwrap();
+            let scaling = geometry.identity_scaling();
             for shift in [0.0, 2.0] {
                 for d in [0.0, 3.0] {
                     let diagonal = [d];
-                    let operator = KktOperator::shifted(&problem, shift, &diagonal);
+                    let operator = KktOperator::shifted(&problem, &scaling, shift, &diagonal);
                     let q = f64::from(quadratic);
                     let matrix = [
                         [2.0 * q + shift, -0.5 * q, 1.0],

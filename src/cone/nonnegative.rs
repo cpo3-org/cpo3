@@ -40,8 +40,8 @@ impl ConeKernel for NonnegativeCone {
         out.fill(1.0);
     }
 
-    fn identity_scaling(&self, out: &mut [f64]) {
-        out.fill(1.0);
+    fn identity_scaling(&self, diagonal: &mut [f64], _data: &mut [f64]) {
+        diagonal.fill(1.0);
     }
 
     fn margin(&self, v: &[f64]) -> f64 {

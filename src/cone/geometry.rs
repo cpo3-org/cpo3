@@ -3,7 +3,7 @@ use std::ops::Range;
 use thiserror::Error;
 
 use super::{ConeKernel, ConeScaling, ConeSide, INTERIOR_FLOOR, ScalingShape, SupportedCone};
-use crate::Problem;
+use crate::{Problem, linear_algebra::DualCoupling};
 
 /// Failures while laying out or evaluating product-cone geometry.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
@@ -110,14 +110,37 @@ impl ConeGeometry {
         Ok(())
     }
 
-    /// Write the diagonal of the CVXOPT-style start's scaling: the identity
-    /// on cone rows and zero on equality rows.
-    pub(crate) fn identity_scaling(&self, out: &mut [f64]) -> Result<(), ConeGeometryError> {
-        self.ensure_length("out", out)?;
-        for (range, kernel) in self.kernels() {
-            kernel.identity_scaling(&mut out[range]);
+    /// The CVXOPT-style start's scaling: the identity on cone rows and zero
+    /// on equality rows.
+    pub(crate) fn identity_scaling(&self) -> ConeScaling<'_> {
+        ConeScaling::identity(self)
+    }
+
+    /// The blocks whose KKT entries are not only diagonal, in block order.
+    pub(crate) fn kkt_couplings(&self) -> Vec<DualCoupling> {
+        self.scaling_layout()
+            .filter_map(|(rows, shape)| match shape {
+                ScalingShape::Zero | ScalingShape::Diagonal => None,
+                ScalingShape::Dense => Some(DualCoupling::Dense(rows)),
+                ScalingShape::Expanded { rank } => Some(DualCoupling::Expanded { rows, rank }),
+            })
+            .collect()
+    }
+
+    /// Replace the given blocks of a geometry by test cones with a coupled
+    /// scaling of the given shape.
+    #[cfg(test)]
+    pub(crate) fn with_coupled_test_blocks(
+        problem: &Problem,
+        shapes: &[(usize, ScalingShape)],
+    ) -> Self {
+        let mut geometry = Self::new(problem).unwrap();
+        for &(block, shape) in shapes {
+            let dim = geometry.blocks[block].range.len();
+            geometry.blocks[block].cone =
+                SupportedCone::Coupled(super::coupled_test::CoupledTestCone::new(dim, shape));
         }
-        Ok(())
+        geometry
     }
 
     /// Test membership in the interior of the dual product cone: every block
@@ -289,9 +312,9 @@ mod tests {
         geometry.project_dual(&mut y);
         assert_eq!(y, [-4.0, 0.0, 2.0]);
 
-        let mut identity = [f64::NAN; 3];
-        geometry.identity_scaling(&mut identity).unwrap();
-        assert_eq!(identity, [0.0, 1.0, 1.0]);
+        let identity = geometry.identity_scaling();
+        assert_eq!(identity.kkt_diagonal(), [0.0, 1.0, 1.0]);
+        assert!(geometry.kkt_couplings().is_empty());
     }
 
     #[test]
@@ -384,7 +407,7 @@ mod tests {
         let s = [0.0, 0.5, 2.0, 8.0];
         let y = [-3.0, 4.0, 1.0, 0.25];
         let scaling = geometry.scaling(&s, &y).unwrap();
-        assert_eq!(scaling.diagonal(), [0.0, 0.125, 2.0, 32.0]);
+        assert_eq!(scaling.kkt_diagonal(), [0.0, 0.125, 2.0, 32.0]);
         let mut y_inverse = [f64::NAN; 4];
         scaling.centering_target(&y, 1.0, &mut y_inverse);
         assert_eq!(y_inverse, [0.0, 0.25, 1.0, 4.0]);

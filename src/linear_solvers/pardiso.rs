@@ -112,7 +112,11 @@ pub(super) struct PardisoFactorization {
 }
 
 impl PardisoFactorization {
-    pub(super) fn new(matrix: CscMatrix, threads: usize) -> Result<Self, LinearSystemError> {
+    pub(super) fn new(
+        matrix: CscMatrix,
+        variable_positions: &[usize],
+        threads: usize,
+    ) -> Result<Self, LinearSystemError> {
         let mkl = mkl()?;
         let threads = i32::try_from(threads)
             .map_err(|_| LinearSystemError::Unavailable("PARDISO threads must fit i32".into()))?;
@@ -138,28 +142,33 @@ impl PardisoFactorization {
         let nnz = pointers[n] as usize;
         let mut indices = vec![0; nnz];
         let mut values = vec![0.0; nnz];
-        let mut source = TriangleSource {
-            diagonal: Vec::with_capacity(n),
-        };
         for (row, next_slot) in next.iter_mut().enumerate() {
             let slot = *next_slot;
             indices[slot] = row as i64;
             values[slot] = matrix.get(row, row).unwrap_or(0.0);
-            source.diagonal.push((slot, row));
             *next_slot += 1;
         }
+        // The CSR slot of each CSC position; the diagonal leads each row.
+        let mut slots = vec![0; matrix.values().len()];
         for column in 0..n {
-            for position in matrix.column_pointers()[column]..matrix.column_pointers()[column + 1] {
-                let row = matrix.row_indices()[position];
+            let range = matrix.column_pointers()[column]..matrix.column_pointers()[column + 1];
+            for ((slot_of, &row), &value) in slots[range.clone()]
+                .iter_mut()
+                .zip(&matrix.row_indices()[range.clone()])
+                .zip(&matrix.values()[range])
+            {
                 if row == column {
+                    *slot_of = pointers[row] as usize;
                     continue;
                 }
                 let slot = next[row];
                 indices[slot] = column as i64;
-                values[slot] = matrix.values()[position];
+                values[slot] = value;
+                *slot_of = slot;
                 next[row] += 1;
             }
         }
+        let source = TriangleSource::new(variable_positions, |position| slots[position]);
         let mut iparm = [0; 64];
         iparm[0] = 1; // Explicit controls.
         iparm[1] = 2; // METIS ordering, computed once from the pattern.
@@ -238,12 +247,12 @@ impl PardisoFactorization {
         self.call(22, 1, &mut 0.0, &mut 0.0)
     }
 
-    pub(super) fn refactor_diagonal(
+    pub(super) fn refactor_entries(
         &mut self,
-        diagonal: &[f64],
+        entries: &[f64],
         factorizations: &mut usize,
     ) -> Result<(), LinearSystemError> {
-        self.source.gather_diagonal(diagonal, &mut self.values);
+        self.source.gather(entries, &mut self.values);
         self.factor(factorizations)
     }
 

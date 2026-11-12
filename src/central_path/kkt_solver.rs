@@ -6,7 +6,7 @@
 
 use crate::{
     CscMatrix, MatrixError, Problem,
-    cone::{ConeGeometry, ScalingShape},
+    cone::{ConeGeometry, ConeScaling, ScalingShape},
     linear_algebra::{KktLayout, KktOperator, assemble_kkt_pattern},
     linear_solvers::{
         Factorization, KktSettings, LinearAlgebraStats, LinearSystemError, RefinementWorkspace,
@@ -26,13 +26,15 @@ pub(crate) enum KktError {
     InvalidParameters,
     #[error("the KKT diagonal must be finite and strictly positive")]
     InvalidDiagonal,
+    #[error("the coupled KKT entries of the cone scaling must be finite")]
+    InvalidCoupling,
 }
 
 impl KktError {
     pub(crate) fn is_numerical(&self) -> bool {
         match self {
             Self::LinearSystem(error) => error.is_numerical(),
-            Self::InvalidDiagonal => true,
+            Self::InvalidDiagonal | Self::InvalidCoupling => true,
             Self::Matrix(_) | Self::InvalidParameters => false,
         }
     }
@@ -40,9 +42,10 @@ impl KktError {
 
 /// Per-solve cache: the KKT sparsity pattern and a reusable factorization.
 ///
-/// Only the diagonal of the KKT matrix changes between iterations, so the
-/// layout and symbolic analysis are retained before the first numeric attempt
-/// and reused on retries, including after numeric factorization failures.
+/// Only the diagonal and the coupled cone blocks of the KKT matrix change
+/// between iterations, so the layout and symbolic analysis are retained
+/// before the first numeric attempt and reused on retries, including after
+/// numeric factorization failures.
 #[derive(Default)]
 pub(crate) struct KktCache {
     // Layout and backend storage survive failed numeric factorization attempts.
@@ -122,7 +125,8 @@ impl ClampPolicy {
 }
 
 /// The reduced KKT matrix pattern: bound rows are eliminated by Schur
-/// complement, so the matrix has `n + kept` rows.
+/// complement and coupled cone blocks may append expansion rows, so the
+/// matrix has `n + kept + expansion` rows.
 struct KktPattern {
     variable_count: usize,
     layout: KktLayout,
@@ -141,6 +145,24 @@ struct KktWorkspace {
     perturbation_ready: bool,
     /// Scratch storage reused by predictor/corrector reconstruction within a solve.
     reconstruction: Vec<f64>,
+    /// Coupled KKT entries of the latest scaling, refreshed by each `prepare`.
+    coupling: Coupling,
+}
+
+/// The KKT entries of coupled cone blocks beyond their stored diagonals.
+#[derive(Default)]
+struct Coupling {
+    off_diagonal: Vec<f64>,
+    expansion_diagonal: Vec<f64>,
+}
+
+impl Coupling {
+    fn is_finite(&self) -> bool {
+        self.off_diagonal
+            .iter()
+            .chain(&self.expansion_diagonal)
+            .all(|value| value.is_finite())
+    }
 }
 
 /// Nonnegative singleton rows of `A`, eliminated from the factorized system.
@@ -203,28 +225,35 @@ impl KktCache {
         Self::default()
     }
 
-    /// Factorize the clamped preconditioner `[P + shift I, A^T; A, -diag(d)]`
-    /// with `d = factor_diagonal`, reusing the cached pattern and symbolic
+    /// Factorize the clamped preconditioner `[P + shift I, A^T; A, -(H + ...)]`
+    /// whose stored `(2,2)` diagonal is `-factor_diagonal` and whose coupled
+    /// entries come from `scaling`, reusing the cached pattern and symbolic
     /// analysis when present.
     pub(crate) fn prepare(
         &mut self,
         problem: &Problem,
-        geometry: &ConeGeometry,
+        scaling: &ConeScaling<'_>,
         shift: f64,
         factor_diagonal: &[f64],
         kkt: &KktSettings,
     ) -> Result<(), KktError> {
         self.workspace.perturbation_ready = false;
+        let coupling = &mut self.workspace.coupling;
+        scaling.write_kkt_coupling(&mut coupling.off_diagonal, &mut coupling.expansion_diagonal);
+        if !coupling.is_finite() {
+            return Err(KktError::InvalidCoupling);
+        }
         match (self.factorization.as_mut(), self.pattern.as_ref()) {
             (Some(factorization), Some(pattern)) => {
                 factorization.set_strict_refinement(kkt.strict_refinement);
                 factorization.set_clamp_floor(kkt.diagonal_floor);
-                factorization.update_diagonal_and_refactor(&mut self.factorizations, |values| {
-                    pattern.write_diagonal(
+                factorization.update_and_refactor(&mut self.factorizations, |values| {
+                    pattern.write_values(
                         values,
                         |index| index,
                         shift,
                         factor_diagonal,
+                        coupling,
                         kkt.diagonal_floor,
                     )
                 })?;
@@ -232,14 +261,17 @@ impl KktCache {
             _ => {
                 let (k, pattern) = assemble_preconditioner(
                     problem,
-                    geometry,
+                    scaling.geometry(),
                     shift,
                     factor_diagonal,
+                    coupling,
                     kkt.diagonal_floor,
                     kkt.eliminate_bound_rows,
                 )?;
+                let factorization =
+                    Factorization::prepare(k, &pattern.layout.variable_positions, kkt)?;
                 self.pattern = Some(pattern);
-                self.factorization = Some(Factorization::prepare(k, kkt)?);
+                self.factorization = Some(factorization);
                 self.factorization
                     .as_mut()
                     .expect("the factorization workspace was just stored")
@@ -253,6 +285,7 @@ impl KktCache {
     pub(crate) fn solve(
         &mut self,
         problem: &Problem,
+        scaling: &ConeScaling<'_>,
         shift: f64,
         d_diagonal: &[f64],
         d_factor: &[f64],
@@ -266,6 +299,7 @@ impl KktCache {
             self.factorization
                 .as_mut()
                 .expect("prepare stores the KKT factors"),
+            scaling,
             shift,
             d_diagonal,
             d_factor,
@@ -279,6 +313,7 @@ impl KktCache {
     pub(crate) fn prepare_direction(
         &mut self,
         problem: &Problem,
+        scaling: &ConeScaling<'_>,
         shift: f64,
         d_diagonal: &[f64],
         d_factor: &[f64],
@@ -304,6 +339,7 @@ impl KktCache {
             pattern,
             problem,
             factorization,
+            scaling,
             shift,
             d_diagonal,
             d_factor,
@@ -364,8 +400,7 @@ impl KktCache {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn solve_shifted_systems(
     problem: &Problem,
-    geometry: &ConeGeometry,
-    h_diagonal: &[f64],
+    scaling: &ConeScaling<'_>,
     shift: f64,
     regularization: f64,
     kkt: &KktSettings,
@@ -376,10 +411,11 @@ pub(crate) fn solve_shifted_systems(
         || shift < 0.0
         || !regularization.is_finite()
         || regularization <= 0.0
-        || h_diagonal.len() != problem.constraint_count()
+        || scaling.kkt_diagonal().len() != problem.constraint_count()
     {
         return Err(KktError::InvalidParameters);
     }
+    let h_diagonal = scaling.kkt_diagonal();
     let d_diagonal = h_diagonal
         .iter()
         .map(|entry| entry + shift)
@@ -388,22 +424,23 @@ pub(crate) fn solve_shifted_systems(
         .iter()
         .map(|entry| (entry + shift + regularization).max(kkt.diagonal_floor))
         .collect::<Vec<_>>();
-    cache.prepare(problem, geometry, shift + regularization, &d_factor, kkt)?;
+    cache.prepare(problem, scaling, shift + regularization, &d_factor, kkt)?;
     right_hand_sides
         .iter()
-        .map(|rhs| Ok(cache.solve(problem, shift, &d_diagonal, &d_factor, rhs)?))
+        .map(|rhs| Ok(cache.solve(problem, scaling, shift, &d_diagonal, &d_factor, rhs)?))
         .collect()
 }
 
 /// Assemble the clamped preconditioner with bound rows folded into the
 /// `(1,1)` block when `eliminate_bound_rows`; `d_diagonal` is already clamped,
 /// returning the initial matrix and its fixed layout.
-/// Subsequent factorization updates use `KktPattern::write_diagonal` directly.
+/// Subsequent factorization updates use `KktPattern::write_values` directly.
 fn assemble_preconditioner(
     problem: &Problem,
     geometry: &ConeGeometry,
     shift: f64,
     d_diagonal: &[f64],
+    coupling: &Coupling,
     diagonal_floor: f64,
     eliminate_bound_rows: bool,
 ) -> Result<(CscMatrix, KktPattern), KktError> {
@@ -422,41 +459,59 @@ fn assemble_preconditioner(
     } else {
         BoundRows::keep_all(problem.constraint_count())
     };
-    let (mut matrix, layout) = assemble_kkt_pattern(problem, &bound_rows.kept)?;
+    let (mut matrix, layout) =
+        assemble_kkt_pattern(problem, &bound_rows.kept, &geometry.kkt_couplings())?;
     let pattern = KktPattern {
         variable_count: problem.variable_count(),
         layout,
         bound_rows,
     };
     let values = matrix.values_mut();
-    pattern.write_diagonal(
+    pattern.write_values(
         values,
-        |index| pattern.layout.diagonal_positions[index],
+        |index| pattern.layout.variable_positions[index],
         shift,
         d_diagonal,
+        coupling,
         diagonal_floor,
     );
     Ok((matrix, pattern))
 }
 
 impl KktPattern {
-    /// Clamp the full primal diagonal before adding singleton Schur terms.
-    /// `d_diagonal` contains the already clamped factor dual diagonal.
-    fn write_diagonal(
+    /// Write every variable entry, in [`KktLayout::variable_positions`]
+    /// order. Clamp the full primal diagonal before adding singleton Schur
+    /// terms; `d_diagonal` contains the already clamped factor dual diagonal.
+    /// Coupled entries are written unclamped, so the clamped matrix differs
+    /// from the true one only on its diagonal.
+    fn write_values(
         &self,
         values: &mut [f64],
         position: impl Fn(usize) -> usize,
         shift: f64,
         d_diagonal: &[f64],
+        coupling: &Coupling,
         delta: f64,
     ) {
         let n = self.variable_count;
-        for index in 0..self.layout.diagonal_positions.len() {
+        let constraint_end = n + self.bound_rows.kept.len();
+        let dim = constraint_end + self.layout.expansion;
+        debug_assert_eq!(coupling.expansion_diagonal.len(), self.layout.expansion);
+        debug_assert_eq!(
+            dim + coupling.off_diagonal.len(),
+            self.layout.variable_positions.len()
+        );
+        for index in 0..dim {
             values[position(index)] = if index < n {
                 (self.layout.p_diagonal[index] + shift).max(delta)
-            } else {
+            } else if index < constraint_end {
                 -d_diagonal[self.bound_rows.kept[index - n]]
+            } else {
+                coupling.expansion_diagonal[index - constraint_end]
             };
+        }
+        for (offset, &value) in coupling.off_diagonal.iter().enumerate() {
+            values[position(dim + offset)] = value;
         }
         for &(row, column, coefficient) in &self.bound_rows.eliminated {
             values[position(column)] += coefficient * coefficient / d_diagonal[row];
@@ -464,7 +519,7 @@ impl KktPattern {
     }
 
     /// One reduced solve: fold the bound-row right-hand sides into `x`, solve
-    /// `n + kept` rows, and recover the eliminated duals.
+    /// `n + kept + expansion` rows, and recover the eliminated duals.
     fn solve_preconditioner(
         &self,
         factorization: &mut Factorization,
@@ -485,7 +540,7 @@ impl KktPattern {
         full: &mut Vec<f64>,
         reduced: &mut Vec<f64>,
     ) -> Result<(), LinearSystemError> {
-        if self.bound_rows.eliminated.is_empty() {
+        if self.bound_rows.eliminated.is_empty() && self.layout.expansion == 0 {
             return factorization.solve_unrefined_into(rhs, full);
         }
         reduced.clear();
@@ -503,6 +558,9 @@ impl KktPattern {
             reduced[start + column] += coefficient * rhs[n + row] / d_diagonal[row];
         }
         reduced.extend(self.bound_rows.kept.iter().map(|&row| rhs[n + row]));
+        // Expansion rows carry no right-hand side; eliminating them restores
+        // the true coupled block.
+        reduced.resize(reduced.len() + self.layout.expansion, 0.0);
     }
 
     fn expand_reduced_solution(
@@ -552,6 +610,7 @@ impl KktWorkspace {
         pattern: &KktPattern,
         problem: &Problem,
         factorization: &mut Factorization,
+        scaling: &ConeScaling<'_>,
         shift: f64,
         d_diagonal: &[f64],
         d_factor: &[f64],
@@ -567,7 +626,7 @@ impl KktWorkspace {
                 debug_assert_eq!(y.len(), problem.constraint_count());
                 self.initial_residual.clear();
                 self.initial_residual.extend_from_slice(rhs);
-                KktOperator::shifted(problem, shift, d_diagonal)
+                KktOperator::shifted(problem, scaling, shift, d_diagonal)
                     .subtract((x, y), &mut self.initial_residual);
                 // z <- z + M^-1 (rhs - K z). Keeping z preserves components
                 // that the diagonally clamped preconditioner corrects slowly.
@@ -588,6 +647,7 @@ impl KktWorkspace {
             pattern,
             problem,
             factorization,
+            scaling,
             shift,
             d_diagonal,
             d_factor,
@@ -602,6 +662,7 @@ impl KktWorkspace {
         pattern: &KktPattern,
         problem: &Problem,
         factorization: &mut Factorization,
+        scaling: &ConeScaling<'_>,
         shift: f64,
         d_diagonal: &[f64],
         d_factor: &[f64],
@@ -616,7 +677,7 @@ impl KktWorkspace {
         let first_correction = if let Some(seed) = first_seed {
             self.initial_residual.clear();
             self.initial_residual.extend_from_slice(first_rhs);
-            KktOperator::shifted(problem, shift, d_diagonal)
+            KktOperator::shifted(problem, scaling, shift, d_diagonal)
                 .subtract(seed, &mut self.initial_residual);
             self.initial_residual.as_slice()
         } else {
@@ -638,6 +699,7 @@ impl KktWorkspace {
             pattern,
             problem,
             factorization,
+            scaling,
             shift,
             d_diagonal,
             d_factor,
@@ -648,6 +710,7 @@ impl KktWorkspace {
             pattern,
             problem,
             factorization,
+            scaling,
             shift,
             d_diagonal,
             d_factor,
@@ -663,6 +726,7 @@ impl KktWorkspace {
         pattern: &KktPattern,
         problem: &Problem,
         factorization: &mut Factorization,
+        scaling: &ConeScaling<'_>,
         shift: f64,
         d_diagonal: &[f64],
         d_factor: &[f64],
@@ -692,7 +756,7 @@ impl KktWorkspace {
             }
             self.perturbation_ready = true;
         }
-        let operator = KktOperator::shifted(problem, shift, d_diagonal);
+        let operator = KktOperator::shifted(problem, scaling, shift, d_diagonal);
         let result = refine_with(
             rhs,
             initial,
@@ -728,6 +792,7 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
+        let scaling = geometry.identity_scaling();
         for solver in [
             LinearSolver::Faer,
             LinearSolver::Accelerate,
@@ -754,16 +819,180 @@ mod cache_tests {
                         2.0 - 2.0 * shift,
                     ];
                     cache
-                        .prepare(&problem, &geometry, shift, &diagonal, &settings)
+                        .prepare(&problem, &scaling, shift, &diagonal, &settings)
                         .unwrap();
                     let solution = cache
-                        .solve(&problem, shift, &diagonal, &diagonal, &rhs)
+                        .solve(&problem, &scaling, shift, &diagonal, &diagonal, &rhs)
                         .unwrap();
                     for (actual, expected) in solution.iter().zip([1.0, -2.0, 3.0, -1.0, 2.0]) {
                         assert!((actual - expected).abs() < 1e-12);
                     }
                 }
                 assert_eq!(cache.stats().factorizations, 2);
+            }
+        }
+    }
+
+    /// `[P + shift I, A'; A, -(H + shift I)]` as a dense matrix.
+    fn dense_kkt(problem: &Problem, h: &[Vec<f64>], shift: f64) -> Vec<Vec<f64>> {
+        let (n, m) = (problem.variable_count(), problem.constraint_count());
+        let mut k = vec![vec![0.0; n + m]; n + m];
+        if let Some(p) = problem.p() {
+            crate::linear_algebra::visit_entries(p, |row, column, value| {
+                k[row][column] = value;
+                k[column][row] = value;
+            });
+        }
+        crate::linear_algebra::visit_entries(problem.a(), |row, column, value| {
+            k[n + row][column] = value;
+            k[column][n + row] = value;
+        });
+        for (i, row) in k.iter_mut().enumerate() {
+            if i < n {
+                row[i] += shift;
+            } else {
+                for (j, h) in h[i - n].iter().enumerate() {
+                    row[n + j] = -h;
+                }
+                row[i] -= shift;
+            }
+        }
+        k
+    }
+
+    #[test]
+    fn coupled_cone_blocks_solve_the_true_system() {
+        use crate::cone::{ConeScaling, ScalingShape, coupled_test::dense_scaling};
+        // Rows: one equality, one eliminable bound, a dense block of three
+        // and an expanded block of three with one positive and one negative
+        // expansion column.
+        let problem = Problem::from_upper_triangle(
+            Some(
+                CscMatrix::from_triplets(2, 2, vec![0, 0, 1], vec![0, 1, 1], vec![2.0, 0.5, 3.0])
+                    .unwrap(),
+            ),
+            vec![0.0; 2],
+            crate::linear_algebra::test_matrix(
+                8,
+                2,
+                vec![
+                    1.0, 1.0, 2.0, 0.0, 1.0, -1.0, 0.5, 2.0, -1.0, 0.0, 3.0, 1.0, 0.0, -2.0, 1.0,
+                    1.0,
+                ],
+            )
+            .unwrap(),
+            vec![0.0; 8],
+            vec![
+                Cone::Zero(1),
+                Cone::Nonnegative(1),
+                Cone::Nonnegative(3),
+                Cone::Nonnegative(3),
+            ],
+        )
+        .unwrap();
+        let shapes = [
+            (2, ScalingShape::Dense),
+            (3, ScalingShape::Expanded { rank: 2 }),
+        ];
+        let geometry = ConeGeometry::with_coupled_test_blocks(&problem, &shapes);
+        let dense = [2.0, 0.3, -0.2, 0.3, 1.5, 0.4, -0.2, 0.4, 1.0];
+        // A small last entry of D lets the clamp reach the expanded block.
+        let expanded_diagonal = [3.0, 2.5, 0.01];
+        let expansion = [1.0, -0.5, 0.25, 2.0, 0.5, 0.25, 0.0, -4.0];
+        let mut diagonal = vec![0.0, 0.7, 2.0, 1.5, 1.0];
+        diagonal.extend(expanded_diagonal);
+        let data = dense.iter().chain(&expansion).copied().collect::<Vec<_>>();
+        let scaling = ConeScaling::from_parts(&geometry, diagonal.clone(), data);
+        assert_eq!(geometry.kkt_couplings().len(), 2);
+
+        // The full H, block by block.
+        let mut h = vec![vec![0.0; 8]; 8];
+        h[1][1] = 0.7;
+        for (offset, block) in [
+            (
+                2,
+                dense_scaling(ScalingShape::Dense, &diagonal[2..5], &dense),
+            ),
+            (
+                5,
+                dense_scaling(shapes[1].1, &expanded_diagonal, &expansion),
+            ),
+        ] {
+            for (i, row) in block.iter().enumerate() {
+                for (j, value) in row.iter().enumerate() {
+                    h[offset + i][offset + j] = *value;
+                }
+            }
+        }
+        let expected = [1.0, -2.0, 0.5, -1.0, 2.0, 0.25, -0.75, 1.5, -0.5, 1.0];
+        for solver in [
+            LinearSolver::Faer,
+            LinearSolver::Accelerate,
+            LinearSolver::Cholmod,
+            LinearSolver::Pardiso,
+        ]
+        .into_iter()
+        .filter(|solver| solver.is_available())
+        {
+            for eliminate_bound_rows in [false, true] {
+                // The larger floor clamps the equality row and the last
+                // stored diagonal entry of the expanded block.
+                for floor in [1e-12, 0.12] {
+                    let settings = KktSettings {
+                        eliminate_bound_rows,
+                        diagonal_floor: floor,
+                        refine_tol: 1e-14,
+                        ..KktSettings::new(solver)
+                    };
+                    let mut cache = KktCache::new();
+                    for shift in [0.1, 0.09] {
+                        let target = diagonal.iter().map(|d| d + shift).collect::<Vec<_>>();
+                        let factor = target.iter().map(|d| d.max(floor)).collect::<Vec<_>>();
+                        let k = dense_kkt(&problem, &h, shift);
+                        let rhs = k
+                            .iter()
+                            .map(|row| row.iter().zip(&expected).map(|(k, z)| k * z).sum())
+                            .collect::<Vec<f64>>();
+                        cache
+                            .prepare(&problem, &scaling, shift, &factor, &settings)
+                            .unwrap();
+                        let solution = cache
+                            .solve(&problem, &scaling, shift, &target, &factor, &rhs)
+                            .unwrap();
+                        for (actual, expected) in solution.iter().zip(expected) {
+                            assert!(
+                                (actual - expected).abs() < 1e-9,
+                                "{solver} {eliminate_bound_rows} {floor} {shift}: {solution:?}"
+                            );
+                        }
+
+                        // The matrix-free operator and the tau coefficient's
+                        // quadratic form agree with the dense system.
+                        let operator = KktOperator::shifted(&problem, &scaling, shift, &target);
+                        let (mut residual, mut denominator) = (vec![0.0; 10], vec![0.0; 10]);
+                        operator.residual_and_denominator(
+                            &rhs,
+                            &expected,
+                            &mut residual,
+                            &mut denominator,
+                        );
+                        for i in 0..10 {
+                            assert!(residual[i].abs() < 1e-12);
+                            let magnitude: f64 =
+                                k[i].iter().zip(&expected).map(|(k, z)| (k * z).abs()).sum();
+                            assert!((denominator[i] - rhs[i].abs() - magnitude).abs() < 1e-12);
+                        }
+                        let y = &expected[2..];
+                        let form = scaling.shifted_quadratic_form(0.0, shift, &target, y);
+                        let dense_form: f64 = (0..8)
+                            .map(|i| {
+                                -k[2 + i][2..].iter().zip(y).map(|(k, y)| k * y).sum::<f64>() * y[i]
+                            })
+                            .sum();
+                        assert!((form - dense_form).abs() < 1e-12);
+                    }
+                    assert_eq!(cache.stats().factorizations, 2);
+                }
             }
         }
     }
@@ -807,6 +1036,7 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
+        let scaling = geometry.identity_scaling();
         // Faer rejects zero pivots here; PARDISO may perturb them and succeed.
         let settings = KktSettings {
             diagonal_floor: 0.0,
@@ -815,7 +1045,7 @@ mod cache_tests {
         let mut cache = KktCache::new();
         for attempts in 1..=2 {
             cache
-                .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
+                .prepare(&problem, &scaling, 0.0, &[1.0], &settings)
                 .unwrap_err();
             // Keep the prepared workspace even when numeric retries fail.
             assert!(cache.pattern.is_some());
@@ -824,10 +1054,10 @@ mod cache_tests {
         }
         assert_eq!(cache.nonbinding_floor_limit(0.1), 0.1);
         cache
-            .prepare(&problem, &geometry, 1.0, &[1.0], &settings)
+            .prepare(&problem, &scaling, 1.0, &[1.0], &settings)
             .unwrap();
         let result = cache
-            .solve(&problem, 1.0, &[1.0], &[1.0], &[2.0, 1.0])
+            .solve(&problem, &scaling, 1.0, &[1.0], &[1.0], &[2.0, 1.0])
             .unwrap();
         assert_eq!(result, vec![2.0, -1.0]);
         assert_eq!(cache.stats().factorizations, 3);
@@ -844,6 +1074,7 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
+        let scaling = geometry.identity_scaling();
         let settings = KktSettings::new(LinearSolver::Faer);
         let mut cache = KktCache::new();
         for (shift, accepted, expected) in [
@@ -853,10 +1084,10 @@ mod cache_tests {
             (2.0, true, vec![1.0, -0.5]),
         ] {
             cache
-                .prepare(&problem, &geometry, shift, &[shift], &settings)
+                .prepare(&problem, &scaling, shift, &[shift], &settings)
                 .unwrap();
             cache
-                .prepare_direction(&problem, shift, &[shift], &[shift], &[0.0; 2])
+                .prepare_direction(&problem, &scaling, shift, &[shift], &[shift], &[0.0; 2])
                 .unwrap();
             assert_eq!(cache.direction(), &[2.0 / shift, -1.0 / shift]);
             cache.finish_step(accepted);
@@ -878,6 +1109,7 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
+        let scaling = geometry.identity_scaling();
         let rhs = [1.0, -2.0, 3.0, -4.0, 5.0];
         for solver in [
             LinearSolver::Faer,
@@ -899,7 +1131,7 @@ mod cache_tests {
                     let factor = target.map(|d| d.max(0.4));
                     for cache in [&mut separate, &mut paired] {
                         cache
-                            .prepare(&problem, &geometry, shift, &factor, &settings)
+                            .prepare(&problem, &scaling, shift, &factor, &settings)
                             .unwrap();
                     }
                     let data_rhs = [1.0, -2.0, 1.0, 0.0, 2.0];
@@ -911,6 +1143,7 @@ mod cache_tests {
                             separate.pattern.as_ref().unwrap(),
                             &problem,
                             separate.factorization.as_mut().unwrap(),
+                            &scaling,
                             shift,
                             &target,
                             &factor,
@@ -920,10 +1153,10 @@ mod cache_tests {
                         .unwrap();
                     separate.direction = next;
                     let expected = separate
-                        .solve(&problem, shift, &target, &factor, &rhs)
+                        .solve(&problem, &scaling, shift, &target, &factor, &rhs)
                         .unwrap();
                     let actual = paired
-                        .prepare_direction(&problem, shift, &target, &factor, &rhs)
+                        .prepare_direction(&problem, &scaling, shift, &target, &factor, &rhs)
                         .unwrap();
                     for (a, b) in actual
                         .iter()
@@ -951,6 +1184,7 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
+        let scaling = geometry.identity_scaling();
         let settings = KktSettings::from(&crate::Settings {
             eliminate_bounds: false,
             refine_init_reg: 1e-6,
@@ -959,10 +1193,17 @@ mod cache_tests {
         });
         let mut cache = KktCache::new();
         cache
-            .prepare(&problem, &geometry, 0.0, &[1.0], &settings)
+            .prepare(&problem, &scaling, 0.0, &[1.0], &settings)
             .unwrap();
         let solution = cache
-            .solve(&problem, 0.0, &[1.0], &[1.0], &[2.0 + 1e-14, -1.0])
+            .solve(
+                &problem,
+                &scaling,
+                0.0,
+                &[1.0],
+                &[1.0],
+                &[2.0 + 1e-14, -1.0],
+            )
             .unwrap();
         assert!((solution[0] - 1.0).abs() < 1e-10);
         assert!((solution[1] - 2.0).abs() < 1e-10);
@@ -980,6 +1221,7 @@ mod cache_tests {
         )
         .unwrap();
         let geometry = ConeGeometry::new(&problem).unwrap();
+        let scaling = geometry.identity_scaling();
         let shift = 0.1;
         let target = [0.15_f64];
         let mut cache = KktCache::new();
@@ -990,12 +1232,12 @@ mod cache_tests {
             };
             let factor = [target[0].max(floor)];
             cache
-                .prepare(&problem, &geometry, shift, &factor, &settings)
+                .prepare(&problem, &scaling, shift, &factor, &settings)
                 .unwrap();
             assert!(!cache.workspace.perturbation_ready);
             for rhs in [[1.0, 2.0], [-3.0, 1.0]] {
                 let result = cache
-                    .solve(&problem, shift, &target, &factor, &rhs)
+                    .solve(&problem, &scaling, shift, &target, &factor, &rhs)
                     .unwrap();
                 assert!((1.1 * result[0] + result[1] - rhs[0]).abs() < 1e-5);
                 assert!((result[0] - 0.15 * result[1] - rhs[1]).abs() < 1e-5);

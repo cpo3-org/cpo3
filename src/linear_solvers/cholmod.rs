@@ -170,12 +170,17 @@ pub(super) struct CholmodFactorization {
 }
 
 impl CholmodFactorization {
-    pub(super) fn new(matrix: CscMatrix, threads: usize) -> Result<Self, LinearSystemError> {
+    pub(super) fn new(
+        matrix: CscMatrix,
+        variable_positions: &[usize],
+        threads: usize,
+    ) -> Result<Self, LinearSystemError> {
         let cholmod = cholmod()?;
         let threads = i32::try_from(threads)
             .map_err(|_| LinearSystemError::Unavailable("CHOLMOD threads must fit i32".into()))?;
         let dim = matrix.rows();
-        let source = TriangleSource::from_matrix(&matrix);
+        // CHOLMOD reads the CSC values in place.
+        let source = TriangleSource::new(variable_positions, |position| position);
         let (columns, rows, mut values) = matrix.into_parts();
         let mut columns = columns.into_iter().map(|v| v as i64).collect::<Vec<_>>();
         let mut rows = rows.into_iter().map(|v| v as i64).collect::<Vec<_>>();
@@ -215,12 +220,12 @@ impl CholmodFactorization {
         check(unsafe { cpo3_cholmod_factor(self.handle.as_ptr()) })
     }
 
-    pub(super) fn refactor_diagonal(
+    pub(super) fn refactor_entries(
         &mut self,
-        diagonal: &[f64],
+        entries: &[f64],
         factorizations: &mut usize,
     ) -> Result<(), LinearSystemError> {
-        self.source.gather_diagonal(diagonal, &mut self.values);
+        self.source.gather(entries, &mut self.values);
         self.factor(factorizations)
     }
 
@@ -266,14 +271,15 @@ mod tests {
         if !available() {
             return;
         }
-        let mut factor = CholmodFactorization::new(CscMatrix::identity(2).unwrap(), 1).unwrap();
+        let mut factor =
+            CholmodFactorization::new(CscMatrix::identity(2).unwrap(), &[0, 1], 1).unwrap();
         let mut count = 0;
         factor.factor(&mut count).unwrap();
         assert!(matches!(
-            factor.refactor_diagonal(&[1.0, 0.0], &mut count),
+            factor.refactor_entries(&[1.0, 0.0], &mut count),
             Err(LinearSystemError::Singular)
         ));
-        factor.refactor_diagonal(&[2.0, -3.0], &mut count).unwrap();
+        factor.refactor_entries(&[2.0, -3.0], &mut count).unwrap();
         let mut rhs = [4.0, 6.0];
         factor.solve_in_place(&mut rhs, 1).unwrap();
         assert_eq!(rhs, [2.0, -2.0]);

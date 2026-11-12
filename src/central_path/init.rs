@@ -8,7 +8,7 @@ use super::{
 
 use crate::{
     Problem, Settings,
-    cone::{ConeGeometry, ConeSide},
+    cone::{ConeGeometry, ConeScaling, ConeSide},
     linear_algebra::{dot, matrix_mul, matrix_transpose_mul, stable_norm},
     linear_solvers::KktSettings,
     ruiz::EquilibratedProblem,
@@ -181,10 +181,7 @@ fn cvxopt_state(
     cache: &mut KktCache,
 ) -> Result<State, String> {
     let (n, m) = (problem.variable_count(), problem.constraint_count());
-    let mut h = vec![0.0; geometry.dim()];
-    geometry
-        .identity_scaling(&mut h)
-        .map_err(|error| error.to_string())?;
+    let scaling = geometry.identity_scaling();
     let linear = problem
         .p()
         .is_none_or(|p| p.values().iter().all(|value| *value == 0.0));
@@ -201,7 +198,7 @@ fn cvxopt_state(
         both.extend_from_slice(problem.b());
         vec![both]
     };
-    let solutions = cvxopt_solve(problem, geometry, &h, kkt, cache, &right_hand_sides)?;
+    let solutions = cvxopt_solve(problem, &scaling, kkt, cache, &right_hand_sides)?;
     let (mut x, mut y) = if linear {
         (solutions[0][..n].to_vec(), solutions[1][n..].to_vec())
     } else {
@@ -230,8 +227,7 @@ fn cvxopt_state(
 /// shifts, and finally with best-effort refinement, like the main loop.
 fn cvxopt_solve(
     problem: &Problem,
-    geometry: &ConeGeometry,
-    h: &[f64],
+    scaling: &ConeScaling<'_>,
     kkt: &KktSettings,
     cache: &mut KktCache,
     right_hand_sides: &[Vec<f64>],
@@ -242,8 +238,7 @@ fn cvxopt_solve(
     loop {
         match solve_shifted_systems(
             problem,
-            geometry,
-            h,
+            scaling,
             shift,
             CVXOPT_REGULARIZATION,
             &trial,
