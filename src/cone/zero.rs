@@ -1,6 +1,6 @@
 //! The zero cone `{0}` of equality rows. Its dual cone is the whole space.
 
-use super::{ConeGeometryError, ConeKernel, ConeSide, ScalingShape};
+use super::{BlockScaling, ConeGeometryError, ConeKernel, ConeSide, ScalingShape};
 
 /// Equality rows: the slack is exactly zero and the multiplier is free.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,13 +51,26 @@ impl ConeKernel for ZeroCone {
         s.fill(0.0);
     }
 
-    fn scaling_and_inverse(&self, _s: &[f64], _y: &[f64], h: &mut [f64], inverse: &mut [f64]) {
-        h.fill(0.0);
-        inverse.fill(0.0);
+    fn update_scaling(&self, _s: &[f64], _y: &[f64], diagonal: &mut [f64], _data: &mut [f64]) {
+        diagonal.fill(0.0);
     }
 
-    fn step_to_boundary(&self, _v: &[f64], target: &[f64]) -> Result<f64, ConeGeometryError> {
-        if target.iter().all(|value| value.is_finite()) {
+    fn centering_target(&self, _y: &[f64], _mu: f64, out: &mut [f64]) {
+        out.fill(0.0);
+    }
+
+    fn correction(
+        &self,
+        _scaling: BlockScaling<'_>,
+        _y: &[f64],
+        _ds: &[f64],
+        _dy: &[f64],
+        _out: &mut [f64],
+    ) {
+    }
+
+    fn step_length(&self, _v: &[f64], dv: &[f64]) -> Result<f64, ConeGeometryError> {
+        if dv.iter().all(|value| value.is_finite()) {
             Ok(1.0)
         } else {
             Err(ConeGeometryError::NonFiniteInput { argument: "dv" })

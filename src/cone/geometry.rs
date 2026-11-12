@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use thiserror::Error;
 
-use super::{ConeKernel, ConeSide, INTERIOR_FLOOR, ScalingShape, SupportedCone};
+use super::{ConeKernel, ConeScaling, ConeSide, INTERIOR_FLOOR, ScalingShape, SupportedCone};
 use crate::Problem;
 
 /// Failures while laying out or evaluating product-cone geometry.
@@ -175,27 +175,41 @@ impl ConeGeometry {
         }
     }
 
-    /// Compute scaling and inverse for an already accepted interior state.
-    pub(crate) fn scaling_and_inverse(
+    /// Compute the scaling for an already accepted interior state.
+    pub(crate) fn scaling(
         &self,
         s: &[f64],
         y: &[f64],
-        h: &mut [f64],
-        inverse: &mut [f64],
-    ) -> Result<(), ConeGeometryError> {
-        debug_assert!(self.is_primal_interior(s).unwrap_or(false));
-        debug_assert!(self.is_dual_interior(y).unwrap_or(false));
-        self.ensure_length("h", h)?;
-        self.ensure_length("inverse", inverse)?;
+    ) -> Result<ConeScaling<'_>, ConeGeometryError> {
+        ConeScaling::new(self, s, y)
+    }
+
+    /// Total length of the blocks' scaling data beyond the diagonal.
+    pub(super) fn scaling_len(&self) -> usize {
+        self.kernels().map(|(_, kernel)| kernel.scaling_len()).sum()
+    }
+
+    /// Each block's rows, the range of its scaling data, and its kernel.
+    pub(super) fn scaling_blocks(
+        &self,
+    ) -> impl Iterator<Item = (Range<usize>, Range<usize>, &dyn ConeKernel)> {
+        self.kernels().scan(0, |offset, (rows, kernel)| {
+            let start = *offset;
+            *offset += kernel.scaling_len();
+            Some((rows, start..*offset, kernel))
+        })
+    }
+
+    /// The largest step in `[0, 1]` from an accepted interior base `v` along
+    /// `dv` that stays in the cone.
+    pub(crate) fn step_length(&self, v: &[f64], dv: &[f64]) -> Result<f64, ConeGeometryError> {
+        debug_assert!(self.is_dual_interior(v).unwrap_or(false));
+        self.ensure_length("dv", dv)?;
+        let mut alpha: f64 = 1.0;
         for (range, kernel) in self.kernels() {
-            kernel.scaling_and_inverse(
-                &s[range.clone()],
-                &y[range.clone()],
-                &mut h[range.clone()],
-                &mut inverse[range],
-            );
+            alpha = alpha.min(kernel.step_length(&v[range.clone()], &dv[range])?);
         }
-        Ok(())
+        Ok(alpha)
     }
 
     /// Boundary from an accepted interior base toward a new target.
@@ -204,13 +218,13 @@ impl ConeGeometry {
         v: &[f64],
         target: &[f64],
     ) -> Result<f64, ConeGeometryError> {
-        debug_assert!(self.is_dual_interior(v).unwrap_or(false));
         self.ensure_length("dv", target)?;
-        let mut alpha: f64 = 1.0;
-        for (range, kernel) in self.kernels() {
-            alpha = alpha.min(kernel.step_to_boundary(&v[range.clone()], &target[range])?);
-        }
-        Ok(alpha)
+        let dv = target
+            .iter()
+            .zip(v)
+            .map(|(target, base)| target - base)
+            .collect::<Vec<_>>();
+        self.step_length(v, &dv)
     }
 
     /// Complete the warm-start dual residual with each block's barrier
@@ -227,7 +241,7 @@ impl ConeGeometry {
         }
     }
 
-    fn ensure_length(
+    pub(super) fn ensure_length(
         &self,
         argument: &'static str,
         vector: &[f64],
@@ -365,27 +379,49 @@ mod tests {
     }
 
     #[test]
-    fn scaling_and_inverse_satisfy_both_self_scaled_identities() {
+    fn scaling_satisfies_both_self_scaled_identities() {
         let geometry = crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(3)]);
         let s = [0.0, 0.5, 2.0, 8.0];
         let y = [-3.0, 4.0, 1.0, 0.25];
-        let mut h = [f64::NAN; 4];
+        let scaling = geometry.scaling(&s, &y).unwrap();
+        assert_eq!(scaling.diagonal(), [0.0, 0.125, 2.0, 32.0]);
         let mut y_inverse = [f64::NAN; 4];
-        geometry
-            .scaling_and_inverse(&s, &y, &mut h, &mut y_inverse)
-            .unwrap();
-        assert_eq!(h, [0.0, 0.125, 2.0, 32.0]);
+        scaling.centering_target(&y, 1.0, &mut y_inverse);
         assert_eq!(y_inverse, [0.0, 0.25, 1.0, 4.0]);
 
-        let mut s_inverse = [f64::NAN; 4];
-        s_inverse[0] = 0.0;
-        for index in 1..4 {
-            s_inverse[index] = s[index].recip();
-        }
-        for index in 0..4 {
-            assert_eq!(h[index] * y[index], s[index]);
-            assert_eq!(h[index] * s_inverse[index], y_inverse[index]);
-        }
+        // H y = s and H s^{-1} = y^{-1}, with zero on the equality row.
+        let mut product = [f64::NAN; 4];
+        scaling.mul(&y, &mut product);
+        assert_eq!(product, [-0.0, 0.5, 2.0, 8.0]);
+        let s_inverse = [0.0, 2.0, 0.5, 0.125];
+        scaling.mul(&s_inverse, &mut product);
+        assert_eq!(product, y_inverse);
+
+        // The correction is -(ds dy) / y on cone rows and untouched elsewhere.
+        let mut correction = [-0.0; 4];
+        scaling.correction(
+            &y,
+            &[5.0, 1.0, -2.0, 4.0],
+            &[7.0, 2.0, 3.0, -1.0],
+            &mut correction,
+        );
+        assert_eq!(correction, [-0.0, -0.5, 6.0, 16.0]);
+        assert!(correction[0].is_sign_negative());
+    }
+
+    #[test]
+    fn step_length_follows_displacements_and_rejects_non_finite_ones() {
+        let geometry = crate::cone::test_geometry(vec![Cone::Zero(1), Cone::Nonnegative(2)]);
+        let v = [5.0, 1.0, 2.0];
+        assert_eq!(
+            geometry.step_length(&v, &[-100.0, -4.0, 1.0]).unwrap(),
+            0.25
+        );
+        assert_eq!(geometry.step_length(&v, &[-100.0, 0.0, 1.0]).unwrap(), 1.0);
+        assert_eq!(
+            geometry.step_length(&v, &[f64::INFINITY, 0.0, 1.0]),
+            Err(ConeGeometryError::NonFiniteInput { argument: "dv" })
+        );
     }
 
     #[test]

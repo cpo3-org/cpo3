@@ -1,6 +1,7 @@
 //! Modified Mehrotra iteration (`alg:ipm`, `subsec:mehrotra` in the paper).
 //!
-//! A step forms D_k = diag(s_k / y_k), shares one shifted KKT factorization,
+//! A step forms the cone scaling H_k with H_k y_k = s_k (diag(s_k / y_k) on the
+//! nonnegative orthant), shares one shifted KKT factorization,
 //! probes with target zero, then solves at sigma * mu_k with the full predictor
 //! as surrogate and the second-order complementarity correction. The centering
 //! rule is sigma = (1 - alpha_affine)^3. Numerical retries wrap this same step.
@@ -15,7 +16,7 @@ use super::{
 
 use crate::{
     Problem,
-    cone::{ConeGeometry, ConeGeometryError, INTERIOR_FLOOR},
+    cone::{ConeGeometry, ConeGeometryError, ConeScaling, INTERIOR_FLOOR},
     linear_solvers::KktSettings,
     settings::Settings,
 };
@@ -112,8 +113,15 @@ fn step_attempt(
     settings: &Settings,
     cache: &mut KktCache,
 ) -> Result<Step, MehrotraError> {
-    let (mut resolvent, predictor_increment) =
-        Resolvent::new(problem, geometry, state, &scaling.d, scaling.mu, kkt, cache)?;
+    let (mut resolvent, predictor_increment) = Resolvent::new(
+        problem,
+        geometry,
+        state,
+        scaling.cones.diagonal(),
+        scaling.mu,
+        kkt,
+        cache,
+    )?;
     let first = predictor(state, scaling, predictor_increment, &mut resolvent)?;
     let sigma = first.sigma;
     let alpha_affine = first.alpha_affine;
@@ -161,18 +169,17 @@ fn accepted_tau(current: f64, candidate: f64, alpha: f64) -> Result<f64, StateEr
     Ok(tau.max(INTERIOR_FLOOR))
 }
 
-/// Diagonal barrier scaling `D_k` and Jordan inverse `y_k^{-1}` at one iterate.
-pub(crate) struct Scaling {
+/// The cone scaling `H_k` and the duality measure at one iterate.
+pub(crate) struct Scaling<'g> {
     /// Complementarity in the current spherical coordinates.
     mu: f64,
-    pub(crate) d: Vec<f64>,
-    pub(crate) y_inverse: Vec<f64>,
+    pub(crate) cones: ConeScaling<'g>,
 }
 
-impl Scaling {
+impl<'g> Scaling<'g> {
     pub(crate) fn new(
         problem: &Problem,
-        geometry: &ConeGeometry,
+        geometry: &'g ConeGeometry,
         state: &State,
     ) -> Result<Self, MehrotraError> {
         let mu = state.duality_measure(geometry);
@@ -182,10 +189,8 @@ impl Scaling {
         // Initialization and acceptance establish the interior invariant;
         // checked sphere normalization preserves it between iterations.
         debug_assert!(state.validate(problem, geometry).is_ok());
-        let mut d = vec![0.0; state.s().len()];
-        let mut y_inverse = vec![0.0; state.y().len()];
-        geometry.scaling_and_inverse(state.s(), state.y(), &mut d, &mut y_inverse)?;
-        Ok(Self { mu, d, y_inverse })
+        let cones = geometry.scaling(state.s(), state.y())?;
+        Ok(Self { mu, cones })
     }
 }
 
@@ -204,42 +209,35 @@ pub(crate) struct Predictor {
 /// The current complementarity is both the KKT shift and the anchor weight.
 pub(crate) fn predictor(
     state: &State,
-    scaling: &Scaling,
+    scaling: &Scaling<'_>,
     increment: Vec<f64>,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Predictor, MehrotraError> {
     let r_tau = scaling.mu * state.tau();
     let affine = resolvent.reconstruct_increment(increment, r_tau, 0.0)?;
 
-    let mut correction = vec![-0.0; state.s().len()];
-    let mut alpha_affine = 1.0_f64;
-    let mut finite = true;
-    // Each affine displacement is needed only for its boundary and correction.
-    faer::zip!(
-        faer::ColMut::from_slice_mut(&mut correction),
-        faer::ColRef::from_slice(state.s()),
-        faer::ColRef::from_slice(state.y()),
-        faer::ColRef::from_slice(affine.y()),
-        faer::ColRef::from_slice(&scaling.d),
-        faer::ColRef::from_slice(&scaling.y_inverse)
-    )
-    .for_each(|faer::unzip!(correction, s, y, target_y, h, inverse)| {
-        let dy = target_y - y;
-        let ds = -h * dy - s;
-        finite &= ds.is_finite() & dy.is_finite();
-        if *inverse > 0.0 {
-            if ds < 0.0 {
-                alpha_affine = alpha_affine.min(-s / ds);
-            }
-            if dy < 0.0 {
-                alpha_affine = alpha_affine.min(-y / dy);
-            }
-            *correction = -(inverse * (ds * dy));
-        }
-    });
-    if !finite {
-        return Err(ConeGeometryError::NonFiniteInput { argument: "dv" }.into());
+    // Affine displacements: dy from the solve, and ds = -H dy - s from
+    // linearized complementarity.
+    let dy = affine
+        .y()
+        .iter()
+        .zip(state.y())
+        .map(|(target, y)| target - y)
+        .collect::<Vec<_>>();
+    let mut ds = vec![0.0; dy.len()];
+    scaling.cones.mul(&dy, &mut ds);
+    for (ds, s) in ds.iter_mut().zip(state.s()) {
+        *ds = -*ds - s;
     }
+    let geometry = scaling.cones.geometry();
+    let alpha_affine = geometry
+        .step_length(state.s(), &ds)?
+        .min(geometry.step_length(state.y(), &dy)?);
+    // Equality rows keep -0.0, the exact additive identity.
+    let mut correction = vec![-0.0; dy.len()];
+    scaling
+        .cones
+        .correction(state.y(), &ds, &dy, &mut correction);
     // A long feasible affine step supports a smaller centering target.
     // Keep mu as current complementarity; only the dimensionless sigma changes.
     let sigma = (1.0 - alpha_affine).powi(3);
@@ -265,7 +263,7 @@ pub(crate) struct Corrector {
 /// point as the anchor and reusing its second-order correction buffer for slack.
 pub(crate) fn corrector(
     state: &State,
-    scaling: &Scaling,
+    scaling: &Scaling<'_>,
     predictor: Predictor,
     resolvent: &mut Resolvent<'_>,
 ) -> Result<Corrector, MehrotraError> {
@@ -280,15 +278,13 @@ pub(crate) fn corrector(
     let residual_weight = mu - mu_centered;
     let (anchor_x, anchor_y) = (affine.x(), affine.y());
     let m = state.y().len();
+    // The centering target mu_c y^{-1}, zero on equality rows.
+    let mut target = vec![0.0; m];
+    scaling
+        .cones
+        .centering_target(state.y(), mu_centered, &mut target);
     // Form the increment RHS from actual feasibility residuals. This
     // cancels H y = s and common shifted anchor terms algebraically.
-    let mu_over_y = |index: usize| {
-        if scaling.y_inverse[index] > 0.0 {
-            mu_centered / state.y()[index]
-        } else {
-            0.0
-        }
-    };
     let mut rhs = Vec::with_capacity(state.x().len() + m);
     rhs.extend(
         anchor_x
@@ -300,17 +296,24 @@ pub(crate) fn corrector(
     rhs.extend((0..m).map(|index| {
         resolvent.primal_rhs()[index] - mu * (anchor_y[index] - state.y()[index])
             + mu_centered * anchor_y[index]
-            - mu_over_y(index)
+            - target[index]
             - correction[index]
     }));
     let r_tau = residual_weight * affine.tau;
     let centered = resolvent.solve_increment_rhs(&rhs, r_tau, mu_centered)?;
-    // The second-order correction is no longer needed after the solve.
-    // Reuse its allocation for slack, preserving the scalar evaluation order.
-    for (index, value) in correction.iter_mut().enumerate() {
-        let second_order_correction = *value;
-        *value = mu_over_y(index) - scaling.d[index] * (centered.y()[index] - state.y()[index])
-            + second_order_correction;
+    // The slack s = mu_c y^{-1} - H (y_c - y) + correction. The second-order
+    // correction is no longer needed after the solve, so reuse its allocation;
+    // floating-point addition commutes, so the sum is unchanged.
+    let dy = centered
+        .y()
+        .iter()
+        .zip(state.y())
+        .map(|(centered, y)| centered - y)
+        .collect::<Vec<_>>();
+    let mut h_dy = vec![0.0; m];
+    scaling.cones.mul(&dy, &mut h_dy);
+    for ((value, target), h_dy) in correction.iter_mut().zip(&target).zip(&h_dy) {
+        *value += target - h_dy;
     }
     Ok(Corrector {
         centered,
@@ -458,7 +461,7 @@ mod tests {
                 &problem,
                 &geometry,
                 &state,
-                &scaling.d,
+                scaling.cones.diagonal(),
                 mu,
                 &KktSettings::new(LinearSolver::Faer),
                 &mut cache,
@@ -477,6 +480,10 @@ mod tests {
                 first.correction.fill(0.0);
                 first.sigma = 1.0;
             }
+            let mut y_inverse = vec![0.0; problem.constraint_count()];
+            scaling
+                .cones
+                .centering_target(state.y(), 1.0, &mut y_inverse);
             let target = first.sigma * state.duality_measure(&geometry);
             let weight = mu - target;
             let rx = first
@@ -491,7 +498,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, y)| {
-                    weight * y + state.s()[i] + target * scaling.y_inverse[i] + first.correction[i]
+                    weight * y + state.s()[i] + target * y_inverse[i] + first.correction[i]
                 })
                 .collect::<Vec<_>>();
             let r_tau = weight * first.affine.tau;
@@ -509,7 +516,9 @@ mod tests {
             }
             for i in 0..problem.constraint_count() {
                 assert_close(
-                    ax[i] - (scaling.d[i] + mu) * point.y()[i] - problem.b()[i] * point.tau,
+                    ax[i]
+                        - (scaling.cones.diagonal()[i] + mu) * point.y()[i]
+                        - problem.b()[i] * point.tau,
                     -ry[i],
                 );
             }
@@ -619,7 +628,7 @@ mod tests {
                 &problem,
                 &geometry,
                 &state,
-                &scaling.d,
+                scaling.cones.diagonal(),
                 scaling.mu,
                 &KktSettings::new(LinearSolver::Faer),
                 &mut cache,
@@ -664,7 +673,7 @@ mod tests {
                 &problem,
                 &geometry,
                 &state,
-                &scaling.d,
+                scaling.cones.diagonal(),
                 mu,
                 &KktSettings::new(LinearSolver::Faer),
                 &mut cache,
@@ -737,7 +746,7 @@ mod tests {
                     &problem,
                     &geometry,
                     &state,
-                    &scaling.d,
+                    scaling.cones.diagonal(),
                     shift,
                     &KktSettings::new(LinearSolver::Faer),
                     &mut cache,

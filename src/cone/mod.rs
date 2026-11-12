@@ -8,12 +8,14 @@
 
 mod geometry;
 mod nonnegative;
+mod scaling;
 mod zero;
 
 use ::presolve as native;
 
 pub(crate) use geometry::{ConeGeometry, ConeGeometryError};
 use nonnegative::NonnegativeCone;
+pub(crate) use scaling::ConeScaling;
 use zero::ZeroCone;
 
 pub(crate) const INTERIOR_FLOOR: f64 = 1e-32;
@@ -167,17 +169,57 @@ trait ConeKernel: std::fmt::Debug {
     /// Move `s` and `y` at least `floor` inside the primal and dual cones.
     fn floor_interior(&self, s: &mut [f64], y: &mut [f64], floor: f64);
 
-    /// Write the diagonal scaling `h`, with `h y = s` and `h s^{-1} = y^{-1}`,
-    /// and the Jordan inverse `y^{-1}`. Blocks without a barrier write zeros.
-    fn scaling_and_inverse(&self, s: &[f64], y: &[f64], h: &mut [f64], inverse: &mut [f64]);
+    /// Length of this block's scaling data beyond the diagonal of `H`.
+    fn scaling_len(&self) -> usize {
+        0
+    }
 
-    /// The largest step in `[0, 1]` from the interior point `v` toward
-    /// `target` that stays in the cone. Non-finite targets are an error.
-    fn step_to_boundary(&self, v: &[f64], target: &[f64]) -> Result<f64, ConeGeometryError>;
+    /// Compute the scaling `H`, with `H y = s` and `H s^{-1} = y^{-1}`, at an
+    /// interior pair: write the diagonal of `H` and the block's further data.
+    /// Blocks without a barrier have `H = 0`.
+    fn update_scaling(&self, s: &[f64], y: &[f64], diagonal: &mut [f64], data: &mut [f64]);
+
+    /// Write `H v`. The default applies a diagonal `H`.
+    fn mul_scaling(&self, scaling: BlockScaling<'_>, v: &[f64], out: &mut [f64]) {
+        for ((out, h), v) in out.iter_mut().zip(scaling.diagonal).zip(v) {
+            *out = h * v;
+        }
+    }
+
+    /// Write the centering target `mu y^{-1}` of linearized complementarity.
+    fn centering_target(&self, y: &[f64], mu: f64, out: &mut [f64]);
+
+    /// Write the Mehrotra second-order correction, in slack coordinates, for
+    /// the affine displacements `ds` and `dy`. `out` starts at `-0.0`, the
+    /// exact additive identity; blocks without complementarity leave it.
+    fn correction(
+        &self,
+        scaling: BlockScaling<'_>,
+        y: &[f64],
+        ds: &[f64],
+        dy: &[f64],
+        out: &mut [f64],
+    );
+
+    /// The largest step in `[0, 1]` from the interior point `v` along `dv`
+    /// that stays in the cone. Non-finite displacements are an error.
+    fn step_length(&self, v: &[f64], dv: &[f64]) -> Result<f64, ConeGeometryError>;
 
     /// Complete the warm-start dual residual `r <- r + mu ∇F*(y)` and add
     /// `r' (mu (I + ∇²F*(y)))^{-1} r` to `sum`.
     fn accumulate_local_score(&self, y: &[f64], mu: f64, residual: &mut [f64], sum: &mut f64);
+}
+
+/// One block's view of a [`ConeScaling`]: the diagonal of its `H` and the
+/// further data written by [`ConeKernel::update_scaling`].
+#[derive(Clone, Copy)]
+struct BlockScaling<'a> {
+    diagonal: &'a [f64],
+    #[expect(
+        dead_code,
+        reason = "read by cones with a non-diagonal scaling, such as the second-order cone"
+    )]
+    data: &'a [f64],
 }
 
 /// The implemented cones, one variant per implementation file.

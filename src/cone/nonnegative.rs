@@ -1,9 +1,7 @@
 //! The nonnegative orthant `{s : s >= 0}`, which is self-dual, with barrier
 //! `F(s) = -sum(log s_i)`.
 
-use faer::{ColMut, ColRef};
-
-use super::{ConeGeometryError, ConeKernel, ConeSide, ScalingShape};
+use super::{BlockScaling, ConeGeometryError, ConeKernel, ConeSide, ScalingShape};
 
 /// Inequality rows `(Ax)_i <= b_i`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,26 +72,37 @@ impl ConeKernel for NonnegativeCone {
         }
     }
 
-    fn scaling_and_inverse(&self, s: &[f64], y: &[f64], h: &mut [f64], inverse: &mut [f64]) {
-        faer::zip!(
-            ColMut::from_slice_mut(h),
-            ColMut::from_slice_mut(inverse),
-            ColRef::from_slice(s),
-            ColRef::from_slice(y)
-        )
-        .for_each(|faer::unzip!(h, inverse, s, y)| {
+    fn update_scaling(&self, s: &[f64], y: &[f64], diagonal: &mut [f64], _data: &mut [f64]) {
+        for ((h, s), y) in diagonal.iter_mut().zip(s).zip(y) {
             *h = s / y;
-            *inverse = y.recip();
-        });
+        }
     }
 
-    fn step_to_boundary(&self, v: &[f64], target: &[f64]) -> Result<f64, ConeGeometryError> {
+    fn centering_target(&self, y: &[f64], mu: f64, out: &mut [f64]) {
+        for (out, y) in out.iter_mut().zip(y) {
+            *out = mu / y;
+        }
+    }
+
+    fn correction(
+        &self,
+        _scaling: BlockScaling<'_>,
+        y: &[f64],
+        ds: &[f64],
+        dy: &[f64],
+        out: &mut [f64],
+    ) {
+        for (((out, y), ds), dy) in out.iter_mut().zip(y).zip(ds).zip(dy) {
+            *out = -(y.recip() * (ds * dy));
+        }
+    }
+
+    fn step_length(&self, v: &[f64], dv: &[f64]) -> Result<f64, ConeGeometryError> {
         let mut alpha: f64 = 1.0;
-        for (&value, &other) in v.iter().zip(target) {
-            if !other.is_finite() {
+        for (&value, &direction) in v.iter().zip(dv) {
+            if !direction.is_finite() {
                 return Err(ConeGeometryError::NonFiniteInput { argument: "dv" });
             }
-            let direction = other - value;
             if direction < 0.0 {
                 alpha = alpha.min(-value / direction);
             }
