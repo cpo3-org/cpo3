@@ -29,7 +29,9 @@ additional constraint rows.
 
 The method uses a regularized homogeneous embedding with a canonical central
 path. Its predictor–corrector steps retain the nonlinear embedding equations
-while linearizing complementarity.
+while linearizing complementarity. See our paper,
+[Strongly Monotone Central Path Equations for Quadratic Cone Programs](https://arxiv.org/abs/2611.18403),
+for the method and numerical results.
 
 The name **cpo3** combines *Conic Programming* with **O3**, a double reference to
 the compiler optimization flag `-O3` and the trioxide in rust—a nod to its
@@ -241,6 +243,22 @@ uv run --no-sync ty check
 See the [changelog](https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md).
 
 See [benchmarks/README.md](https://github.com/cpo3-org/cpo3/blob/main/benchmarks/README.md) for the benchmark data.
+
+## Citation
+
+If you use cpo3 in your research, please cite:
+
+```bibtex
+@misc{cummins2026stronglymonotone,
+  title         = {Strongly Monotone Central Path Equations for Quadratic Cone Programs},
+  author        = {Michael Cummins and Matteo Santamaria and Brendan O'Donoghue},
+  year          = {2026},
+  eprint        = {2611.18403},
+  archivePrefix = {arXiv},
+  primaryClass  = {math.OC},
+  url           = {https://arxiv.org/abs/2611.18403}
+}
+```
 
 ## Authors and license
 
