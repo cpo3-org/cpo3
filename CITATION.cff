@@ -1,0 +1,30 @@
+cff-version: 1.2.0
+message: "If you use cpo3 in your research, please cite the paper below."
+type: software
+title: cpo3
+authors:
+  - family-names: Santamaria
+    given-names: Matteo
+  - family-names: Cummins
+    given-names: Michael
+  - family-names: "O'Donoghue"
+    given-names: Brendan
+repository-code: "https://github.com/cpo3-org/cpo3"
+url: "https://cpo3-org.github.io/site/"
+license: MIT
+preferred-citation:
+  type: article
+  title: "Strongly Monotone Central Path Equations for Quadratic Cone Programs"
+  authors:
+    - family-names: Cummins
+      given-names: Michael
+    - family-names: Santamaria
+      given-names: Matteo
+    - family-names: "O'Donoghue"
+      given-names: Brendan
+  journal: arXiv
+  year: 2026
+  identifiers:
+    - type: other
+      value: "arXiv:2611.18403"
+  url: "https://arxiv.org/abs/2611.18403"
