@@ -10,7 +10,7 @@ authors:
   - family-names: "O'Donoghue"
     given-names: Brendan
 repository-code: "https://github.com/cpo3-org/cpo3"
-url: "https://cpo3-org.github.io/site/"
+url: "https://cpo3-org.github.io/"
 license: MIT
 preferred-citation:
   type: article
