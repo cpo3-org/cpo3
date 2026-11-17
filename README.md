@@ -17,7 +17,7 @@
 </p>
 
 <p align="center">
-  <a href="https://cpo3-org.github.io/site/">Documentation</a> ·
+  <a href="https://cpo3-org.github.io/">Documentation</a> ·
   <a href="https://github.com/cpo3-org/cpo3/blob/main/CHANGELOG.md">Changelog</a>
 </p>
 
@@ -87,13 +87,13 @@ cpo3 = "0.0.1"
 
 ### Further reading
 
-The [getting-started guide](https://cpo3-org.github.io/site/getting-started/)
+The [getting-started guide](https://cpo3-org.github.io/getting-started/)
 includes complete Python and Rust examples, with details on constructing problem
 data and interpreting solver results.
 
 cpo3 includes the Faer backend by default, with no external numerical libraries
 required. For Accelerate, CHOLMOD, or PARDISO support, or to build from source, see
-the [installation guide](https://cpo3-org.github.io/site/installation/).
+the [installation guide](https://cpo3-org.github.io/installation/).
 
 ## Roadmap
 
